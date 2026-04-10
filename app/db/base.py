@@ -7,6 +7,7 @@ from app.models.position import Position
 from app.models.market_candle import MarketCandle
 from app.models.order import Order
 from app.models.fill import Fill
+from app.models.app_setting import AppSetting
 
 
 def init_db() -> None:
