@@ -9,8 +9,12 @@ fi
 source .venv/bin/activate
 .venv/bin/pip install -q -r requirements.txt
 
-if [ -n "${PGHOST:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ] && [ -n "${PGDATABASE:-}" ]; then
-  _SSLMODE="${PGSSLMODE:-disable}"
+if [ -n "${DATABASE_URL:-}" ]; then
+  # Convert postgresql:// or postgres:// -> postgresql+psycopg:// while keeping all other params intact
+  export DATABASE_URL="${DATABASE_URL/postgres:\/\//postgresql+psycopg:\/\/}"
+  export DATABASE_URL="${DATABASE_URL/postgresql:\/\//postgresql+psycopg:\/\/}"
+elif [ -n "${PGHOST:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ] && [ -n "${PGDATABASE:-}" ]; then
+  _SSLMODE="${PGSSLMODE:-require}"
   export DATABASE_URL="postgresql+psycopg://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT:-5432}/${PGDATABASE}?sslmode=${_SSLMODE}"
 fi
 
