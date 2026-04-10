@@ -1,11 +1,21 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return "postgresql+psycopg://" + v[len("postgres://"):]
+            if v.startswith("postgresql://"):
+                return "postgresql+psycopg://" + v[len("postgresql://"):]
+        return v
 
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
@@ -18,7 +28,7 @@ class Settings(BaseSettings):
 
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
-    binance_rest_base: str = Field(default="https://api.binance.com", alias="BINANCE_REST_BASE")
+    binance_rest_base: str = Field(default="https://api.binance.us", alias="BINANCE_REST_BASE")
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_secret_key: str = Field(default="", alias="BINANCE_SECRET_KEY")
     binance_quote_assets: str = Field(default="USDT,USDC", alias="BINANCE_QUOTE_ASSETS")

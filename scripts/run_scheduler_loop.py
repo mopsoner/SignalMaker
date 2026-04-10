@@ -1,23 +1,14 @@
+#!/usr/bin/env python3
+"""
+Scheduler worker — keeps the scheduler process slot alive.
+Pipeline and executor are already handled by their own dedicated workers
+(run_pipeline_loop.py and run_executor_loop.py) started by main.py.
+This process exists so main.py can track a scheduler PID; it does no
+additional work to avoid duplicating the individual workers.
+"""
 import time
 
-from app.db.session import SessionLocal
-from app.services.executor_service import ExecutorService
-from app.services.pipeline_service import PipelineService
-from app.services.runtime_settings import load_runtime_settings
-
-
-if __name__ == '__main__':
-    tick = 0
+if __name__ == "__main__":
+    print("Scheduler worker started (standby — pipeline and executor run independently)", flush=True)
     while True:
-        db = SessionLocal()
-        try:
-            runtime = load_runtime_settings(db)
-            if runtime['bot'].get('bot_scheduler_enabled', True):
-                if tick % 2 == 0:
-                    print(PipelineService(db).run_once(limit=runtime['binance']['binance_max_symbols']))
-                print(ExecutorService(db).execute_open_candidates(limit=runtime['bot'].get('bot_executor_limit', 10), quantity=runtime['bot'].get('bot_executor_quantity', 1.0)))
-            interval = runtime['bot'].get('bot_scheduler_interval_sec', 30)
-        finally:
-            db.close()
-        tick += 1
-        time.sleep(interval)
+        time.sleep(60)

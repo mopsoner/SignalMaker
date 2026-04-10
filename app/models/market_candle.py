@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Index, String
+from sqlalchemy import BigInteger, DateTime, Float, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -16,8 +16,8 @@ class MarketCandle(Base):
     candle_id: Mapped[str] = mapped_column(String(96), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     interval: Mapped[str] = mapped_column(String(16), nullable=False)
-    open_time: Mapped[int] = mapped_column(nullable=False)
-    close_time: Mapped[int] = mapped_column(nullable=False)
+    open_time: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    close_time: Mapped[int] = mapped_column(BigInteger, nullable=False)
     open: Mapped[float] = mapped_column(Float, nullable=False)
     high: Mapped[float] = mapped_column(Float, nullable=False)
     low: Mapped[float] = mapped_column(Float, nullable=False)
