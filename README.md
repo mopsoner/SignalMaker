@@ -22,6 +22,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
   - executor service for paper trading
   - scheduler service plus simple worker loops
 - Pipeline and executor API endpoints
+- VM deployment helper script
 
 ## Main endpoints
 - `GET /healthz`
@@ -42,6 +43,11 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 cp .env.example .env
 bash run.sh init-db
 bash run.sh api
+```
+
+## VM deploy helper
+```bash
+bash scripts/deploy_vm.sh
 ```
 
 Run one ingestion/signal/planner cycle:
