@@ -14,30 +14,11 @@ Phase 1 and early Phase 2 of the Replit VM architecture refactor.
   - `positions`
 - Health endpoints and live API endpoints
 - Initial service separation:
-  - collector service stub
-  - signal engine service stub
-  - planner service stub
+  - collector service with Binance public REST support
+  - signal engine wired to the legacy v231 Wyckoff logic
+  - planner service generating trade candidates
+- Pipeline endpoint for an end-to-end run-once cycle
 - Boot script for API and DB initialization
-
-## Project structure
-```text
-app/
-  api/
-    routes/
-  core/
-  db/
-  models/
-  schemas/
-  services/
-scripts/
-```
-
-## Quick start
-```bash
-cp .env.example .env
-bash run.sh init-db
-bash run.sh api
-```
 
 ## Main endpoints
 - `GET /healthz`
@@ -49,8 +30,21 @@ bash run.sh api
 - `GET /api/v1/live-runs`
 - `GET /api/v1/trade-candidates`
 - `GET /api/v1/positions`
+- `POST /api/v1/pipeline/run-once?limit=5`
+
+## Quick start
+```bash
+cp .env.example .env
+bash run.sh init-db
+bash run.sh api
+```
+
+Then trigger one cycle:
+```bash
+curl -X POST "http://localhost:8080/api/v1/pipeline/run-once?limit=5"
+```
 
 ## Notes
 - PostgreSQL remains the target runtime on Replit VM.
 - SQLite still works for local smoke tests.
-- Next step: migrate the existing strategy logic into the `signal_engine` service and start writing real `trade_candidates` rows.
+- Next step: add dedicated workers for collector, engine and planner, then wire an executor.

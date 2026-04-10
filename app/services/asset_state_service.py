@@ -46,3 +46,19 @@ class AssetStateService:
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    def upsert_from_signal(self, signal: dict) -> AssetStateCurrent:
+        payload = AssetStateUpsert(
+            stage=("trade" if signal.get("pipeline", {}).get("trade") else "confirm" if signal.get("pipeline", {}).get("confirm") else "zone" if signal.get("pipeline", {}).get("zone") else "liquidity" if signal.get("pipeline", {}).get("liquidity") else "collect"),
+            bias=signal.get("bias"),
+            session=signal.get("session"),
+            score=float(signal.get("score", 0.0)),
+            price=signal.get("price"),
+            rsi_1h=signal.get("rsi_htf"),
+            rsi_5m=signal.get("rsi_main"),
+            liquidity_context=signal.get("liquidity_context"),
+            execution_target=signal.get("execution_target"),
+            planner_notes=signal.get("confirm_source"),
+            state_payload=signal,
+        )
+        return self.upsert(symbol=signal["symbol"], payload=payload)

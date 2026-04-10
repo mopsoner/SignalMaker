@@ -9,8 +9,4 @@ router = APIRouter()
 
 @router.get("/services")
 def services_status() -> dict:
-    return {
-        "collector": CollectorService().heartbeat(),
-        "signal_engine": SignalEngineService().heartbeat(),
-        "planner": PlannerService().heartbeat(),
-    }
+    return {"collector": CollectorService().heartbeat(), "signal_engine": SignalEngineService().heartbeat(), "planner": PlannerService().heartbeat()}
