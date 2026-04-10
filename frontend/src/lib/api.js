@@ -27,4 +27,9 @@ export const api = {
   runExecutor: (limit = 10, quantity = 1) => request(`/api/v1/executor/run-once?limit=${limit}&quantity=${quantity}`, { method: 'POST' }),
   adminSettings: () => request('/api/v1/admin/settings'),
   updateAdminSettings: (payload) => request('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  workerStatus: () => request('/api/v1/admin/workers'),
+  startWorker: (name) => request(`/api/v1/admin/workers/${name}/start`, { method: 'POST' }),
+  stopWorker: (name) => request(`/api/v1/admin/workers/${name}/stop`, { method: 'POST' }),
+  testBinance: () => request('/api/v1/admin/test/binance', { method: 'POST' }),
+  testNotifications: () => request('/api/v1/admin/test/notifications', { method: 'POST' }),
 }
