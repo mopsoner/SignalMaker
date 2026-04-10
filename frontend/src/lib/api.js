@@ -1,8 +1,20 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+function getOperatorKey() {
+  try {
+    return window.localStorage.getItem('signalmaker_operator_key') || ''
+  } catch {
+    return ''
+  }
+}
+
 async function request(path, options = {}) {
+  const operatorKey = getOperatorKey()
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  if (operatorKey) headers['x-operator-key'] = operatorKey
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers,
     ...options,
   })
   if (!res.ok) {
@@ -14,6 +26,10 @@ async function request(path, options = {}) {
 
 export const api = {
   base: API_BASE,
+  setOperatorKey: (value) => {
+    try { window.localStorage.setItem('signalmaker_operator_key', value || '') } catch {}
+  },
+  getOperatorKey,
   health: () => request('/api/v1/health'),
   services: () => request('/api/v1/services'),
   assets: (params = '') => request(`/api/v1/assets${params}`),
