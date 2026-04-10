@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 export function usePollingQuery(loader, interval = 15000) {
-  const [data, setData] = useState(null)
+  const [data, setData] = useState(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 

@@ -5,6 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 3000,
+    port: 5000,
+    allowedHosts: true,
+    proxy: {
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/healthz': { target: 'http://localhost:8080', changeOrigin: true },
+    },
   },
 })
