@@ -1,36 +1,41 @@
 # SignalMaker
 
-Phase 1 and early Phase 2 of the Replit VM architecture refactor.
+Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 
-## What is included
+## Included
 - FastAPI application layer
 - Centralized settings with `.env`
 - SQLAlchemy 2 setup
 - PostgreSQL-ready database configuration
-- Canonical live tables:
+- Live tables:
   - `asset_state_current`
   - `live_runs`
   - `trade_candidates`
   - `positions`
-- Health endpoints and live API endpoints
-- Initial service separation:
-  - collector service with Binance public REST support
-  - signal engine wired to the legacy v231 Wyckoff logic
+  - `orders`
+  - `fills`
+  - `market_candles`
+- Service separation:
+  - collector service using Binance public REST
+  - signal engine wired to legacy v231 logic
   - planner service generating trade candidates
-- Pipeline endpoint for an end-to-end run-once cycle
-- Boot script for API and DB initialization
+  - executor service for paper trading
+  - scheduler service plus simple worker loops
+- Pipeline and executor API endpoints
 
 ## Main endpoints
 - `GET /healthz`
 - `GET /api/v1/health`
 - `GET /api/v1/services`
 - `GET /api/v1/assets`
-- `GET /api/v1/assets/{symbol}`
-- `POST /api/v1/assets/{symbol}`
 - `GET /api/v1/live-runs`
 - `GET /api/v1/trade-candidates`
 - `GET /api/v1/positions`
+- `GET /api/v1/orders`
+- `GET /api/v1/fills`
+- `GET /api/v1/market-data/candles`
 - `POST /api/v1/pipeline/run-once?limit=5`
+- `POST /api/v1/executor/run-once?limit=10&quantity=1`
 
 ## Quick start
 ```bash
@@ -39,12 +44,23 @@ bash run.sh init-db
 bash run.sh api
 ```
 
-Then trigger one cycle:
+Run one ingestion/signal/planner cycle:
 ```bash
-curl -X POST "http://localhost:8080/api/v1/pipeline/run-once?limit=5"
+bash run.sh pipeline-once
+```
+
+Execute paper trades from open candidates:
+```bash
+bash run.sh executor-once
+```
+
+Run loops:
+```bash
+bash run.sh pipeline-loop
+bash run.sh executor-loop
+bash run.sh scheduler-loop
 ```
 
 ## Notes
-- PostgreSQL remains the target runtime on Replit VM.
-- SQLite still works for local smoke tests.
-- Next step: add dedicated workers for collector, engine and planner, then wire an executor.
+- This is now a functional scaffold, not a finished production trading system.
+- It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.
