@@ -23,6 +23,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
   - scheduler service plus simple worker loops
 - Pipeline and executor API endpoints
 - VM deployment helper script
+- Production env sample and systemd templates
 
 ## Main endpoints
 - `GET /healthz`
@@ -48,24 +49,25 @@ bash run.sh api
 ## VM deploy helper
 ```bash
 bash scripts/deploy_vm.sh
+bash scripts/bootstrap_all.sh
 ```
 
-Run one ingestion/signal/planner cycle:
+## Start processes
 ```bash
-bash run.sh pipeline-once
+bash scripts/start_api.sh
+bash scripts/start_pipeline_worker.sh
+bash scripts/start_executor_worker.sh
+bash scripts/start_scheduler_worker.sh
 ```
 
-Execute paper trades from open candidates:
+## Production env
 ```bash
-bash run.sh executor-once
+cp .env.production.example .env
 ```
+Then edit the database URL and runtime values.
 
-Run loops:
-```bash
-bash run.sh pipeline-loop
-bash run.sh executor-loop
-bash run.sh scheduler-loop
-```
+## systemd templates
+Templates are available in `deploy/systemd/`.
 
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
