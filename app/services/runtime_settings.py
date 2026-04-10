@@ -56,6 +56,22 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             db.close()
 
 
+def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    for category, values in payload.items():
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            row = db.execute(
+                select(AppSetting).where(AppSetting.category == category, AppSetting.key == key)
+            ).scalar_one_or_none()
+            if row is None:
+                db.add(AppSetting(category=category, key=key, value=value))
+            else:
+                row.value = value
+    db.commit()
+    return load_runtime_settings(db)
+
+
 def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
     strategy = load_runtime_settings(db)["strategy"]
     return {
