@@ -7,6 +7,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 - Centralized settings with `.env`
 - SQLAlchemy 2 setup
 - PostgreSQL-ready database configuration
+- React + Vite frontend dashboard
 - Live tables:
   - `asset_state_current`
   - `live_runs`
@@ -24,6 +25,19 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 - Pipeline and executor API endpoints
 - VM deployment helper script
 - Production env sample and systemd templates
+
+## Frontend
+The React/Vite app lives in `frontend/`.
+
+Start it with:
+```bash
+bash scripts/start_frontend.sh
+```
+
+Set an alternate API base if needed:
+```bash
+VITE_API_BASE=http://127.0.0.1:8080
+```
 
 ## Main endpoints
 - `GET /healthz`
@@ -44,6 +58,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 cp .env.example .env
 bash run.sh init-db
 bash run.sh api
+bash scripts/start_frontend.sh
 ```
 
 ## VM deploy helper
@@ -58,6 +73,7 @@ bash scripts/start_api.sh
 bash scripts/start_pipeline_worker.sh
 bash scripts/start_executor_worker.sh
 bash scripts/start_scheduler_worker.sh
+bash scripts/start_frontend.sh
 ```
 
 ## Production env
@@ -68,12 +84,6 @@ Then edit the database URL and runtime values.
 
 ## systemd templates
 Templates are available in `deploy/systemd/`.
-
-## Replit PostgreSQL setup
-When running on Replit with the PostgreSQL integration enabled, `DATABASE_URL` is automatically
-derived at runtime from `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGPORT`, and `PGDATABASE` env vars
-(injected by Replit). The `.env` `DATABASE_URL` value serves as a fallback template only.
-SSL mode defaults to `disable` but can be overridden via the `PGSSLMODE` env var.
 
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
