@@ -7,32 +7,60 @@ from app.strategy.legacy_signals import closes, equal_highs_lows, infer_interval
 ALLOWED_CONFIRM_SESSIONS = {"london_open", "london", "new_york"}
 
 
-def _pick_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float) -> dict[str, Any]:
+def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         if eq["equal_highs"]:
-            return {"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m"}
+            return {"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m", "scope": "entry"}
         if london_high is not None:
-            return {"type": "london_high_5m", "level": london_high, "reason": "london high as buy-side liquidity context", "timeframe": "5m"}
+            return {"type": "london_high_5m", "level": london_high, "reason": "london high as buy-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
         if asia_high is not None:
-            return {"type": "asia_high_5m", "level": asia_high, "reason": "asia high as buy-side liquidity context", "timeframe": "5m"}
-        if high_macro:
-            return {"type": "recent_high_4h", "level": high_macro, "reason": "4h macro high used as extended buy-side liquidity context", "timeframe": "4h"}
+            return {"type": "asia_high_5m", "level": asia_high, "reason": "asia high as buy-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
+        if high_main:
+            return {"type": "recent_high_5m", "level": high_main, "reason": "recent visible 5m high liquidity", "timeframe": "5m", "scope": "entry"}
         if high_htf:
-            return {"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as higher timeframe buy-side liquidity context", "timeframe": "1h"}
-        return {"type": "recent_high_5m", "level": high_main, "reason": "recent visible high liquidity", "timeframe": "5m"}
+            return {"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as fallback entry liquidity context", "timeframe": "1h", "scope": "entry"}
+        return {"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"}
     if bias in {"bull_watch", "bull_confirm"}:
         if eq["equal_lows"]:
-            return {"type": "equal_lows_5m", "level": low_main, "reason": "visible sell-side liquidity below equal lows", "timeframe": "5m"}
+            return {"type": "equal_lows_5m", "level": low_main, "reason": "visible sell-side liquidity below equal lows", "timeframe": "5m", "scope": "entry"}
         if london_low is not None:
-            return {"type": "london_low_5m", "level": london_low, "reason": "london low as sell-side liquidity context", "timeframe": "5m"}
+            return {"type": "london_low_5m", "level": london_low, "reason": "london low as sell-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
         if asia_low is not None:
-            return {"type": "asia_low_5m", "level": asia_low, "reason": "asia low as sell-side liquidity context", "timeframe": "5m"}
-        if low_macro:
-            return {"type": "recent_low_4h", "level": low_macro, "reason": "4h macro low used as extended sell-side liquidity context", "timeframe": "4h"}
+            return {"type": "asia_low_5m", "level": asia_low, "reason": "asia low as sell-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
+        if low_main:
+            return {"type": "recent_low_5m", "level": low_main, "reason": "recent visible 5m low liquidity", "timeframe": "5m", "scope": "entry"}
         if low_htf:
-            return {"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as higher timeframe sell-side liquidity context", "timeframe": "1h"}
-        return {"type": "recent_low_5m", "level": low_main, "reason": "recent visible low liquidity", "timeframe": "5m"}
-    return {"type": "none", "level": None, "reason": "no clear liquidity context", "timeframe": None}
+            return {"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as fallback entry liquidity context", "timeframe": "1h", "scope": "entry"}
+        return {"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"}
+    return {"type": "none", "level": None, "reason": "no clear entry liquidity context", "timeframe": None, "scope": "entry"}
+
+
+def _pick_macro_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float) -> dict[str, Any]:
+    if bias in {"bear_watch", "bear_confirm"}:
+        if high_macro:
+            return {"type": "recent_high_4h", "level": high_macro, "reason": "4h macro high used as primary buy-side liquidity draw", "timeframe": "4h", "scope": "macro"}
+        if high_htf:
+            return {"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as secondary buy-side liquidity draw", "timeframe": "1h", "scope": "macro"}
+        if eq["equal_highs"]:
+            return {"type": "equal_highs_5m", "level": high_main, "reason": "equal highs used as visible local buy-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        if london_high is not None:
+            return {"type": "london_high_5m", "level": london_high, "reason": "london high used as session buy-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        if asia_high is not None:
+            return {"type": "asia_high_5m", "level": asia_high, "reason": "asia high used as session buy-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        return {"type": "recent_high_5m", "level": high_main, "reason": "5m high fallback buy-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+    if bias in {"bull_watch", "bull_confirm"}:
+        if low_macro:
+            return {"type": "recent_low_4h", "level": low_macro, "reason": "4h macro low used as primary sell-side liquidity draw", "timeframe": "4h", "scope": "macro"}
+        if low_htf:
+            return {"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as secondary sell-side liquidity draw", "timeframe": "1h", "scope": "macro"}
+        if eq["equal_lows"]:
+            return {"type": "equal_lows_5m", "level": low_main, "reason": "equal lows used as visible local sell-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        if london_low is not None:
+            return {"type": "london_low_5m", "level": london_low, "reason": "london low used as session sell-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        if asia_low is not None:
+            return {"type": "asia_low_5m", "level": asia_low, "reason": "asia low used as session sell-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+        return {"type": "recent_low_5m", "level": low_main, "reason": "5m low fallback sell-side liquidity draw", "timeframe": "5m", "scope": "macro"}
+    return {"type": "none", "level": None, "reason": "no clear macro liquidity context", "timeframe": None, "scope": "macro"}
 
 
 def _find_imbalance_target(candles: list[dict[str, Any]], direction: str, current_price: float, timeframe: str) -> dict[str, Any] | None:
@@ -157,7 +185,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     if session == "new_york" and (near_recent_high or near_recent_low):
         tp_zone = True
 
-    liquidity_context = _pick_liquidity_context(bias=bias, eq=eq, asia_high=asia_high, asia_low=asia_low, london_high=london_high, london_low=london_low, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro)
+    macro_liquidity_context = _pick_macro_liquidity_context(bias=bias, eq=eq, asia_high=asia_high, asia_low=asia_low, london_high=london_high, london_low=london_low, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro)
+    entry_liquidity_context = _pick_entry_liquidity_context(bias=bias, eq=eq, asia_high=asia_high, asia_low=asia_low, london_high=london_high, london_low=london_low, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro)
     execution_target = _pick_execution_target(bias=bias, price=price, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro, candles_htf=candles_htf, candles_macro=candles_macro)
 
     trade_target = execution_target.get("level")
@@ -188,6 +217,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "session_confirm_filter_enabled": session_confirm_filter_enabled,
         "pipeline": pipeline,
         "trade": trade,
-        "liquidity_context": liquidity_context,
+        "liquidity_context": macro_liquidity_context,
+        "macro_liquidity_context": macro_liquidity_context,
+        "entry_liquidity_context": entry_liquidity_context,
         "execution_target": execution_target,
     }
