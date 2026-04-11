@@ -114,6 +114,8 @@ export default function AdminSettingsPage() {
         <Field label="Max symbols"><input style={inputStyle} type="number" value={settings.binance.binance_max_symbols} onChange={(e) => updateField('binance', 'binance_max_symbols', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 1m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1m} onChange={(e) => updateField('binance', 'binance_lookback_1m', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 5m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_5m} onChange={(e) => updateField('binance', 'binance_lookback_5m', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Lookback 1h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1h} onChange={(e) => updateField('binance', 'binance_lookback_1h', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Lookback 4h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_4h} onChange={(e) => updateField('binance', 'binance_lookback_4h', e.target.value, 'number')} disabled={loading} /></Field>
       </Section>
 
       <Section title="Strategy" description="Signal engine and planner thresholds.">

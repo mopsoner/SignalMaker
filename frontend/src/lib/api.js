@@ -39,6 +39,7 @@ export const api = {
   orders: (params = '') => request(`/api/v1/orders${params}`),
   fills: (params = '') => request(`/api/v1/fills${params}`),
   candles: (params = '') => request(`/api/v1/market-data/candles${params}`),
+  candleSummary: (params = '') => request(`/api/v1/market-data/candles/summary${params}`),
   runPipeline: (limit = 5) => request(`/api/v1/pipeline/run-once?limit=${limit}`, { method: 'POST' }),
   runExecutor: (limit = 10, quantity = 1) => request(`/api/v1/executor/run-once?limit=${limit}&quantity=${quantity}`, { method: 'POST' }),
   adminSettings: () => request('/api/v1/admin/settings'),
