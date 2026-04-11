@@ -6,6 +6,7 @@ import PositionsPage from './pages/PositionsPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
+import AssetDetailPage from './pages/AssetDetailPage'
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -35,6 +36,7 @@ export default function App() {
       <main className="content" onClick={menuOpen ? closeMenu : undefined}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/ops" element={<OpsPage />} />

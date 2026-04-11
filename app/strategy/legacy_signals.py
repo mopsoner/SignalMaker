@@ -16,6 +16,10 @@ def lows(candles: list[dict[str, Any]]) -> list[float]:
     return [c["low"] for c in candles]
 
 
+def volumes(candles: list[dict[str, Any]]) -> list[float]:
+    return [float(c.get("volume", 0.0) or 0.0) for c in candles]
+
+
 def rsi(values: list[float], period: int = 14) -> float | None:
     if len(values) < period + 1:
         return None
@@ -56,6 +60,22 @@ def _session_from_hour(hour: int) -> str:
     return "off_session"
 
 
+def _session_phase_from_hour(hour: int) -> str:
+    if 0 <= hour < 2:
+        return "asia_build"
+    if 2 <= hour < 4:
+        return "asia_core"
+    if 4 <= hour < 6:
+        return "london_raid"
+    if 6 <= hour < 9:
+        return "london_core"
+    if 9 <= hour < 11:
+        return "new_york_expansion"
+    if 11 <= hour < 12:
+        return "overlap_fade"
+    return "off_session"
+
+
 def current_session(offset_hours: int) -> str:
     now = datetime.now(timezone.utc) + timedelta(hours=offset_hours)
     return _session_from_hour(now.hour)
@@ -63,6 +83,10 @@ def current_session(offset_hours: int) -> str:
 
 def session_from_timestamp(ts_ms: int | None, offset_hours: int) -> str:
     return _session_from_hour(_local_dt(ts_ms, offset_hours).hour)
+
+
+def session_phase_from_timestamp(ts_ms: int | None, offset_hours: int) -> str:
+    return _session_phase_from_hour(_local_dt(ts_ms, offset_hours).hour)
 
 
 def infer_interval_label(candles: list[dict[str, Any]]) -> str:
@@ -82,6 +106,20 @@ def near_level(price: float, level: float, pct: float) -> bool:
 
 def session_extremes(candles: list[dict[str, Any]], offset_hours: int, session_name: str) -> tuple[float | None, float | None]:
     selected = [c for c in candles if session_from_timestamp(c["open_time"], offset_hours) == session_name]
+    if not selected:
+        return None, None
+    return max(c["high"] for c in selected), min(c["low"] for c in selected)
+
+
+def today_session_extremes(candles: list[dict[str, Any]], offset_hours: int, session_name: str) -> tuple[float | None, float | None]:
+    if not candles:
+        return None, None
+    latest_date = _local_dt(candles[-1].get("open_time"), offset_hours).date()
+    selected = [
+        c for c in candles
+        if _local_dt(c.get("open_time"), offset_hours).date() == latest_date
+        and session_from_timestamp(c.get("open_time"), offset_hours) == session_name
+    ]
     if not selected:
         return None, None
     return max(c["high"] for c in selected), min(c["low"] for c in selected)
