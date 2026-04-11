@@ -1,10 +1,14 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import DataTable from '../components/DataTable'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
+
+function tvUrl(symbol) {
+  return `https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(symbol || '')}`
+}
 
 function summarizeContext(value) {
   if (!value || typeof value !== 'object') return '—'
@@ -18,17 +22,39 @@ function stateContext(row, key) {
 }
 
 export default function DashboardPage() {
-  const loadAssets = useCallback(() => api.assets('?limit=25'), [])
+  const loadAssets = useCallback(() => api.assets('?limit=50'), [])
   const loadRuns = useCallback(() => api.liveRuns('?limit=10'), [])
   const { data: assets = [], loading, error } = usePollingQuery(loadAssets, 15000)
   const { data: runs = [] } = usePollingQuery(loadRuns, 15000)
 
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
   const confirmCount = assets.filter((item) => item.stage === 'confirm').length
+  const zoneCount = assets.filter((item) => item.stage === 'zone').length
   const avgScore = assets.length ? (assets.reduce((sum, item) => sum + (item.score || 0), 0) / assets.length).toFixed(2) : '0.00'
 
+  const sessionCounts = useMemo(() => {
+    return assets.reduce((acc, item) => {
+      const key = item.session || 'unknown'
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+  }, [assets])
+
+  const strongestAssets = useMemo(() => {
+    return [...assets].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6)
+  }, [assets])
+
   const columns = [
-    { key: 'symbol', title: 'Symbol' },
+    {
+      key: 'symbol',
+      title: 'Symbol',
+      render: (row) => (
+        <div style={{ display: 'grid', gap: 6 }}>
+          <strong>{row.symbol}</strong>
+          <a href={tvUrl(row.symbol)} target="_blank" rel="noreferrer">Open on TradingView</a>
+        </div>
+      ),
+    },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
     { key: 'bias', title: 'Bias' },
     { key: 'session', title: 'Session' },
@@ -39,6 +65,7 @@ export default function DashboardPage() {
     { key: 'macro_liquidity_context', title: 'Macro liquidity', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context) },
     { key: 'entry_liquidity_context', title: 'Entry liquidity', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')) },
     { key: 'execution_target', title: 'Target', render: (row) => summarizeContext(row.execution_target) },
+    { key: 'planner_notes', title: 'Notes', render: (row) => row.planner_notes || row?.state_payload?.confirm_source || '—' },
     { key: 'updated_at', title: 'Updated', render: (row) => fmtDate(row.updated_at) },
   ]
 
@@ -50,24 +77,44 @@ export default function DashboardPage() {
     { key: 'started_at', title: 'Started', render: (row) => fmtDate(row.started_at) },
   ]
 
+  const strongestColumns = [
+    { key: 'symbol', title: 'Symbol' },
+    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
+    { key: 'bias', title: 'Bias' },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
+    { key: 'session', title: 'Session' },
+  ]
+
   return (
     <div className="page-stack">
-      <PageHeader title="Dashboard" subtitle="Live state overview with separated macro and entry liquidity contexts" />
+      <PageHeader title="Dashboard 360" subtitle="Full market view with stage, bias, session, RSI, macro liquidity, entry liquidity, target and TradingView access." />
       <div className="stats-grid">
         <StatCard label="Tracked assets" value={assets.length} />
         <StatCard label="Trade stage" value={tradeCount} />
         <StatCard label="Confirm stage" value={confirmCount} />
+        <StatCard label="Zone stage" value={zoneCount} />
+      </div>
+      <div className="stats-grid">
         <StatCard label="Average score" value={avgScore} />
+        <StatCard label="London" value={sessionCounts.london || 0} hint={`Open: ${sessionCounts.london_open || 0}`} />
+        <StatCard label="New York" value={sessionCounts.new_york || 0} />
+        <StatCard label="Asia / off" value={(sessionCounts.asia || 0) + (sessionCounts.off_session || 0)} hint={`Asia: ${sessionCounts.asia || 0} · Off: ${sessionCounts.off_session || 0}`} />
       </div>
       {loading ? <div className="panel">Loading assets…</div> : null}
       {error ? <div className="panel error">{error}</div> : null}
-      <section className="panel">
-        <h2>Top assets</h2>
-        <DataTable columns={columns} rows={assets} empty="No asset state available" />
+      <section className="panel two-col">
+        <div>
+          <h2>Highest score assets</h2>
+          <DataTable columns={strongestColumns} rows={strongestAssets} empty="No asset state available" />
+        </div>
+        <div>
+          <h2>Recent runs</h2>
+          <DataTable columns={runColumns} rows={runs} empty="No live runs yet" />
+        </div>
       </section>
       <section className="panel">
-        <h2>Recent runs</h2>
-        <DataTable columns={runColumns} rows={runs} empty="No live runs yet" />
+        <h2>Market view 360</h2>
+        <DataTable columns={columns} rows={assets} empty="No asset state available" />
       </section>
     </div>
   )
