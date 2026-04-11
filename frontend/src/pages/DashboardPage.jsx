@@ -23,9 +23,7 @@ function stateContext(row, key) {
 
 export default function DashboardPage() {
   const loadAssets = useCallback(() => api.assets('?limit=50'), [])
-  const loadRuns = useCallback(() => api.liveRuns('?limit=10'), [])
   const { data: assets = [], loading, error } = usePollingQuery(loadAssets, 15000)
-  const { data: runs = [] } = usePollingQuery(loadRuns, 15000)
 
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
   const confirmCount = assets.filter((item) => item.stage === 'confirm').length
@@ -54,40 +52,33 @@ export default function DashboardPage() {
           <a href={tvUrl(row.symbol)} target="_blank" rel="noreferrer">Open on TradingView</a>
         </div>
       ),
+      sortValue: (row) => row.symbol,
     },
-    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
-    { key: 'bias', title: 'Bias' },
-    { key: 'session', title: 'Session' },
-    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
-    { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4) },
-    { key: 'rsi_5m', title: 'RSI 5M', render: (row) => fmtNumber(row.rsi_5m, 2) },
-    { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2) },
-    { key: 'macro_liquidity_context', title: 'Macro liquidity', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context) },
-    { key: 'entry_liquidity_context', title: 'Entry liquidity', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')) },
-    { key: 'execution_target', title: 'Target', render: (row) => summarizeContext(row.execution_target) },
-    { key: 'planner_notes', title: 'Notes', render: (row) => row.planner_notes || row?.state_payload?.confirm_source || '—' },
-    { key: 'updated_at', title: 'Updated', render: (row) => fmtDate(row.updated_at) },
-  ]
-
-  const runColumns = [
-    { key: 'run_id', title: 'Run ID' },
-    { key: 'status', title: 'Status' },
-    { key: 'symbols_total', title: 'Total' },
-    { key: 'symbols_scanned', title: 'Scanned' },
-    { key: 'started_at', title: 'Started', render: (row) => fmtDate(row.started_at) },
+    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
+    { key: 'bias', title: 'Bias', sortValue: (row) => row.bias },
+    { key: 'session', title: 'Session', sortValue: (row) => row.session },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
+    { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
+    { key: 'rsi_5m', title: 'RSI 5M', render: (row) => fmtNumber(row.rsi_5m, 2), sortValue: (row) => Number(row.rsi_5m ?? -1) },
+    { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
+    { key: 'macro_liquidity_context', title: 'Macro liquidity', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context), sortValue: (row) => (stateContext(row, 'macro_liquidity_context') || row.liquidity_context)?.level ?? -1 },
+    { key: 'entry_liquidity_context', title: 'Entry liquidity', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')), sortValue: (row) => stateContext(row, 'entry_liquidity_context')?.level ?? -1 },
+    { key: 'execution_target', title: 'Target', render: (row) => summarizeContext(row.execution_target), sortValue: (row) => row.execution_target?.level ?? -1 },
+    { key: 'planner_notes', title: 'Notes', render: (row) => row.planner_notes || row?.state_payload?.confirm_source || '—', sortValue: (row) => row.planner_notes || row?.state_payload?.confirm_source || '' },
+    { key: 'updated_at', title: 'Updated', render: (row) => fmtDate(row.updated_at), sortValue: (row) => row.updated_at },
   ]
 
   const strongestColumns = [
-    { key: 'symbol', title: 'Symbol' },
-    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
-    { key: 'bias', title: 'Bias' },
-    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
-    { key: 'session', title: 'Session' },
+    { key: 'symbol', title: 'Symbol', sortValue: (row) => row.symbol },
+    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
+    { key: 'bias', title: 'Bias', sortValue: (row) => row.bias },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
+    { key: 'session', title: 'Session', sortValue: (row) => row.session },
   ]
 
   return (
     <div className="page-stack">
-      <PageHeader title="Dashboard 360" subtitle="Full market view with stage, bias, session, RSI, macro liquidity, entry liquidity, target and TradingView access." />
+      <PageHeader title="Dashboard 360" subtitle="Mobile-first market overview with sortable tables, macro and entry liquidity contexts, and TradingView access." />
       <div className="stats-grid">
         <StatCard label="Tracked assets" value={assets.length} />
         <StatCard label="Trade stage" value={tradeCount} />
@@ -102,20 +93,20 @@ export default function DashboardPage() {
       </div>
       {loading ? <div className="panel">Loading assets…</div> : null}
       {error ? <div className="panel error">{error}</div> : null}
-      <section className="panel two-col">
-        <div>
+      <details className="panel collapsible-panel" open>
+        <summary>
           <h2>Highest score assets</h2>
-          <DataTable columns={strongestColumns} rows={strongestAssets} empty="No asset state available" />
-        </div>
-        <div>
-          <h2>Recent runs</h2>
-          <DataTable columns={runColumns} rows={runs} empty="No live runs yet" />
-        </div>
-      </section>
-      <section className="panel">
-        <h2>Market view 360</h2>
+          <span className="collapse-indicator">⌄</span>
+        </summary>
+        <DataTable columns={strongestColumns} rows={strongestAssets} empty="No asset state available" />
+      </details>
+      <details className="panel collapsible-panel" open>
+        <summary>
+          <h2>Market view 360</h2>
+          <span className="collapse-indicator">⌄</span>
+        </summary>
         <DataTable columns={columns} rows={assets} empty="No asset state available" />
-      </section>
+      </details>
     </div>
   )
 }

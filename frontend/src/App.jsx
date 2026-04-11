@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
@@ -7,20 +8,31 @@ import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 
 export default function App() {
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  function closeMenu() {
+    setMenuOpen(false)
+  }
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">SignalMaker</div>
-        <nav className="nav-links">
-          <NavLink to="/" end>Dashboard</NavLink>
-          <NavLink to="/candidates">Trade Candidates</NavLink>
-          <NavLink to="/positions">Positions</NavLink>
-          <NavLink to="/ops">Ops</NavLink>
-          <NavLink to="/logs">Logs</NavLink>
-          <NavLink to="/settings">Admin Settings</NavLink>
+      <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
+        <div className="sidebar-top">
+          <div className="brand">SignalMaker</div>
+          <button className="menu-toggle" type="button" onClick={() => setMenuOpen((v) => !v)}>
+            {menuOpen ? 'Close' : 'Menu'}
+          </button>
+        </div>
+        <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
+          <NavLink to="/" end onClick={closeMenu}>Dashboard</NavLink>
+          <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
+          <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
+          <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
+          <NavLink to="/logs" onClick={closeMenu}>Logs</NavLink>
+          <NavLink to="/settings" onClick={closeMenu}>Admin Settings</NavLink>
         </nav>
       </aside>
-      <main className="content">
+      <main className="content" onClick={menuOpen ? closeMenu : undefined}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
