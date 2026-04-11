@@ -33,6 +33,7 @@ export const api = {
   health: () => request('/api/v1/health'),
   services: () => request('/api/v1/services'),
   assets: (params = '') => request(`/api/v1/assets${params}`),
+  asset: (symbol) => request(`/api/v1/assets/${encodeURIComponent(symbol)}`),
   candidates: (params = '') => request(`/api/v1/trade-candidates${params}`),
   positions: (params = '') => request(`/api/v1/positions${params}`),
   liveRuns: (params = '') => request(`/api/v1/live-runs${params}`),
