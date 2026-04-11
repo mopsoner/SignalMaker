@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     session_timezone_offset_hours: int = Field(default=-4, alias="SESSION_TIMEZONE_OFFSET_HOURS")
     signal_rsi_period: int = Field(default=14, alias="SIGNAL_RSI_PERIOD")
     signal_swing_window: int = Field(default=8, alias="SIGNAL_SWING_WINDOW")
-    signal_equal_level_tolerance_pct: float = Field(default=0.0015, alias="SIGNAL_EQUAL_LEVEL_TOLERANCE_PCT")
+    signal_equal_level_tolerance_pct: float = Field(default=0.002, alias="SIGNAL_EQUAL_LEVEL_TOLERANCE_PCT")
     signal_overbought: float = Field(default=70, alias="SIGNAL_OVERBOUGHT")
     signal_oversold: float = Field(default=30, alias="SIGNAL_OVERSOLD")
     signal_price_near_extreme_pct: float = Field(default=0.0025, alias="SIGNAL_PRICE_NEAR_EXTREME_PCT")
