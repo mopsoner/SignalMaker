@@ -7,7 +7,7 @@ from app.strategy.legacy_signals import closes, equal_highs_lows, infer_interval
 ALLOWED_CONFIRM_SESSIONS = {"london_open", "london", "new_york"}
 
 
-def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float) -> dict[str, Any]:
+def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         if eq["equal_highs"]:
             return {"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m", "scope": "entry"}
@@ -35,7 +35,7 @@ def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: 
     return {"type": "none", "level": None, "reason": "no clear entry liquidity context", "timeframe": None, "scope": "entry"}
 
 
-def _pick_macro_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float) -> dict[str, Any]:
+def _pick_macro_liquidity_context(*, bias: str, eq: dict[str, bool], asia_high: float | None, asia_low: float | None, london_high: float | None, london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         if high_macro:
             return {"type": "recent_high_4h", "level": high_macro, "reason": "4h macro high used as primary buy-side liquidity draw", "timeframe": "4h", "scope": "macro"}
@@ -89,7 +89,7 @@ def _find_imbalance_target(candles: list[dict[str, Any]], direction: str, curren
     return min(candidates, key=lambda x: x["level"]) if direction == "up" else max(candidates, key=lambda x: x["level"])
 
 
-def _pick_execution_target(*, bias: str, price: float, high_main: float, low_main: float, high_htf: float, low_htf: float, high_macro: float, low_macro: float, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]]) -> dict[str, Any]:
+def _pick_execution_target(*, bias: str, price: float, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]]) -> dict[str, Any]:
     if bias == "bull_confirm":
         return _find_imbalance_target(candles_macro, "up", price, "4h") or _find_imbalance_target(candles_htf, "up", price, "1h") or ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as execution target", "timeframe": "4h"} if high_macro else None) or ({"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as execution target", "timeframe": "1h"} if high_htf else None) or {"type": "recent_high_5m", "level": high_main, "reason": "5m fallback high used as execution target", "timeframe": "5m"}
     if bias == "bear_confirm":
@@ -118,10 +118,6 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     london_high, london_low = session_extremes(candles_main, cfg["session_timezone_offset_hours"], "london")
     session_confirm_filter_enabled = bool(cfg.get("session_confirm_filter_enabled", True))
 
-    state = "neutral"; trigger = "wait"; bias = "neutral"; score = 0; tp_zone = False; confirm_source = "none"; confirm_blocked_by_session = False
-    pipeline = {"collect": True, "liquidity": False, "zone": False, "confirm": False, "trade": False}
-    trade = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
-
     near_recent_high = near_level(price, high_main, near_extreme_pct)
     near_recent_low = near_level(price, low_main, near_extreme_pct)
     near_htf_high = near_level(price, high_htf, near_extreme_pct * 2)
@@ -129,61 +125,96 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     near_macro_high = near_level(price, high_macro, near_extreme_pct * 4)
     near_macro_low = near_level(price, low_macro, near_extreme_pct * 4)
 
-    if eq["equal_highs"] or eq["equal_lows"] or near_recent_high or near_recent_low or near_htf_high or near_htf_low or near_macro_high or near_macro_low:
+    state = "neutral"
+    trigger = "wait"
+    bias = "neutral"
+    tp_zone = False
+    confirm_source = "none"
+    confirm_blocked_by_session = False
+    pipeline = {"collect": True, "liquidity": False, "zone": False, "confirm": False, "trade": False}
+    trade = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
+
+    score_breakdown = {
+        "liquidity": 0,
+        "structure": 0,
+        "confirmation": 0,
+        "session": 0,
+        "quality": 0,
+    }
+
+    has_liquidity = any([eq["equal_highs"], eq["equal_lows"], near_recent_high, near_recent_low, near_htf_high, near_htf_low, near_macro_high, near_macro_low])
+    if has_liquidity:
         pipeline["liquidity"] = True
-        score += 1
+        score_breakdown["liquidity"] += 2 if (near_macro_high or near_macro_low or near_htf_high or near_htf_low) else 1
+        if eq["equal_highs"] or eq["equal_lows"]:
+            score_breakdown["liquidity"] += 1
 
     utad_watch = False
     spring_watch = False
     if rsi_main is not None and rsi_main >= cfg["signals"]["overbought"] and (near_recent_high or near_htf_high or near_macro_high or eq["equal_highs"]):
         utad_watch = True
-        score += 2
+        score_breakdown["structure"] += 2
     if rsi_main is not None and rsi_main <= cfg["signals"]["oversold"] and (near_recent_low or near_htf_low or near_macro_low or eq["equal_lows"]):
         spring_watch = True
-        score += 2
-    if last["high"] > prev_high and last["close"] < prev_high:
+        score_breakdown["structure"] += 2
+
+    sweep_up = last["high"] > prev_high and last["close"] < prev_high
+    sweep_down = last["low"] < prev_low and last["close"] > prev_low
+    if sweep_up:
         utad_watch = True
-        score += 2
-    if last["low"] < prev_low and last["close"] > prev_low:
+        score_breakdown["structure"] += 3
+    if sweep_down:
         spring_watch = True
-        score += 2
+        score_breakdown["structure"] += 3
+
     if utad_watch:
-        state = "utad_watch"; bias = "bear_watch"; pipeline["zone"] = True
+        state = "utad_watch"
+        bias = "bear_watch"
+        pipeline["zone"] = True
     if spring_watch:
-        state = "spring_watch"; bias = "bull_watch"; pipeline["zone"] = True
+        state = "spring_watch"
+        bias = "bull_watch"
+        pipeline["zone"] = True
 
     bear_strong_confirm = utad_watch and last["close"] < prev_low
     bull_strong_confirm = spring_watch and last["close"] > prev_high
     bear_soft_confirm = utad_watch and (last["close"] < prev_mid and last["close"] < last["open"] and last["close"] < prev_bar["close"])
     bull_soft_confirm = spring_watch and (last["close"] > prev_mid and last["close"] > last["open"] and last["close"] > prev_bar["close"])
 
-    confirm_candidate = None; confirm_score_bonus = 0
+    confirm_candidate = None
     if bear_strong_confirm:
-        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break"); confirm_score_bonus = 3
+        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break")
+        score_breakdown["confirmation"] = 4
     elif bull_strong_confirm:
-        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break"); confirm_score_bonus = 3
+        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break")
+        score_breakdown["confirmation"] = 4
     elif bear_soft_confirm:
-        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft"); confirm_score_bonus = 2
+        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft")
+        score_breakdown["confirmation"] = 2
     elif bull_soft_confirm:
-        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft"); confirm_score_bonus = 2
+        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft")
+        score_breakdown["confirmation"] = 2
 
     session_confirm_allowed = (session in ALLOWED_CONFIRM_SESSIONS) or (not session_confirm_filter_enabled)
+    if session_confirm_allowed:
+        score_breakdown["session"] = 1
     if confirm_candidate is not None:
         if session_confirm_allowed:
             trigger, bias, confirm_source = confirm_candidate
             pipeline["confirm"] = True
-            score += confirm_score_bonus
         else:
             confirm_blocked_by_session = True
-    if session_confirm_allowed:
-        score += 1
+            score_breakdown["confirmation"] = max(score_breakdown["confirmation"] - 1, 0)
 
     if session == "london_open" and rsi_main is not None and rsi_main >= cfg["signals"]["overbought"]:
         tp_zone = True
+        score_breakdown["quality"] += 1
     if session == "asia" and rsi_main is not None and rsi_main <= cfg["signals"]["oversold"]:
         tp_zone = True
+        score_breakdown["quality"] += 1
     if session == "new_york" and (near_recent_high or near_recent_low):
         tp_zone = True
+        score_breakdown["quality"] += 1
 
     macro_liquidity_context = _pick_macro_liquidity_context(bias=bias, eq=eq, asia_high=asia_high, asia_low=asia_low, london_high=london_high, london_low=london_low, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro)
     entry_liquidity_context = _pick_entry_liquidity_context(bias=bias, eq=eq, asia_high=asia_high, asia_low=asia_low, london_high=london_high, london_low=london_low, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, high_macro=high_macro, low_macro=low_macro)
@@ -191,9 +222,13 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     trade_target = execution_target.get("level")
     if trigger in {"break_down_confirm", "break_down_confirm_soft"}:
-        trade = {"status": "simulated", "side": "short", "entry": price, "stop": high_main, "target": trade_target or low_macro or low_htf or low_main}; pipeline["trade"] = True
+        trade = {"status": "simulated", "side": "short", "entry": price, "stop": high_main, "target": trade_target or low_macro or low_htf or low_main}
+        pipeline["trade"] = True
     elif trigger in {"break_up_confirm", "break_up_confirm_soft"}:
-        trade = {"status": "simulated", "side": "long", "entry": price, "stop": low_main, "target": trade_target or high_macro or high_htf or high_main}; pipeline["trade"] = True
+        trade = {"status": "simulated", "side": "long", "entry": price, "stop": low_main, "target": trade_target or high_macro or high_htf or high_main}
+        pipeline["trade"] = True
+
+    score = sum(score_breakdown.values())
 
     return {
         "symbol": symbol,
@@ -212,6 +247,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "bias": bias,
         "tp_zone": tp_zone,
         "score": score,
+        "score_breakdown": score_breakdown,
         "confirm_source": confirm_source,
         "confirm_blocked_by_session": confirm_blocked_by_session,
         "session_confirm_filter_enabled": session_confirm_filter_enabled,

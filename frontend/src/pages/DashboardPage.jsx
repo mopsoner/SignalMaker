@@ -21,6 +21,12 @@ function stateContext(row, key) {
   return row?.state_payload?.[key] || null
 }
 
+function summarizeScore(row) {
+  const breakdown = row?.state_payload?.score_breakdown
+  if (!breakdown) return '—'
+  return `L${breakdown.liquidity || 0} · S${breakdown.structure || 0} · C${breakdown.confirmation || 0} · Se${breakdown.session || 0} · Q${breakdown.quality || 0}`
+}
+
 export default function DashboardPage() {
   const loadAssets = useCallback(() => api.assets('?limit=50'), [])
   const { data: assets = [], loading, error } = usePollingQuery(loadAssets, 15000)
@@ -58,6 +64,7 @@ export default function DashboardPage() {
     { key: 'bias', title: 'Bias', sortValue: (row) => row.bias },
     { key: 'session', title: 'Session', sortValue: (row) => row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
+    { key: 'score_breakdown', title: 'Score breakdown', render: (row) => summarizeScore(row), sortValue: (row) => JSON.stringify(row?.state_payload?.score_breakdown || {}) },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
     { key: 'rsi_5m', title: 'RSI 5M', render: (row) => fmtNumber(row.rsi_5m, 2), sortValue: (row) => Number(row.rsi_5m ?? -1) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
@@ -73,12 +80,12 @@ export default function DashboardPage() {
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
     { key: 'bias', title: 'Bias', sortValue: (row) => row.bias },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
-    { key: 'session', title: 'Session', sortValue: (row) => row.session },
+    { key: 'score_breakdown', title: 'Breakdown', render: (row) => summarizeScore(row), sortValue: (row) => JSON.stringify(row?.state_payload?.score_breakdown || {}) },
   ]
 
   return (
     <div className="page-stack">
-      <PageHeader title="Dashboard 360" subtitle="Mobile-first market overview with sortable tables, macro and entry liquidity contexts, and TradingView access." />
+      <PageHeader title="Dashboard 360" subtitle="Mobile-first market overview with sortable tables, macro and entry liquidity contexts, and score breakdown." />
       <div className="stats-grid">
         <StatCard label="Tracked assets" value={assets.length} />
         <StatCard label="Trade stage" value={tradeCount} />
