@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 const EMPTY_SETTINGS = {
   general: { app_name: '', app_env: '', cors_origins: '', create_tables_on_boot: true },
   binance: { binance_rest_base: '', binance_quote_assets: '', binance_symbol_status: '', binance_max_symbols: 25, binance_lookback_1m: 180, binance_lookback_5m: 180, binance_lookback_1h: 180, binance_lookback_4h: 120 },
-  strategy: { session_timezone_offset_hours: -4, signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.0015, signal_overbought: 70, signal_oversold: 30, signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
+  strategy: { session_timezone_offset_hours: -4, signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
 }
@@ -123,6 +123,7 @@ export default function AdminSettingsPage() {
         <Field label="Session confirm filter enabled"><input type="checkbox" checked={Boolean(settings.strategy.signal_session_confirm_filter_enabled)} onChange={(e) => updateField('strategy', 'signal_session_confirm_filter_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="RSI period"><input style={inputStyle} type="number" value={settings.strategy.signal_rsi_period} onChange={(e) => updateField('strategy', 'signal_rsi_period', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Swing window"><input style={inputStyle} type="number" value={settings.strategy.signal_swing_window} onChange={(e) => updateField('strategy', 'signal_swing_window', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Equal level tolerance pct"><input style={inputStyle} type="number" step="0.0001" value={settings.strategy.signal_equal_level_tolerance_pct} onChange={(e) => updateField('strategy', 'signal_equal_level_tolerance_pct', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Overbought"><input style={inputStyle} type="number" value={settings.strategy.signal_overbought} onChange={(e) => updateField('strategy', 'signal_overbought', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Oversold"><input style={inputStyle} type="number" value={settings.strategy.signal_oversold} onChange={(e) => updateField('strategy', 'signal_oversold', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Planner min score"><input style={inputStyle} type="number" step="0.1" value={settings.strategy.planner_min_score} onChange={(e) => updateField('strategy', 'planner_min_score', e.target.value, 'number')} disabled={loading} /></Field>
