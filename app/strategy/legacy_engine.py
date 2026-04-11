@@ -128,6 +128,39 @@ def _projected_target(bias: str, macro_context: dict[str, Any], execution_target
     return {"type": "none", "level": None, "reason": "no projected target", "timeframe": None, "projected": False}
 
 
+def _resolve_structural_stop(*, bias: str, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, entry_context: dict[str, Any], today_london_high: float | None, today_london_low: float | None, today_asia_high: float | None, today_asia_low: float | None, sweep_up: bool, sweep_down: bool, last_high: float, last_low: float) -> tuple[float | None, str]:
+    entry_level = entry_context.get("level") if isinstance(entry_context, dict) else None
+    entry_type = entry_context.get("type") if isinstance(entry_context, dict) else None
+
+    if bias == "bull_confirm":
+        if sweep_down:
+            return last_low, "sweep_low_5m"
+        if entry_level is not None and any(token in str(entry_type or "") for token in ["low", "lows"]):
+            return entry_level, str(entry_type)
+        if today_london_low is not None:
+            return today_london_low, "today_london_low"
+        if today_asia_low is not None:
+            return today_asia_low, "today_asia_low"
+        if low_htf is not None:
+            return low_htf, "recent_low_1h"
+        return low_main, "recent_low_5m"
+
+    if bias == "bear_confirm":
+        if sweep_up:
+            return last_high, "sweep_high_5m"
+        if entry_level is not None and any(token in str(entry_type or "") for token in ["high", "highs"]):
+            return entry_level, str(entry_type)
+        if today_london_high is not None:
+            return today_london_high, "today_london_high"
+        if today_asia_high is not None:
+            return today_asia_high, "today_asia_high"
+        if high_htf is not None:
+            return high_htf, "recent_high_1h"
+        return high_main, "recent_high_5m"
+
+    return None, "none"
+
+
 def _score_volume(candles_main: list[dict[str, Any]]) -> tuple[int, dict[str, Any]]:
     recent = volumes(candles_main[-20:])
     if len(recent) < 5:
@@ -320,9 +353,11 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     trade_target = execution_target.get("level")
     if trigger in {"break_down_confirm", "break_down_confirm_soft"}:
-        trade = {"status": "simulated", "side": "short", "entry": price, "stop": high_main, "target": trade_target or low_macro or low_htf or low_main}; pipeline["trade"] = True
+        structural_stop, stop_source = _resolve_structural_stop(bias=bias, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, entry_context=entry_liquidity_context, today_london_high=today_london_high, today_london_low=today_london_low, today_asia_high=today_asia_high, today_asia_low=today_asia_low, sweep_up=sweep_up, sweep_down=sweep_down, last_high=float(last["high"]), last_low=float(last["low"]))
+        trade = {"status": "simulated", "side": "short", "entry": price, "stop": structural_stop, "target": trade_target or low_macro or low_htf or low_main, "stop_source": stop_source}; pipeline["trade"] = True
     elif trigger in {"break_up_confirm", "break_up_confirm_soft"}:
-        trade = {"status": "simulated", "side": "long", "entry": price, "stop": low_main, "target": trade_target or high_macro or high_htf or high_main}; pipeline["trade"] = True
+        structural_stop, stop_source = _resolve_structural_stop(bias=bias, high_main=high_main, low_main=low_main, high_htf=high_htf, low_htf=low_htf, entry_context=entry_liquidity_context, today_london_high=today_london_high, today_london_low=today_london_low, today_asia_high=today_asia_high, today_asia_low=today_asia_low, sweep_up=sweep_up, sweep_down=sweep_down, last_high=float(last["high"]), last_low=float(last["low"]))
+        trade = {"status": "simulated", "side": "long", "entry": price, "stop": structural_stop, "target": trade_target or high_macro or high_htf or high_main, "stop_source": stop_source}; pipeline["trade"] = True
 
     score_breakdown["target_quality"] = _score_target_quality(trade)
     projected_target = _projected_target(bias, macro_liquidity_context, execution_target)
