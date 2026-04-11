@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     signal_overbought: float = Field(default=70, alias="SIGNAL_OVERBOUGHT")
     signal_oversold: float = Field(default=30, alias="SIGNAL_OVERSOLD")
     signal_price_near_extreme_pct: float = Field(default=0.0025, alias="SIGNAL_PRICE_NEAR_EXTREME_PCT")
-    signal_session_confirm_filter_enabled: bool = Field(default=True, alias="SIGNAL_SESSION_CONFIRM_FILTER_ENABLED")
+    signal_session_confirm_filter_enabled: bool = Field(default=False, alias="SIGNAL_SESSION_CONFIRM_FILTER_ENABLED")
 
     planner_min_score: float = Field(default=4, alias="PLANNER_MIN_SCORE")
     planner_min_rr: float = Field(default=0.8, alias="PLANNER_MIN_RR")
