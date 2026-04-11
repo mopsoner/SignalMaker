@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import DataTable from '../components/DataTable'
 import PageHeader from '../components/PageHeader'
@@ -25,7 +25,6 @@ function summarizeScore(row) {
 }
 
 export default function DashboardPage() {
-  const [compact, setCompact] = useState(true)
   const loadAssets = useCallback(() => api.assets('?limit=50'), [])
   const { data: assets = [], loading, error } = usePollingQuery(loadAssets, 15000)
 
@@ -41,7 +40,6 @@ export default function DashboardPage() {
   }, {}), [assets])
 
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6), [assets])
-  const mobileAssets = useMemo(() => strongestAssets.slice(0, 10), [strongestAssets])
 
   const columns = [
     {
@@ -59,10 +57,8 @@ export default function DashboardPage() {
     { key: 'bias', title: 'Bias', sortValue: (row) => row.bias },
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
-    { key: 'score_breakdown', title: 'Score breakdown', render: (row) => summarizeScore(row), sortValue: (row) => JSON.stringify(row?.state_payload?.score_breakdown || {}) },
     { key: 'zone_quality', title: 'Zone quality', render: (row) => row?.state_payload?.zone_quality || '—', sortValue: (row) => row?.state_payload?.zone_quality || '' },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
-    { key: 'rsi_5m', title: 'RSI 5M', render: (row) => fmtNumber(row.rsi_5m, 2), sortValue: (row) => Number(row.rsi_5m ?? -1) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
     { key: 'macro_liquidity_context', title: 'Macro liquidity', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context), sortValue: (row) => (stateContext(row, 'macro_liquidity_context') || row.liquidity_context)?.level ?? -1 },
     { key: 'entry_liquidity_context', title: 'Entry liquidity', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')), sortValue: (row) => stateContext(row, 'entry_liquidity_context')?.level ?? -1 },
@@ -81,10 +77,7 @@ export default function DashboardPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader title="Dashboard 360" subtitle="Mobile-first market overview with debug links, projected targets, richer scoring and compact cards." />
-      <div className="page-actions">
-        <button className="button" type="button" onClick={() => setCompact((value) => !value)}>{compact ? 'Show full table first' : 'Show compact mobile first'}</button>
-      </div>
+      <PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." />
       <div className="stats-grid">
         <StatCard label="Tracked assets" value={assets.length} />
         <StatCard label="Trade stage" value={tradeCount} />
@@ -106,25 +99,6 @@ export default function DashboardPage() {
         </summary>
         <DataTable columns={strongestColumns} rows={strongestAssets} empty="No asset state available" />
       </details>
-      {compact ? (
-        <section className="panel compact-only">
-          <h2>Compact mobile cards</h2>
-          <div className="mobile-card-grid">
-            {mobileAssets.map((asset) => (
-              <Link key={asset.symbol} to={`/assets/${encodeURIComponent(asset.symbol)}`} className="mobile-asset-card">
-                <div className="mobile-asset-top">
-                  <strong>{asset.symbol}</strong>
-                  <span className={stageBadgeClass(asset.stage)}>{asset.stage}</span>
-                </div>
-                <div className="mobile-asset-meta">{asset.bias} · {asset?.state_payload?.session_phase || asset.session}</div>
-                <div className="mobile-asset-meta">Score {fmtNumber(asset.score, 2)} · {asset?.state_payload?.zone_quality || '—'}</div>
-                <div className="mobile-asset-meta">Macro {summarizeContext(stateContext(asset, 'macro_liquidity_context') || asset.liquidity_context)}</div>
-                <div className="mobile-asset-meta">Projected {summarizeContext(stateContext(asset, 'projected_target'))}</div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      ) : null}
       <details className="panel collapsible-panel" open>
         <summary>
           <h2>Market view 360</h2>
