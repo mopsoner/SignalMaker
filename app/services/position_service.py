@@ -4,6 +4,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.asset_state import AssetStateCurrent
 from app.models.position import Position
 
 
@@ -11,12 +12,38 @@ class PositionService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    def _refresh_open_marks(self, rows: list[Position]) -> None:
+        open_rows = [row for row in rows if row.status == "open"]
+        if not open_rows:
+            return
+        symbols = [row.symbol for row in open_rows]
+        asset_rows = list(self.db.scalars(select(AssetStateCurrent).where(AssetStateCurrent.symbol.in_(symbols))).all())
+        asset_by_symbol = {row.symbol.upper(): row for row in asset_rows}
+        changed = False
+        for row in open_rows:
+            asset = asset_by_symbol.get(row.symbol.upper())
+            if not asset or asset.price is None:
+                continue
+            row.mark_price = float(asset.price)
+            if row.entry_price is not None and row.quantity is not None:
+                if row.side == "short":
+                    row.unrealized_pnl = (float(row.entry_price) - float(row.mark_price)) * float(row.quantity)
+                else:
+                    row.unrealized_pnl = (float(row.mark_price) - float(row.entry_price)) * float(row.quantity)
+            changed = True
+        if changed:
+            self.db.commit()
+            for row in open_rows:
+                self.db.refresh(row)
+
     def list_positions(self, limit: int = 100, status: str | None = None) -> list[Position]:
         stmt = select(Position)
         if status:
             stmt = stmt.where(Position.status == status)
         stmt = stmt.order_by(Position.opened_at.desc()).limit(limit)
-        return list(self.db.scalars(stmt).all())
+        rows = list(self.db.scalars(stmt).all())
+        self._refresh_open_marks(rows)
+        return rows
 
     def create_position(self, *, symbol: str, side: str, quantity: float, entry_price: float | None, mark_price: float | None, stop_price: float | None, target_price: float | None, meta: dict | None) -> Position:
         row = Position(position_id=f"pos_{uuid4().hex[:16]}", symbol=symbol.upper(), side=side, quantity=quantity, entry_price=entry_price, mark_price=mark_price, stop_price=stop_price, target_price=target_price, status="open", meta=meta)
