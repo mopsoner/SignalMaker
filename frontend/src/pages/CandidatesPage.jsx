@@ -5,6 +5,28 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
 
+function summarizeContext(value) {
+  if (!value || typeof value !== 'object') return '—'
+  const type = value.type || '—'
+  const level = value.level !== null && value.level !== undefined ? fmtNumber(value.level, 4) : '—'
+  return `${type} @ ${level}`
+}
+
+function setupState(row) {
+  const state = row?.payload?.state
+  if (state === 'spring_watch') return 'spring_watch'
+  if (state === 'utad_watch') return 'utad_watch'
+  return row?.payload?.bias || '—'
+}
+
+function confirmLabel(row) {
+  return row?.payload?.trigger || row?.notes || '—'
+}
+
+function stopSource(row) {
+  return row?.payload?.trade?.stop_source || '—'
+}
+
 export default function CandidatesPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -29,6 +51,11 @@ export default function CandidatesPage() {
     { key: 'side', title: 'Side' },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
     { key: 'status', title: 'Status' },
+    { key: 'setup', title: 'Setup', render: (row) => setupState(row), sortValue: (row) => setupState(row) },
+    { key: 'confirm', title: 'Confirm', render: (row) => confirmLabel(row), sortValue: (row) => confirmLabel(row) },
+    { key: 'macro', title: 'Macro', render: (row) => summarizeContext(row?.payload?.macro_liquidity_context || row?.liquidity_context), sortValue: (row) => (row?.payload?.macro_liquidity_context || row?.liquidity_context)?.level ?? -1 },
+    { key: 'entry', title: 'Entry context', render: (row) => summarizeContext(row?.payload?.entry_liquidity_context), sortValue: (row) => row?.payload?.entry_liquidity_context?.level ?? -1 },
+    { key: 'stop_source', title: 'Stop source', render: (row) => stopSource(row), sortValue: (row) => stopSource(row) },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
     { key: 'entry_price', title: 'Entry', render: (row) => fmtNumber(row.entry_price, 4) },
     { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
@@ -41,7 +68,7 @@ export default function CandidatesPage() {
     <div className="page-stack">
       <PageHeader
         title="Trade Candidates"
-        subtitle="Planner outputs ready for paper execution"
+        subtitle="Planner outputs with confirmed setup, liquidity context and stop source."
         actions={<button className="button" disabled={busy} onClick={runPipeline}>{busy ? 'Running…' : 'Run pipeline'}</button>}
       />
       {message ? <div className="panel info">{message}</div> : null}
