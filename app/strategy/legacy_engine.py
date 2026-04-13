@@ -223,6 +223,22 @@ def _score_target_quality(trade: dict[str, Any]) -> int:
     return 0
 
 
+def _volume_confirmation_profile(candles_main: list[dict[str, Any]]) -> dict[str, Any]:
+    recent = volumes(candles_main[-20:])
+    if len(recent) < 5:
+        return {"last": 0.0, "average": 0.0, "ratio": 0.0, "confirm_soft_ok": False, "confirm_strong_bonus": False}
+    avg = mean(recent[:-1]) if len(recent) > 1 else mean(recent)
+    last = recent[-1]
+    ratio = (last / avg) if avg else 0.0
+    return {
+        "last": last,
+        "average": avg,
+        "ratio": ratio,
+        "confirm_soft_ok": ratio >= 1.05,
+        "confirm_strong_bonus": ratio >= 1.5,
+    }
+
+
 def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: list[dict[str, Any]], candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
     price = candles_fast[-1]["close"]
     rsi_main = rsi(closes(candles_main), cfg["rsi_period"])
@@ -243,8 +259,6 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     eq_main = equal_highs_lows(candles_main, cfg["equal_level_tolerance_pct"], lookback=20)
     eq_htf = equal_highs_lows(candles_htf, cfg["equal_level_tolerance_pct"], lookback=min(20, len(candles_htf)))
     eq_macro = equal_highs_lows(candles_macro, cfg["equal_level_tolerance_pct"], lookback=min(20, len(candles_macro)))
-    asia_high, asia_low = session_extremes(candles_main, cfg["session_timezone_offset_hours"], "asia")
-    london_high, london_low = session_extremes(candles_main, cfg["session_timezone_offset_hours"], "london")
     today_asia_high, today_asia_low = today_session_extremes(candles_main, cfg["session_timezone_offset_hours"], "asia")
     today_london_high, today_london_low = today_session_extremes(candles_main, cfg["session_timezone_offset_hours"], "london")
     previous_day_high, previous_day_low = previous_day_extremes(candles_main, cfg["session_timezone_offset_hours"])
@@ -314,15 +328,23 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     bear_soft_confirm = utad_watch and (last["close"] < prev_mid and last["close"] < last["open"] and last["close"] < prev_bar["close"])
     bull_soft_confirm = spring_watch and (last["close"] > prev_mid and last["close"] > last["open"] and last["close"] > prev_bar["close"])
 
+    volume_score, volume_debug = _score_volume(candles_main)
+    confirm_volume = _volume_confirmation_profile(candles_main)
+    score_breakdown["volume"] = volume_score
+
     confirm_candidate = None
     if bear_strong_confirm:
-        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break"); score_breakdown["confirmation"] = 4
+        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break")
+        score_breakdown["confirmation"] = 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0)
     elif bull_strong_confirm:
-        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break"); score_breakdown["confirmation"] = 4
-    elif bear_soft_confirm:
-        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft"); score_breakdown["confirmation"] = 2
-    elif bull_soft_confirm:
-        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft"); score_breakdown["confirmation"] = 2
+        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break")
+        score_breakdown["confirmation"] = 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0)
+    elif bear_soft_confirm and confirm_volume["confirm_soft_ok"]:
+        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft")
+        score_breakdown["confirmation"] = 2 + (1 if volume_score >= 1 else 0)
+    elif bull_soft_confirm and confirm_volume["confirm_soft_ok"]:
+        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft")
+        score_breakdown["confirmation"] = 2 + (1 if volume_score >= 1 else 0)
 
     session_confirm_allowed = (session in ALLOWED_CONFIRM_SESSIONS) or (not session_confirm_filter_enabled)
     if session_confirm_allowed:
@@ -342,8 +364,6 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     if session == "new_york" and (near_recent_high or near_recent_low):
         tp_zone = True; score_breakdown["quality"] += 1
 
-    volume_score, volume_debug = _score_volume(candles_main)
-    score_breakdown["volume"] = volume_score
     score_breakdown["market_quality"], market_quality_debug = _score_market_quality(candles_main, price)
     score_breakdown["htf_alignment"] = _score_htf_alignment(bias, rsi_htf, rsi_macro)
 
@@ -401,6 +421,6 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "equal_lows_1h": eq_htf["equal_lows"],
         "equal_highs_4h": eq_macro["equal_highs"],
         "equal_lows_4h": eq_macro["equal_lows"],
-        "volume_debug": volume_debug,
+        "volume_debug": {**volume_debug, **confirm_volume},
         "market_quality_debug": market_quality_debug,
     }
