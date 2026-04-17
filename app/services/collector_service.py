@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,12 @@ logger = logging.getLogger(__name__)
 BINANCE_WEIGHT_LIMIT = 1200
 WEIGHT_SAFETY_THRESHOLD = 1000
 KLINES_WEIGHT = 2
+INTERVAL_MS = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+}
 
 
 class RateLimiter:
@@ -56,7 +63,7 @@ class CollectorService:
         for attempt in range(3):
             try:
                 res = self.session.get(url, params=params or {}, timeout=15)
-            except requests.RequestException as exc:
+            except requests.RequestException:
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                     continue
@@ -115,8 +122,11 @@ class CollectorService:
         out = sorted(set(out))
         return out[: (limit or max_symbols)]
 
-    def fetch_klines(self, symbol: str, interval: str, limit: int) -> list[dict[str, Any]]:
-        raw = self._get('/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit})
+    def fetch_klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {'symbol': symbol, 'interval': interval, 'limit': limit}
+        if start_time is not None:
+            params['startTime'] = start_time
+        raw = self._get('/api/v3/klines', params)
         return [
             {
                 'open_time': int(r[0]),
@@ -130,10 +140,26 @@ class CollectorService:
             for r in raw
         ]
 
-    def collect_symbol_bundle(self, symbol: str) -> dict[str, list[dict[str, Any]]]:
-        return {
-            '1m': self.fetch_klines(symbol, '1m', self.runtime['binance']['binance_lookback_1m']),
-            '5m': self.fetch_klines(symbol, '5m', self.runtime['binance']['binance_lookback_5m']),
-            '1h': self.fetch_klines(symbol, '1h', self.runtime['binance']['binance_lookback_1h']),
-            '4h': self.fetch_klines(symbol, '4h', self.runtime['binance']['binance_lookback_4h']),
-        }
+    def _full_lookback(self, interval: str) -> int:
+        return int(self.runtime['binance'][f'binance_lookback_{interval}'])
+
+    def _incremental_min(self, interval: str) -> int:
+        return int(self.runtime['binance'].get(f'binance_incremental_min_{interval}', 2))
+
+    def _compute_incremental_limit(self, interval: str, latest_close_time: int | None) -> tuple[int, int | None]:
+        full_limit = self._full_lookback(interval)
+        if not self.runtime['binance'].get('binance_incremental_fetch_enabled', True) or latest_close_time is None:
+            return full_limit, None
+        interval_ms = INTERVAL_MS[interval]
+        now_ms = int(time.time() * 1000)
+        missed_bars = max(0, math.ceil((now_ms - int(latest_close_time)) / interval_ms))
+        limit = min(full_limit, max(self._incremental_min(interval), missed_bars + 2))
+        return int(limit), int(latest_close_time) + 1
+
+    def collect_symbol_bundle(self, symbol: str, latest_close_times: dict[str, int] | None = None) -> dict[str, list[dict[str, Any]]]:
+        latest_close_times = latest_close_times or {}
+        bundle: dict[str, list[dict[str, Any]]] = {}
+        for interval in ('1m', '5m', '1h', '4h'):
+            limit, start_time = self._compute_incremental_limit(interval, latest_close_times.get(interval))
+            bundle[interval] = self.fetch_klines(symbol, interval, limit, start_time=start_time)
+        return bundle
