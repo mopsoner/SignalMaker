@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -23,19 +24,63 @@ class PipelineService:
         self.trade_candidates = TradeCandidateService(db)
         self.market_data = MarketDataService(db)
 
+    def _bundle_limits(self) -> dict[str, int]:
+        runtime = self.collector.runtime["binance"]
+        return {
+            "1m": int(runtime["binance_lookback_1m"]),
+            "5m": int(runtime["binance_lookback_5m"]),
+            "1h": int(runtime["binance_lookback_1h"]),
+            "4h": int(runtime["binance_lookback_4h"]),
+        }
+
     def run_once(self, limit: int | None = None) -> dict:
         symbols = self.collector.discover_symbols(limit=limit)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
         self.live_runs.start_run(run_id=run_id, mode="paper", symbols_total=len(symbols))
+
         scanned = 0
         candidates = 0
         candles_written = 0
         errors: list[dict] = []
+        collected_symbols: list[str] = []
+        latest_close_times = self.market_data.get_latest_close_times(symbols)
+
+        max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
+        worker_count = min(max_workers, max(1, len(symbols)))
+        fetched_bundles: dict[str, dict[str, list[dict]]] = {}
+
+        def _collect(symbol: str):
+            return symbol, self.collector.collect_symbol_bundle(symbol, latest_close_times.get(symbol.upper(), {}))
+
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = {pool.submit(_collect, symbol): symbol for symbol in symbols}
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    fetched_symbol, bundle = future.result()
+                    fetched_bundles[fetched_symbol] = bundle
+                except Exception as exc:
+                    errors.append({"symbol": symbol, "phase": "collect", "error": str(exc)})
+
         for symbol in symbols:
+            bundle = fetched_bundles.get(symbol)
+            if not bundle:
+                continue
             try:
-                candles = self.collector.collect_symbol_bundle(symbol)
-                for interval, rows in candles.items():
-                    candles_written += self.market_data.upsert_candles(symbol, interval, rows)
+                for interval, rows in bundle.items():
+                    if rows:
+                        candles_written += self.market_data.upsert_candles(symbol, interval, rows)
+                collected_symbols.append(symbol)
+            except Exception as exc:
+                errors.append({"symbol": symbol, "phase": "store", "error": str(exc)})
+
+        limits = self._bundle_limits()
+        for symbol in collected_symbols:
+            try:
+                candles = self.market_data.load_symbol_bundle(symbol, limits)
+                if not all(candles.get(tf) for tf in ("1m", "5m", "1h", "4h")):
+                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing timeframe candles"})
+                    continue
                 signal = self.engine.compute_signal(symbol, candles)
                 self.asset_states.upsert_from_signal(signal)
                 candidate = self.planner.build_candidate_from_signal(signal)
@@ -44,7 +89,25 @@ class PipelineService:
                     candidates += 1
                 scanned += 1
             except Exception as exc:
-                errors.append({"symbol": symbol, "error": str(exc)})
-        stats = {"candidates_created": candidates, "candles_written": candles_written, "errors": errors, "symbols_requested": len(symbols)}
+                errors.append({"symbol": symbol, "phase": "analyze", "error": str(exc)})
+
+        stats = {
+            "candidates_created": candidates,
+            "candles_written": candles_written,
+            "errors": errors,
+            "symbols_requested": len(symbols),
+            "symbols_collected": len(collected_symbols),
+            "collect_workers": worker_count,
+            "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
+        }
         self.live_runs.complete_run(run_id, symbols_scanned=scanned, stats=stats)
-        return {"run_id": run_id, "symbols_total": len(symbols), "symbols_scanned": scanned, "candles_written": candles_written, "candidates_created": candidates, "errors": errors}
+        return {
+            "run_id": run_id,
+            "symbols_total": len(symbols),
+            "symbols_collected": len(collected_symbols),
+            "symbols_scanned": scanned,
+            "candles_written": candles_written,
+            "candidates_created": candidates,
+            "collect_workers": worker_count,
+            "errors": errors,
+        }
