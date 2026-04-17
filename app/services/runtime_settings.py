@@ -44,6 +44,21 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "planner_min_score": base_settings.planner_min_score,
         "planner_min_rr": base_settings.planner_min_rr,
     },
+    "notifications": {
+        "telegram_chat_id": base_settings.telegram_chat_id,
+        "telegram_secret": base_settings.telegram_bot_token,
+        "discord_url": base_settings.discord_webhook_url,
+    },
+    "bot": {
+        "bot_pipeline_enabled": base_settings.bot_pipeline_enabled,
+        "bot_executor_enabled": base_settings.bot_executor_enabled,
+        "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
+        "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
+        "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
+        "bot_scheduler_interval_sec": base_settings.bot_scheduler_interval_sec,
+        "bot_executor_limit": base_settings.bot_executor_limit,
+        "bot_executor_quantity": base_settings.bot_executor_quantity,
+    },
 }
 
 
