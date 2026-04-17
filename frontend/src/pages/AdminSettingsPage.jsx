@@ -4,7 +4,22 @@ import { api } from '../lib/api'
 
 const EMPTY_SETTINGS = {
   general: { app_name: '', app_env: '', cors_origins: '', create_tables_on_boot: true },
-  binance: { binance_rest_base: '', binance_quote_assets: '', binance_symbol_status: '', binance_max_symbols: 25, binance_lookback_1m: 180, binance_lookback_5m: 180, binance_lookback_1h: 180, binance_lookback_4h: 120 },
+  binance: {
+    binance_rest_base: '',
+    binance_quote_assets: '',
+    binance_symbol_status: '',
+    binance_max_symbols: 25,
+    binance_collect_max_workers: 4,
+    binance_incremental_fetch_enabled: true,
+    binance_incremental_min_1m: 3,
+    binance_incremental_min_5m: 3,
+    binance_incremental_min_1h: 2,
+    binance_incremental_min_4h: 2,
+    binance_lookback_1m: 180,
+    binance_lookback_5m: 180,
+    binance_lookback_1h: 180,
+    binance_lookback_4h: 120,
+  },
   strategy: { session_timezone_offset_hours: -4, signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
@@ -35,8 +50,17 @@ export default function AdminSettingsPage() {
     setLoading(true)
     try {
       const [data, workerData] = await Promise.all([api.adminSettings(), api.workerStatus()])
-      setSettings({ ...EMPTY_SETTINGS, ...data, strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) } })
-      setInitialSettings({ ...EMPTY_SETTINGS, ...data, strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) } })
+      const merged = {
+        ...EMPTY_SETTINGS,
+        ...data,
+        general: { ...EMPTY_SETTINGS.general, ...(data.general || {}) },
+        binance: { ...EMPTY_SETTINGS.binance, ...(data.binance || {}) },
+        strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) },
+        notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
+        bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
+      }
+      setSettings(merged)
+      setInitialSettings(merged)
       setWorkers(workerData)
       setMessage('')
     } catch (error) {
@@ -107,11 +131,17 @@ export default function AdminSettingsPage() {
         <Field label="Create tables on boot"><input type="checkbox" checked={Boolean(settings.general.create_tables_on_boot)} onChange={(e) => updateField('general', 'create_tables_on_boot', e.target.checked, 'checkbox')} disabled={loading} /></Field>
       </Section>
 
-      <Section title="Binance" description="Collector limits and exchange connectivity.">
+      <Section title="Binance" description="Collector limits, incremental fetch and exchange connectivity.">
         <Field label="REST base URL"><input style={inputStyle} value={settings.binance.binance_rest_base} onChange={(e) => updateField('binance', 'binance_rest_base', e.target.value)} disabled={loading} /></Field>
         <Field label="Quote assets"><input style={inputStyle} value={settings.binance.binance_quote_assets} onChange={(e) => updateField('binance', 'binance_quote_assets', e.target.value)} disabled={loading} /></Field>
         <Field label="Symbol status"><input style={inputStyle} value={settings.binance.binance_symbol_status} onChange={(e) => updateField('binance', 'binance_symbol_status', e.target.value)} disabled={loading} /></Field>
         <Field label="Max symbols"><input style={inputStyle} type="number" value={settings.binance.binance_max_symbols} onChange={(e) => updateField('binance', 'binance_max_symbols', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Collect max workers"><input style={inputStyle} type="number" value={settings.binance.binance_collect_max_workers} onChange={(e) => updateField('binance', 'binance_collect_max_workers', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Incremental fetch enabled"><input type="checkbox" checked={Boolean(settings.binance.binance_incremental_fetch_enabled)} onChange={(e) => updateField('binance', 'binance_incremental_fetch_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Incremental min 1m"><input style={inputStyle} type="number" value={settings.binance.binance_incremental_min_1m} onChange={(e) => updateField('binance', 'binance_incremental_min_1m', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Incremental min 5m"><input style={inputStyle} type="number" value={settings.binance.binance_incremental_min_5m} onChange={(e) => updateField('binance', 'binance_incremental_min_5m', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Incremental min 1h"><input style={inputStyle} type="number" value={settings.binance.binance_incremental_min_1h} onChange={(e) => updateField('binance', 'binance_incremental_min_1h', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Incremental min 4h"><input style={inputStyle} type="number" value={settings.binance.binance_incremental_min_4h} onChange={(e) => updateField('binance', 'binance_incremental_min_4h', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 1m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1m} onChange={(e) => updateField('binance', 'binance_lookback_1m', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 5m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_5m} onChange={(e) => updateField('binance', 'binance_lookback_5m', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 1h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1h} onChange={(e) => updateField('binance', 'binance_lookback_1h', e.target.value, 'number')} disabled={loading} /></Field>
