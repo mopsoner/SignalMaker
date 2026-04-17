@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
@@ -67,6 +67,46 @@ class MarketDataService:
         """)
         rows = self.db.execute(sql, params).mappings().all()
         return [dict(r) for r in rows]
+
+    def get_latest_close_times(self, symbols: list[str]) -> dict[str, dict[str, int]]:
+        if not symbols:
+            return {}
+        normalized = [s.upper() for s in symbols]
+        stmt = (
+            select(MarketCandle.symbol, MarketCandle.interval, func.max(MarketCandle.close_time))
+            .where(MarketCandle.symbol.in_(normalized))
+            .group_by(MarketCandle.symbol, MarketCandle.interval)
+        )
+        out: dict[str, dict[str, int]] = {}
+        for symbol, interval, close_time in self.db.execute(stmt).all():
+            out.setdefault(symbol, {})[interval] = int(close_time)
+        return out
+
+    def load_symbol_bundle(self, symbol: str, limits: dict[str, int]) -> dict[str, list[dict[str, Any]]]:
+        payload: dict[str, list[dict[str, Any]]] = {}
+        upper_symbol = symbol.upper()
+        for interval, limit in limits.items():
+            stmt = (
+                select(MarketCandle)
+                .where(MarketCandle.symbol == upper_symbol, MarketCandle.interval == interval)
+                .order_by(MarketCandle.open_time.desc())
+                .limit(limit)
+            )
+            rows = list(self.db.scalars(stmt).all())
+            rows.reverse()
+            payload[interval] = [
+                {
+                    "open_time": row.open_time,
+                    "close_time": row.close_time,
+                    "open": row.open,
+                    "high": row.high,
+                    "low": row.low,
+                    "close": row.close,
+                    "volume": row.volume,
+                }
+                for row in rows
+            ]
+        return payload
 
     def upsert_candles(self, symbol: str, interval: str, candles: list[dict]) -> int:
         count = 0
