@@ -24,3 +24,21 @@ class OrderService:
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    def get_by_id(self, order_id: str) -> Order | None:
+        return self.db.get(Order, order_id)
+
+    def update_order(self, order_id: str, *, status: str | None = None, filled_price: float | None = None, meta: dict | None = None) -> Order | None:
+        row = self.db.get(Order, order_id)
+        if row is None:
+            return None
+        if status is not None:
+            row.status = status
+        if filled_price is not None:
+            row.filled_price = filled_price
+        if meta is not None:
+            row.meta = meta
+        row.updated_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
