@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
     binance_rest_base: str = Field(default="https://api.binance.us", alias="BINANCE_REST_BASE")
+    binance_testnet_rest_base: str = Field(default="https://testnet.binance.vision", alias="BINANCE_TESTNET_REST_BASE")
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_secret_key: str = Field(default="", alias="BINANCE_SECRET_KEY")
     binance_quote_assets: str = Field(default="USDT,USDC", alias="BINANCE_QUOTE_ASSETS")
@@ -44,6 +45,14 @@ class Settings(BaseSettings):
     binance_lookback_5m: int = Field(default=180, alias="BINANCE_LOOKBACK_5M")
     binance_lookback_1h: int = Field(default=180, alias="BINANCE_LOOKBACK_1H")
     binance_lookback_4h: int = Field(default=120, alias="BINANCE_LOOKBACK_4H")
+
+    live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
+    binance_use_testnet: bool = Field(default=True, alias="BINANCE_USE_TESTNET")
+    live_spot_allow_shorts: bool = Field(default=False, alias="LIVE_SPOT_ALLOW_SHORTS")
+    live_max_open_positions: int = Field(default=3, alias="LIVE_MAX_OPEN_POSITIONS")
+    live_max_notional_per_trade: float = Field(default=250.0, alias="LIVE_MAX_NOTIONAL_PER_TRADE")
+    live_require_tp_sl: bool = Field(default=True, alias="LIVE_REQUIRE_TP_SL")
+    live_reconcile_enabled: bool = Field(default=True, alias="LIVE_RECONCILE_ENABLED")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
