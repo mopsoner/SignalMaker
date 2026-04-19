@@ -12,7 +12,6 @@ from app.strategy.legacy_signals import (
     previous_week_extremes,
     recent_extremes,
     rsi,
-    session_extremes,
     session_from_timestamp,
     session_phase_from_timestamp,
     today_session_extremes,
@@ -44,6 +43,20 @@ def _find_imbalance_target(candles: list[dict[str, Any]], direction: str, curren
     if not candidates:
         return None
     return min(candidates, key=lambda x: x["level"]) if direction == "up" else max(candidates, key=lambda x: x["level"])
+
+
+def _recent_pivot_level(candles: list[dict[str, Any]], *, direction: str, lookback: int, exclude_current: bool = True) -> float | None:
+    if not candles:
+        return None
+    source = candles[:-1] if exclude_current and len(candles) > 1 else candles
+    if not source:
+        return None
+    window = source[-lookback:] if len(source) >= lookback else source
+    if not window:
+        return None
+    if direction == "up":
+        return max(float(c["high"]) for c in window)
+    return min(float(c["low"]) for c in window)
 
 
 def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None) -> dict[str, Any]:
@@ -333,20 +346,37 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         spring_watch = True
         score_breakdown["structure"] += 3
 
+    internal_bear_pivot_high = _recent_pivot_level(candles_main, direction="up", lookback=6)
+    internal_bull_pivot_low = _recent_pivot_level(candles_main, direction="down", lookback=6)
+    external_swing_high = _recent_pivot_level(candles_main, direction="up", lookback=18)
+    external_swing_low = _recent_pivot_level(candles_main, direction="down", lookback=18)
+
+    mss_bull = bool(spring_watch and internal_bear_pivot_high is not None and float(last["close"]) > float(internal_bear_pivot_high))
+    mss_bear = bool(utad_watch and internal_bull_pivot_low is not None and float(last["close"]) < float(internal_bull_pivot_low))
+    bos_bull = bool(mss_bull and external_swing_high is not None and float(last["close"]) > float(external_swing_high))
+    bos_bear = bool(mss_bear and external_swing_low is not None and float(last["close"]) < float(external_swing_low))
+
+    if mss_bull or mss_bear:
+        score_breakdown["structure"] += 1
+    if bos_bull or bos_bear:
+        score_breakdown["confirmation"] += 2
+
     zone_quality = "weak"
     if utad_watch or spring_watch:
         state = "utad_watch" if utad_watch else "spring_watch"
         bias = "bear_watch" if utad_watch else "bull_watch"
         pipeline["zone"] = True
-        if (near_macro_high or near_macro_low or near_htf_high or near_htf_low) and (sweep_up or sweep_down):
+        if bos_bull or bos_bear:
+            zone_quality = "strong"
+        elif (mss_bull or mss_bear) or ((near_macro_high or near_macro_low or near_htf_high or near_htf_low) and (sweep_up or sweep_down)):
             zone_quality = "strong"
         elif (near_recent_high or near_recent_low or eq_main["equal_highs"] or eq_main["equal_lows"]):
             zone_quality = "medium"
 
-    bear_strong_confirm = utad_watch and last["close"] < prev_low
-    bull_strong_confirm = spring_watch and last["close"] > prev_high
-    bear_soft_confirm = utad_watch and (last["close"] < prev_mid and last["close"] < last["open"] and last["close"] < prev_bar["close"])
-    bull_soft_confirm = spring_watch and (last["close"] > prev_mid and last["close"] > last["open"] and last["close"] > prev_bar["close"])
+    bear_strong_confirm = bos_bear
+    bull_strong_confirm = bos_bull
+    bear_soft_confirm = mss_bear and (last["close"] < prev_mid and last["close"] < last["open"] and last["close"] < prev_bar["close"])
+    bull_soft_confirm = mss_bull and (last["close"] > prev_mid and last["close"] > last["open"] and last["close"] > prev_bar["close"])
 
     volume_score, volume_debug = _score_volume(candles_main)
     confirm_volume = _volume_confirmation_profile(candles_main)
@@ -354,17 +384,17 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     confirm_candidate = None
     if bear_strong_confirm:
-        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_break")
-        score_breakdown["confirmation"] = 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0)
+        confirm_candidate = ("break_down_confirm", "bear_confirm", "5m_bos")
+        score_breakdown["confirmation"] = max(score_breakdown["confirmation"], 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0))
     elif bull_strong_confirm:
-        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_break")
-        score_breakdown["confirmation"] = 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0)
+        confirm_candidate = ("break_up_confirm", "bull_confirm", "5m_bos")
+        score_breakdown["confirmation"] = max(score_breakdown["confirmation"], 4 + (1 if confirm_volume["confirm_strong_bonus"] else 0))
     elif bear_soft_confirm and confirm_volume["confirm_soft_ok"]:
-        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_soft")
-        score_breakdown["confirmation"] = 2 + (1 if volume_score >= 1 else 0)
+        confirm_candidate = ("break_down_confirm_soft", "bear_confirm", "5m_mss_soft")
+        score_breakdown["confirmation"] = max(score_breakdown["confirmation"], 2 + (1 if volume_score >= 1 else 0))
     elif bull_soft_confirm and confirm_volume["confirm_soft_ok"]:
-        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_soft")
-        score_breakdown["confirmation"] = 2 + (1 if volume_score >= 1 else 0)
+        confirm_candidate = ("break_up_confirm_soft", "bull_confirm", "5m_mss_soft")
+        score_breakdown["confirmation"] = max(score_breakdown["confirmation"], 2 + (1 if volume_score >= 1 else 0))
 
     session_confirm_allowed = (session in ALLOWED_CONFIRM_SESSIONS) or (not session_confirm_filter_enabled)
     if session_confirm_allowed:
@@ -464,6 +494,14 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "equal_lows_1h": eq_htf["equal_lows"],
         "equal_highs_4h": eq_macro["equal_highs"],
         "equal_lows_4h": eq_macro["equal_lows"],
+        "mss_bull": mss_bull,
+        "mss_bear": mss_bear,
+        "bos_bull": bos_bull,
+        "bos_bear": bos_bear,
+        "internal_bear_pivot_high": internal_bear_pivot_high,
+        "internal_bull_pivot_low": internal_bull_pivot_low,
+        "external_swing_high": external_swing_high,
+        "external_swing_low": external_swing_low,
         "volume_debug": {**volume_debug, **confirm_volume},
         "market_quality_debug": market_quality_debug,
     }
