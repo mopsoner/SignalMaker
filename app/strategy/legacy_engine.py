@@ -61,33 +61,29 @@ def _recent_pivot_level(candles: list[dict[str, Any]], *, direction: str, lookba
 
 def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
-        if eq["equal_highs"]:
-            return {"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m", "scope": "entry"}
-        if imbalance_up_5m is not None:
-            return {**imbalance_up_5m, "scope": "entry"}
-        if today_london_high is not None:
-            return {"type": "today_london_high", "level": today_london_high, "reason": "today london high as buy-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
-        if today_asia_high is not None:
-            return {"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high as buy-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
-        if high_main:
-            return {"type": "recent_high_5m", "level": high_main, "reason": "recent visible 5m high liquidity", "timeframe": "5m", "scope": "entry"}
-        if high_htf:
-            return {"type": "recent_high_1h", "level": high_htf, "reason": "1h low used as fallback entry liquidity context", "timeframe": "1h", "scope": "entry"}
-        return {"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"}
+        for item in (
+            ({"type": "today_london_high", "level": today_london_high, "reason": "today london high as preferred sell entry liquidity context", "timeframe": "session", "scope": "entry"} if today_london_high is not None else None),
+            ({"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high as preferred sell entry liquidity context", "timeframe": "session", "scope": "entry"} if today_asia_high is not None else None),
+            ({"type": "recent_high_1h", "level": high_htf, "reason": "near 1h high used as preferred sell entry liquidity context", "timeframe": "1h", "scope": "entry"} if high_htf is not None else None),
+            ({"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m", "scope": "entry"} if eq["equal_highs"] else None),
+            ({**imbalance_up_5m, "scope": "entry"} if imbalance_up_5m else None),
+            ({"type": "recent_high_5m", "level": high_main, "reason": "recent visible 5m high liquidity", "timeframe": "5m", "scope": "entry"} if high_main else None),
+            ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"} if high_macro else None),
+        ):
+            if item is not None:
+                return item
     if bias in {"bull_watch", "bull_confirm"}:
-        if eq["equal_lows"]:
-            return {"type": "equal_lows_5m", "level": low_main, "reason": "visible sell-side liquidity below equal lows", "timeframe": "5m", "scope": "entry"}
-        if imbalance_down_5m is not None:
-            return {**imbalance_down_5m, "scope": "entry"}
-        if today_london_low is not None:
-            return {"type": "today_london_low", "level": today_london_low, "reason": "today london low as sell-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
-        if today_asia_low is not None:
-            return {"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low as sell-side entry liquidity context", "timeframe": "5m", "scope": "entry"}
-        if low_main:
-            return {"type": "recent_low_5m", "level": low_main, "reason": "recent visible 5m low liquidity", "timeframe": "5m", "scope": "entry"}
-        if low_htf:
-            return {"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as fallback entry liquidity context", "timeframe": "1h", "scope": "entry"}
-        return {"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"}
+        for item in (
+            ({"type": "today_london_low", "level": today_london_low, "reason": "today london low as preferred buy entry liquidity context", "timeframe": "session", "scope": "entry"} if today_london_low is not None else None),
+            ({"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low as preferred buy entry liquidity context", "timeframe": "session", "scope": "entry"} if today_asia_low is not None else None),
+            ({"type": "recent_low_1h", "level": low_htf, "reason": "near 1h low used as preferred buy entry liquidity context", "timeframe": "1h", "scope": "entry"} if low_htf is not None else None),
+            ({"type": "equal_lows_5m", "level": low_main, "reason": "visible sell-side liquidity below equal lows", "timeframe": "5m", "scope": "entry"} if eq["equal_lows"] else None),
+            ({**imbalance_down_5m, "scope": "entry"} if imbalance_down_5m else None),
+            ({"type": "recent_low_5m", "level": low_main, "reason": "recent visible 5m low liquidity", "timeframe": "5m", "scope": "entry"} if low_main else None),
+            ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as fallback entry liquidity context", "timeframe": "4h", "scope": "entry"} if low_macro else None),
+        ):
+            if item is not None:
+                return item
     return {"type": "none", "level": None, "reason": "no clear entry liquidity context", "timeframe": None, "scope": "entry"}
 
 
@@ -132,21 +128,21 @@ def _pick_macro_liquidity_context(*, bias: str, eq_main: dict[str, bool], eq_htf
 def _pick_execution_target(*, bias: str, price: float, previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]]) -> dict[str, Any]:
     if bias == "bull_confirm":
         return (
-            _find_imbalance_target(candles_htf, "up", price, "1h")
-            or _find_imbalance_target(candles_macro, "up", price, "4h")
-            or ({"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as primary execution target", "timeframe": "1h"} if high_htf else None)
-            or ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as secondary execution target", "timeframe": "4h"} if high_macro else None)
-            or ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as fallback execution target", "timeframe": "1d"} if previous_day_high else None)
+            _find_imbalance_target(candles_macro, "up", price, "4h")
+            or ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as primary extended execution target", "timeframe": "4h"} if high_macro else None)
+            or ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as secondary extended execution target", "timeframe": "1d"} if previous_day_high else None)
+            or _find_imbalance_target(candles_htf, "up", price, "1h")
+            or ({"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as secondary execution target", "timeframe": "1h"} if high_htf else None)
             or ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended execution target", "timeframe": "1w"} if previous_week_high else None)
             or {"type": "recent_high_5m", "level": high_main, "reason": "5m fallback high used as execution target", "timeframe": "5m"}
         )
     if bias == "bear_confirm":
         return (
-            _find_imbalance_target(candles_htf, "down", price, "1h")
-            or _find_imbalance_target(candles_macro, "down", price, "4h")
-            or ({"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as primary execution target", "timeframe": "1h"} if low_htf else None)
-            or ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as secondary execution target", "timeframe": "4h"} if low_macro else None)
-            or ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as fallback execution target", "timeframe": "1d"} if previous_day_low else None)
+            _find_imbalance_target(candles_macro, "down", price, "4h")
+            or ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as primary extended execution target", "timeframe": "4h"} if low_macro else None)
+            or ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as secondary extended execution target", "timeframe": "1d"} if previous_day_low else None)
+            or _find_imbalance_target(candles_htf, "down", price, "1h")
+            or ({"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as secondary execution target", "timeframe": "1h"} if low_htf else None)
             or ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended execution target", "timeframe": "1w"} if previous_week_low else None)
             or {"type": "recent_low_5m", "level": low_main, "reason": "5m fallback low used as execution target", "timeframe": "5m"}
         )
@@ -166,6 +162,8 @@ def _resolve_structural_stop(*, bias: str, high_main: float, low_main: float, hi
     entry_type = entry_context.get("type") if isinstance(entry_context, dict) else None
 
     if bias == "bull_confirm":
+        if low_htf is not None:
+            return low_htf, "recent_low_1h"
         if sweep_down:
             return last_low, "sweep_low_5m"
         if entry_level is not None and any(token in str(entry_type or "") for token in ["low", "lows"]):
@@ -174,11 +172,11 @@ def _resolve_structural_stop(*, bias: str, high_main: float, low_main: float, hi
             return today_london_low, "today_london_low"
         if today_asia_low is not None:
             return today_asia_low, "today_asia_low"
-        if low_htf is not None:
-            return low_htf, "recent_low_1h"
         return low_main, "recent_low_5m"
 
     if bias == "bear_confirm":
+        if high_htf is not None:
+            return high_htf, "recent_high_1h"
         if sweep_up:
             return last_high, "sweep_high_5m"
         if entry_level is not None and any(token in str(entry_type or "") for token in ["high", "highs"]):
@@ -187,8 +185,6 @@ def _resolve_structural_stop(*, bias: str, high_main: float, low_main: float, hi
             return today_london_high, "today_london_high"
         if today_asia_high is not None:
             return today_asia_high, "today_asia_high"
-        if high_htf is not None:
-            return high_htf, "recent_high_1h"
         return high_main, "recent_high_5m"
 
     return None, "none"
