@@ -59,6 +59,16 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "bot_executor_limit": base_settings.bot_executor_limit,
         "bot_executor_quantity": base_settings.bot_executor_quantity,
     },
+    "live": {
+        "live_trading_enabled": base_settings.live_trading_enabled,
+        "binance_use_testnet": base_settings.binance_use_testnet,
+        "binance_testnet_rest_base": base_settings.binance_testnet_rest_base,
+        "live_spot_allow_shorts": base_settings.live_spot_allow_shorts,
+        "live_max_open_positions": base_settings.live_max_open_positions,
+        "live_max_notional_per_trade": base_settings.live_max_notional_per_trade,
+        "live_require_tp_sl": base_settings.live_require_tp_sl,
+        "live_reconcile_enabled": base_settings.live_reconcile_enabled,
+    },
 }
 
 
