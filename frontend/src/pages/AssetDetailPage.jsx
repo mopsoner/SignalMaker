@@ -79,6 +79,17 @@ export default function AssetDetailPage() {
               <DebugRow label="Target quality" value={breakdown.target_quality} />
             </div>
             <div>
+              <h2>MSS / BOS structure</h2>
+              <DebugRow label="MSS bull / bear" value={`${payload.mss_bull} / ${payload.mss_bear}`} />
+              <DebugRow label="BOS bull / bear" value={`${payload.bos_bull} / ${payload.bos_bear}`} />
+              <DebugRow label="Internal bear pivot high" value={fmtNumber(payload.internal_bear_pivot_high, 4)} />
+              <DebugRow label="Internal bull pivot low" value={fmtNumber(payload.internal_bull_pivot_low, 4)} />
+              <DebugRow label="External swing high" value={fmtNumber(payload.external_swing_high, 4)} />
+              <DebugRow label="External swing low" value={fmtNumber(payload.external_swing_low, 4)} />
+            </div>
+          </section>
+          <section className="panel two-col">
+            <div>
               <h2>HTF debug</h2>
               <DebugRow label="Previous day high / low" value={`${fmtNumber(payload.previous_day_high, 4)} / ${fmtNumber(payload.previous_day_low, 4)}`} />
               <DebugRow label="Previous week high / low" value={`${fmtNumber(payload.previous_week_high, 4)} / ${fmtNumber(payload.previous_week_low, 4)}`} />
@@ -86,6 +97,10 @@ export default function AssetDetailPage() {
               <DebugRow label="EQH / EQL 4H" value={`${payload.equal_highs_4h} / ${payload.equal_lows_4h}`} />
               <DebugRow label="Volume debug" value={payload.volume_debug} />
               <DebugRow label="Market quality debug" value={payload.market_quality_debug} />
+            </div>
+            <div>
+              <h2>Raw state payload</h2>
+              <DebugRow label="Payload" value={payload} />
             </div>
           </section>
         </>
