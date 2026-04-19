@@ -108,7 +108,7 @@ export default function DashboardPage() {
           <h2>Market view 360</h2>
           <span className="collapse-indicator">⌄</span>
         </summary>
-        <DataTable columns={columns} rows={assets} empty="No asset state available" />
+        <DataTable columns={columns} rows={assets} empty="No asset state available" defaultSortKey="updated_at" defaultSortDir="desc" />
       </details>
     </div>
   )
