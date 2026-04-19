@@ -8,10 +8,10 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
 }
 
-export default function DataTable({ columns, rows, empty = 'No data' }) {
+export default function DataTable({ columns, rows, empty = 'No data', defaultSortKey = null, defaultSortDir = 'desc' }) {
   const firstSortable = columns.find((col) => col.sortValue || col.sortable !== false)
-  const [sortKey, setSortKey] = useState(firstSortable?.key || null)
-  const [sortDir, setSortDir] = useState('desc')
+  const [sortKey, setSortKey] = useState(defaultSortKey || firstSortable?.key || null)
+  const [sortDir, setSortDir] = useState(defaultSortDir)
 
   const sortedRows = useMemo(() => {
     if (!sortKey) return rows
