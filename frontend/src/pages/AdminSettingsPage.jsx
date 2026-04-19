@@ -23,6 +23,7 @@ const EMPTY_SETTINGS = {
   strategy: { session_timezone_offset_hours: -4, signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
+  live: { live_trading_enabled: false, binance_use_testnet: true, binance_testnet_rest_base: 'https://testnet.binance.vision', live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: true },
 }
 
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
@@ -58,6 +59,7 @@ export default function AdminSettingsPage() {
         strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) },
         notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
+        live: { ...EMPTY_SETTINGS.live, ...(data.live || {}) },
       }
       setSettings(merged)
       setInitialSettings(merged)
@@ -84,8 +86,18 @@ export default function AdminSettingsPage() {
     setMessage('')
     try {
       const saved = await api.updateAdminSettings(settings)
-      setSettings(saved)
-      setInitialSettings(saved)
+      const merged = {
+        ...EMPTY_SETTINGS,
+        ...saved,
+        general: { ...EMPTY_SETTINGS.general, ...(saved.general || {}) },
+        binance: { ...EMPTY_SETTINGS.binance, ...(saved.binance || {}) },
+        strategy: { ...EMPTY_SETTINGS.strategy, ...(saved.strategy || {}) },
+        notifications: { ...EMPTY_SETTINGS.notifications, ...(saved.notifications || {}) },
+        bot: { ...EMPTY_SETTINGS.bot, ...(saved.bot || {}) },
+        live: { ...EMPTY_SETTINGS.live, ...(saved.live || {}) },
+      }
+      setSettings(merged)
+      setInitialSettings(merged)
       setMessage('Settings saved')
     } catch (error) {
       setMessage(error.message || 'Failed to save settings')
@@ -146,6 +158,17 @@ export default function AdminSettingsPage() {
         <Field label="Lookback 5m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_5m} onChange={(e) => updateField('binance', 'binance_lookback_5m', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 1h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1h} onChange={(e) => updateField('binance', 'binance_lookback_1h', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 4h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_4h} onChange={(e) => updateField('binance', 'binance_lookback_4h', e.target.value, 'number')} disabled={loading} /></Field>
+      </Section>
+
+      <Section title="Live trading" description="Safety switches and testnet/live execution controls.">
+        <Field label="Live trading enabled"><input type="checkbox" checked={Boolean(settings.live.live_trading_enabled)} onChange={(e) => updateField('live', 'live_trading_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Use Binance testnet"><input type="checkbox" checked={Boolean(settings.live.binance_use_testnet)} onChange={(e) => updateField('live', 'binance_use_testnet', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Testnet REST base"><input style={inputStyle} value={settings.live.binance_testnet_rest_base} onChange={(e) => updateField('live', 'binance_testnet_rest_base', e.target.value)} disabled={loading} /></Field>
+        <Field label="Allow shorts"><input type="checkbox" checked={Boolean(settings.live.live_spot_allow_shorts)} onChange={(e) => updateField('live', 'live_spot_allow_shorts', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Max open positions"><input style={inputStyle} type="number" value={settings.live.live_max_open_positions} onChange={(e) => updateField('live', 'live_max_open_positions', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Max notional per trade"><input style={inputStyle} type="number" step="0.01" value={settings.live.live_max_notional_per_trade} onChange={(e) => updateField('live', 'live_max_notional_per_trade', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Require TP / SL"><input type="checkbox" checked={Boolean(settings.live.live_require_tp_sl)} onChange={(e) => updateField('live', 'live_require_tp_sl', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Reconcile enabled"><input type="checkbox" checked={Boolean(settings.live.live_reconcile_enabled)} onChange={(e) => updateField('live', 'live_reconcile_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
       </Section>
 
       <Section title="Strategy" description="Signal engine and planner thresholds.">
