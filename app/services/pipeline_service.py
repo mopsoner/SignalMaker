@@ -67,10 +67,13 @@ class PipelineService:
             if not bundle:
                 continue
             try:
+                wrote_any = False
                 for interval, rows in bundle.items():
                     if rows:
                         candles_written += self.market_data.upsert_candles(symbol, interval, rows)
-                collected_symbols.append(symbol)
+                        wrote_any = True
+                if wrote_any:
+                    collected_symbols.append(symbol)
             except Exception as exc:
                 errors.append({"symbol": symbol, "phase": "store", "error": str(exc)})
 
@@ -82,8 +85,12 @@ class PipelineService:
                     errors.append({"symbol": symbol, "phase": "analyze", "error": "missing timeframe candles"})
                     continue
                 signal = self.engine.compute_signal(symbol, candles)
+                assessment = self.planner.assess_signal(signal)
+                signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
+                signal['planner_candidate_reason'] = assessment['reason']
+                signal['planner_candidate_rr'] = assessment.get('rr_ratio')
                 self.asset_states.upsert_from_signal(signal)
-                candidate = self.planner.build_candidate_from_signal(signal)
+                candidate = assessment['candidate']
                 if candidate:
                     self.trade_candidates.upsert_open_candidate(**candidate)
                     candidates += 1
