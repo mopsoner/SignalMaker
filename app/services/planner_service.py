@@ -15,7 +15,7 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
         }
 
-    def build_candidate_from_signal(self, signal: dict) -> dict | None:
+    def assess_signal(self, signal: dict) -> dict:
         runtime = load_runtime_settings()
         strategy = runtime['strategy']
         trade = signal.get('trade', {}) or {}
@@ -24,17 +24,28 @@ class PlannerService:
         stop = trade.get('stop')
         target = trade.get('target')
         score = float(signal.get('score', 0.0))
-        if not side or entry is None or stop is None or target is None:
-            return None
+
+        if not side:
+            return {'accepted': False, 'reason': 'missing_side', 'candidate': None}
+        if entry is None:
+            return {'accepted': False, 'reason': 'missing_entry', 'candidate': None}
+        if stop is None:
+            return {'accepted': False, 'reason': 'missing_stop', 'candidate': None}
+        if target is None:
+            return {'accepted': False, 'reason': 'missing_target', 'candidate': None}
+
         risk = abs(entry - stop)
         reward = abs(target - entry)
         rr = reward / risk if risk > 0 else None
+        if risk <= 0:
+            return {'accepted': False, 'reason': 'invalid_risk', 'candidate': None, 'rr_ratio': rr}
         if score < strategy['planner_min_score']:
-            return None
+            return {'accepted': False, 'reason': 'low_score', 'candidate': None, 'rr_ratio': rr}
         if rr is None or rr < strategy['planner_min_rr']:
-            return None
+            return {'accepted': False, 'reason': 'low_rr', 'candidate': None, 'rr_ratio': rr}
+
         stage = 'trade' if signal.get('pipeline', {}).get('trade') else signal.get('state', 'collect')
-        return {
+        candidate = {
             'symbol': signal['symbol'],
             'side': side,
             'stage': stage,
@@ -48,3 +59,8 @@ class PlannerService:
             'notes': signal.get('confirm_source') or signal.get('trigger'),
             'payload': signal,
         }
+        return {'accepted': True, 'reason': 'accepted', 'candidate': candidate, 'rr_ratio': rr}
+
+    def build_candidate_from_signal(self, signal: dict) -> dict | None:
+        assessment = self.assess_signal(signal)
+        return assessment['candidate']
