@@ -21,7 +21,23 @@ function stateContext(row, key) {
 function summarizeScore(row) {
   const breakdown = row?.state_payload?.score_breakdown
   if (!breakdown) return '—'
-  return `L${breakdown.liquidity || 0} · S${breakdown.structure || 0} · C${breakdown.confirmation || 0} · Se${breakdown.session || 0} · Q${breakdown.quality || 0} · V${breakdown.volume || 0}`
+  const parts = [
+    `L${breakdown.liquidity || 0}`,
+    `S${breakdown.structure || 0}`,
+    `C${breakdown.confirmation || 0}`,
+    `Se${breakdown.session || 0}`,
+    `Q${breakdown.quality || 0}`,
+    `V${breakdown.volume || 0}`,
+    `H${breakdown.htf_alignment || 0}`,
+    `M${breakdown.market_quality || 0}`,
+    `T${breakdown.target_quality || 0}`,
+  ]
+  const mssBos = []
+  if (row?.state_payload?.mss_bull) mssBos.push('MSS↑')
+  if (row?.state_payload?.mss_bear) mssBos.push('MSS↓')
+  if (row?.state_payload?.bos_bull) mssBos.push('BOS↑')
+  if (row?.state_payload?.bos_bear) mssBos.push('BOS↓')
+  return `${parts.join(' · ')}${mssBos.length ? ` · ${mssBos.join(' / ')}` : ''}`
 }
 
 export default function DashboardPage() {
