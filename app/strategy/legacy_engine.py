@@ -114,9 +114,21 @@ def _find_old_shelf(candles: list[dict[str, Any]], *, direction: str, current_pr
     }
 
 
-def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None, previous_day_high: float | None = None, previous_day_low: float | None = None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
+def _level_is_relevant(*, bias: str, price: float, level: float | None, tolerance_pct: float = 0.003) -> bool:
+    if level is None:
+        return False
+    if price <= 0:
+        return True
+    if bias.startswith("bear"):
+        return level >= price * (1 - tolerance_pct)
+    if bias.startswith("bull"):
+        return level <= price * (1 + tolerance_pct)
+    return True
+
+
+def _pick_entry_liquidity_context(*, bias: str, price: float, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None, previous_day_high: float | None = None, previous_day_low: float | None = None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
-        for item in (
+        candidates = (
             ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as primary sell entry context", "timeframe": "1d", "scope": "entry"} if previous_day_high is not None else None),
             ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as secondary sell entry context", "timeframe": "4h", "scope": "entry"} if range_high_4h is not None else None),
             ({**old_resistance_shelf, "scope": "entry"} if old_resistance_shelf else None),
@@ -128,11 +140,12 @@ def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], today_asia_
             ({"type": "recent_high_5m", "level": high_main, "reason": "recent visible 5m high liquidity", "timeframe": "5m", "scope": "entry"} if high_main is not None else None),
             ({"type": "today_london_high", "level": today_london_high, "reason": "today london high kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_london_high is not None else None),
             ({"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_asia_high is not None else None),
-        ):
-            if item is not None:
+        )
+        for item in candidates:
+            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
                 return item
     if bias in {"bull_watch", "bull_confirm"}:
-        for item in (
+        candidates = (
             ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as primary buy entry context", "timeframe": "1d", "scope": "entry"} if previous_day_low is not None else None),
             ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as secondary buy entry context", "timeframe": "4h", "scope": "entry"} if range_low_4h is not None else None),
             ({**old_support_shelf, "scope": "entry"} if old_support_shelf else None),
@@ -144,19 +157,20 @@ def _pick_entry_liquidity_context(*, bias: str, eq: dict[str, bool], today_asia_
             ({"type": "recent_low_5m", "level": low_main, "reason": "recent visible 5m low liquidity", "timeframe": "5m", "scope": "entry"} if low_main is not None else None),
             ({"type": "today_london_low", "level": today_london_low, "reason": "today london low kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_london_low is not None else None),
             ({"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_asia_low is not None else None),
-        ):
-            if item is not None:
+        )
+        for item in candidates:
+            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
                 return item
     return {"type": "none", "level": None, "reason": "no clear entry liquidity context", "timeframe": None, "scope": "entry"}
 
 
-def _pick_macro_liquidity_context(*, bias: str, eq_main: dict[str, bool], eq_htf: dict[str, bool], eq_macro: dict[str, bool], previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_4h: dict[str, Any] | None, imbalance_down_4h: dict[str, Any] | None, imbalance_up_1h: dict[str, Any] | None, imbalance_down_1h: dict[str, Any] | None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
+def _pick_macro_liquidity_context(*, bias: str, price: float, eq_main: dict[str, bool], eq_htf: dict[str, bool], eq_macro: dict[str, bool], previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_4h: dict[str, Any] | None, imbalance_down_4h: dict[str, Any] | None, imbalance_up_1h: dict[str, Any] | None, imbalance_down_1h: dict[str, Any] | None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
-        for item in (
-            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as primary buy-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_high is not None else None),
+        candidates = (
             ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as primary structural buy-side draw", "timeframe": "4h", "scope": "macro"} if range_high_4h is not None else None),
             ({**old_resistance_shelf, "scope": "macro"} if old_resistance_shelf else None),
             ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural buy-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_high_4h is not None else None),
+            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as primary buy-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_high is not None else None),
             ({"type": "equal_highs_4h", "level": high_macro, "reason": "4h equal highs used as macro buy-side liquidity draw", "timeframe": "4h", "scope": "macro"} if eq_macro["equal_highs"] and high_macro is not None else None),
             ({**imbalance_up_4h, "scope": "macro"} if imbalance_up_4h else None),
             ({"type": "recent_high_4h", "level": high_macro, "reason": "4h swing high used as macro buy-side liquidity draw", "timeframe": "4h", "scope": "macro"} if high_macro is not None else None),
@@ -168,15 +182,16 @@ def _pick_macro_liquidity_context(*, bias: str, eq_main: dict[str, bool], eq_htf
             ({"type": "equal_highs_5m", "level": high_main, "reason": "equal highs used as visible local buy-side liquidity draw", "timeframe": "5m", "scope": "macro"} if eq_main["equal_highs"] else None),
             ({"type": "recent_high_5m", "level": high_main, "reason": "5m fallback buy-side liquidity draw", "timeframe": "5m", "scope": "macro"} if high_main is not None else None),
             ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended fallback buy-side liquidity draw", "timeframe": "1w", "scope": "macro"} if previous_week_high is not None else None),
-        ):
-            if item is not None:
+        )
+        for item in candidates:
+            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
                 return item
     if bias in {"bull_watch", "bull_confirm"}:
-        for item in (
-            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as primary sell-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_low is not None else None),
+        candidates = (
             ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as primary structural sell-side draw", "timeframe": "4h", "scope": "macro"} if range_low_4h is not None else None),
             ({**old_support_shelf, "scope": "macro"} if old_support_shelf else None),
             ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural sell-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_low_4h is not None else None),
+            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as primary sell-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_low is not None else None),
             ({"type": "equal_lows_4h", "level": low_macro, "reason": "4h equal lows used as macro sell-side liquidity draw", "timeframe": "4h", "scope": "macro"} if eq_macro["equal_lows"] and low_macro is not None else None),
             ({**imbalance_down_4h, "scope": "macro"} if imbalance_down_4h else None),
             ({"type": "recent_low_4h", "level": low_macro, "reason": "4h swing low used as macro sell-side liquidity draw", "timeframe": "4h", "scope": "macro"} if low_macro is not None else None),
@@ -188,8 +203,9 @@ def _pick_macro_liquidity_context(*, bias: str, eq_main: dict[str, bool], eq_htf
             ({"type": "equal_lows_5m", "level": low_main, "reason": "equal lows used as visible local sell-side liquidity draw", "timeframe": "5m", "scope": "macro"} if eq_main["equal_lows"] else None),
             ({"type": "recent_low_5m", "level": low_main, "reason": "5m fallback sell-side liquidity draw", "timeframe": "5m", "scope": "macro"} if low_main is not None else None),
             ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended fallback sell-side liquidity draw", "timeframe": "1w", "scope": "macro"} if previous_week_low is not None else None),
-        ):
-            if item is not None:
+        )
+        for item in candidates:
+            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
                 return item
     return {"type": "none", "level": None, "reason": "no clear macro liquidity context", "timeframe": None, "scope": "macro"}
 
@@ -501,6 +517,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     macro_liquidity_context = _pick_macro_liquidity_context(
         bias=bias,
+        price=price,
         eq_main=eq_main,
         eq_htf=eq_htf,
         eq_macro=eq_macro,
@@ -531,6 +548,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     )
     entry_liquidity_context = _pick_entry_liquidity_context(
         bias=bias,
+        price=price,
         eq=eq_main,
         today_asia_high=today_asia_high,
         today_asia_low=today_asia_low,
