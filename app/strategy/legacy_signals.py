@@ -125,20 +125,20 @@ def today_session_extremes(candles: list[dict[str, Any]], offset_hours: int, ses
     return max(c["high"] for c in selected), min(c["low"] for c in selected)
 
 
-def equal_highs_lows(candles: list[dict[str, Any]], tolerance_pct: float, lookback: int = 20) -> dict[str, bool]:
+def equal_highs_lows(candles: list[dict[str, Any]], tolerance_pct: float, lookback: int = 20, min_touches: int = 3, min_separation: int = 2) -> dict[str, bool]:
     subset = candles[-lookback:]
     hs = highs(subset)
     ls = lows(subset)
     eqh = False
     eql = False
-    if len(hs) >= 2:
+    if len(hs) >= min_touches:
         top = max(hs)
-        near = [h for h in hs if abs(h - top) / top <= tolerance_pct]
-        eqh = len(near) >= 2
-    if len(ls) >= 2:
+        near_idx = [i for i, h in enumerate(hs) if abs(h - top) / max(abs(top), 1e-9) <= tolerance_pct]
+        eqh = len(near_idx) >= min_touches and (near_idx[-1] - near_idx[0]) >= min_separation
+    if len(ls) >= min_touches:
         bot = min(ls)
-        near = [l for l in ls if abs(l - bot) / bot <= tolerance_pct]
-        eql = len(near) >= 2
+        near_idx = [i for i, l in enumerate(ls) if abs(l - bot) / max(abs(bot), 1e-9) <= tolerance_pct]
+        eql = len(near_idx) >= min_touches and (near_idx[-1] - near_idx[0]) >= min_separation
     return {"equal_highs": eqh, "equal_lows": eql}
 
 
