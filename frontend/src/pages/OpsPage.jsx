@@ -28,7 +28,7 @@ export default function OpsPage() {
   const liveRunsLoader = useCallback(() => api.liveRuns('?limit=10'), [])
 
   const { data: health, error: healthError } = usePollingQuery(healthLoader, 10000)
-  const { data: services, error: servicesError } = usePollingQuery(servicesLoader, 10000)
+  const { data: services } = usePollingQuery(servicesLoader, 10000)
   const { data: fills = [] } = usePollingQuery(fillsLoader, 10000)
   const { data: candles = [] } = usePollingQuery(candlesLoader, 10000)
   const { data: summary = [] } = usePollingQuery(summaryLoader, 30000)
@@ -73,11 +73,19 @@ export default function OpsPage() {
   const totalCandles = summary.reduce((s, r) => s + (r.candle_count || 0), 0)
 
   const latestRun = useMemo(() => (Array.isArray(liveRuns) && liveRuns.length ? liveRuns[0] : null), [liveRuns])
-  const latestStats = latestRun?.stats || {}
+  const latestRunWithStats = useMemo(() => {
+    if (!Array.isArray(liveRuns)) return null
+    return liveRuns.find((run) => run?.stats && Object.keys(run.stats || {}).length > 0) || null
+  }, [liveRuns])
+  const displayRun = latestRunWithStats || latestRun
+  const latestStats = displayRun?.stats || {}
   const pipelineMetricRows = objectToRows(latestStats.pipeline_counts)
   const plannerMetricRows = objectToRows(latestStats.planner_reason_counts)
   const dataQualityMetricRows = objectToRows(latestStats.data_quality_counts)
   const structureMetricRows = objectToRows(latestStats.structure_counts)
+  const hasAnyMetrics = Boolean(
+    pipelineMetricRows.length || plannerMetricRows.length || dataQualityMetricRows.length || structureMetricRows.length,
+  )
 
   return (
     <div className="page-stack">
@@ -89,15 +97,16 @@ export default function OpsPage() {
         <StatCard label="Symbols tracked" value={symbols || '—'} hint={`${totalCandles.toLocaleString()} candles total`} />
       </div>
       <div className="stats-grid">
-        <StatCard label="Last pipeline run" value={latestRun ? fmtDate(latestRun.started_at) : '—'} hint={latestRun?.run_id || ''} />
-        <StatCard label="Scanned" value={latestStats.symbols_scanned ?? latestRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? latestRun?.symbols_total ?? '—'}`} />
+        <StatCard label="Last pipeline run" value={displayRun ? fmtDate(displayRun.started_at) : '—'} hint={displayRun?.run_id || ''} />
+        <StatCard label="Scanned" value={latestStats.symbols_scanned ?? displayRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? displayRun?.symbols_total ?? '—'}`} />
         <StatCard label="Candidates" value={latestStats.candidates_created ?? '—'} hint={`Workers: ${latestStats.collect_workers ?? '—'}`} />
         <StatCard label="Candles written" value={latestStats.candles_written ?? '—'} />
       </div>
       <section className="panel">
         <h2>Pipeline audit metrics</h2>
-        {!latestRun ? <div>No live run data yet.</div> : null}
-        {latestRun ? (
+        {!displayRun ? <div>No live run data yet.</div> : null}
+        {displayRun && !hasAnyMetrics ? <div>Latest runs found, but no saved stats yet. Run the pipeline once after backend restart.</div> : null}
+        {displayRun && hasAnyMetrics ? (
           <div className="two-col">
             <div>
               <h3>Pipeline counts</h3>
