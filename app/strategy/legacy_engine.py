@@ -114,6 +114,85 @@ def _find_old_shelf(candles: list[dict[str, Any]], *, direction: str, current_pr
     }
 
 
+def _distance_pct(price: float, level: float | None) -> float | None:
+    if price <= 0 or level is None:
+        return None
+    return abs(level - price) / price
+
+
+def _infer_htf_watch_bias(*, price: float, rsi_htf: float | None, rsi_macro: float | None, range_high_4h: float | None, range_low_4h: float | None, old_resistance_shelf: dict[str, Any] | None, old_support_shelf: dict[str, Any] | None, near_macro_high: bool, near_macro_low: bool) -> tuple[str, dict[str, int]]:
+    bull_score = 0
+    bear_score = 0
+
+    if range_high_4h is not None and range_low_4h is not None and range_high_4h > range_low_4h:
+        range_span = range_high_4h - range_low_4h
+        if range_span > 0:
+            range_position = (price - range_low_4h) / range_span
+            if range_position <= 0.45:
+                bull_score += 3
+            elif range_position >= 0.55:
+                bear_score += 3
+
+    support_level = old_support_shelf.get("level") if old_support_shelf else None
+    resistance_level = old_resistance_shelf.get("level") if old_resistance_shelf else None
+    support_distance = _distance_pct(price, support_level)
+    resistance_distance = _distance_pct(price, resistance_level)
+    if support_distance is not None and resistance_distance is not None:
+        if support_distance < resistance_distance:
+            bull_score += 1
+        elif resistance_distance < support_distance:
+            bear_score += 1
+    elif support_distance is not None:
+        bull_score += 1
+    elif resistance_distance is not None:
+        bear_score += 1
+
+    if rsi_htf is not None and rsi_macro is not None:
+        if rsi_htf >= 50 and rsi_macro >= 45:
+            bull_score += 1
+        if rsi_htf <= 50 and rsi_macro <= 55:
+            bear_score += 1
+
+    if near_macro_low:
+        bull_score += 1
+    if near_macro_high:
+        bear_score += 1
+
+    if bull_score > bear_score:
+        return "bull", {"bull": bull_score, "bear": bear_score}
+    if bear_score > bull_score:
+        return "bear", {"bull": bull_score, "bear": bear_score}
+    return "neutral", {"bull": bull_score, "bear": bear_score}
+
+
+def _resolve_watch_direction(*, spring_watch: bool, utad_watch: bool, htf_watch_bias: str, sweep_up: bool, sweep_down: bool, near_macro_high: bool, near_macro_low: bool, near_htf_high: bool, near_htf_low: bool, rsi_htf: float | None) -> tuple[str, str]:
+    local_bear_strong = bool(utad_watch and sweep_up and (near_macro_high or near_htf_high) and rsi_htf is not None and rsi_htf < 50)
+    local_bull_strong = bool(spring_watch and sweep_down and (near_macro_low or near_htf_low) and rsi_htf is not None and rsi_htf > 50)
+
+    if spring_watch and not utad_watch:
+        if htf_watch_bias == "bear" and not local_bull_strong:
+            return "utad_watch", "bear_watch"
+        return "spring_watch", "bull_watch"
+
+    if utad_watch and not spring_watch:
+        if htf_watch_bias == "bull" and not local_bear_strong:
+            return "spring_watch", "bull_watch"
+        return "utad_watch", "bear_watch"
+
+    if spring_watch and utad_watch:
+        if htf_watch_bias == "bull":
+            return "spring_watch", "bull_watch"
+        if htf_watch_bias == "bear":
+            return "utad_watch", "bear_watch"
+        if local_bull_strong and not local_bear_strong:
+            return "spring_watch", "bull_watch"
+        if local_bear_strong and not local_bull_strong:
+            return "utad_watch", "bear_watch"
+        return "spring_watch", "bull_watch"
+
+    return "neutral", "neutral"
+
+
 def _level_is_relevant(*, bias: str, price: float, level: float | None, tolerance_pct: float = 0.003) -> bool:
     if level is None:
         return False
@@ -409,6 +488,18 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     near_macro_high = near_level(price, high_macro, near_extreme_pct * 4) if high_macro else False
     near_macro_low = near_level(price, low_macro, near_extreme_pct * 4) if low_macro else False
 
+    htf_watch_bias, htf_watch_scores = _infer_htf_watch_bias(
+        price=price,
+        rsi_htf=rsi_htf,
+        rsi_macro=rsi_macro,
+        range_high_4h=range_high_4h,
+        range_low_4h=range_low_4h,
+        old_resistance_shelf=old_resistance_shelf,
+        old_support_shelf=old_support_shelf,
+        near_macro_high=near_macro_high,
+        near_macro_low=near_macro_low,
+    )
+
     state = "neutral"
     trigger = "wait"
     bias = "neutral"
@@ -461,8 +552,18 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     zone_quality = "weak"
     if utad_watch or spring_watch:
-        state = "utad_watch" if utad_watch else "spring_watch"
-        bias = "bear_watch" if utad_watch else "bull_watch"
+        state, bias = _resolve_watch_direction(
+            spring_watch=spring_watch,
+            utad_watch=utad_watch,
+            htf_watch_bias=htf_watch_bias,
+            sweep_up=sweep_up,
+            sweep_down=sweep_down,
+            near_macro_high=near_macro_high,
+            near_macro_low=near_macro_low,
+            near_htf_high=near_htf_high,
+            near_htf_low=near_htf_low,
+            rsi_htf=rsi_htf,
+        )
         pipeline["zone"] = True
         if bos_bull or bos_bear:
             zone_quality = "strong"
@@ -686,6 +787,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "major_swing_low_4h": major_swing_low_4h,
         "old_resistance_shelf": old_resistance_shelf,
         "old_support_shelf": old_support_shelf,
+        "htf_watch_bias": htf_watch_bias,
+        "htf_watch_scores": htf_watch_scores,
         "mss_bull": mss_bull,
         "mss_bear": mss_bear,
         "bos_bull": bos_bull,
