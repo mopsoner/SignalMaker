@@ -193,6 +193,26 @@ def _resolve_watch_direction(*, spring_watch: bool, utad_watch: bool, htf_watch_
     return "neutral", "neutral"
 
 
+def _resolve_display_state(*, bias: str, rsi_main: float | None, overbought: float, oversold: float, near_recent_high: bool, near_recent_low: bool, near_htf_high: bool, near_htf_low: bool, near_macro_high: bool, near_macro_low: bool, eq_main: dict[str, bool], eq_htf: dict[str, bool], eq_macro: dict[str, bool], sweep_up: bool, sweep_down: bool) -> str:
+    true_spring = bool(
+        (rsi_main is not None and rsi_main <= oversold and (near_recent_low or near_htf_low or near_macro_low or eq_main["equal_lows"] or eq_htf["equal_lows"] or eq_macro["equal_lows"]))
+        or sweep_down
+    )
+    true_utad = bool(
+        (rsi_main is not None and rsi_main >= overbought and (near_recent_high or near_htf_high or near_macro_high or eq_main["equal_highs"] or eq_htf["equal_highs"] or eq_macro["equal_highs"]))
+        or sweep_up
+    )
+    if true_spring:
+        return "spring_watch"
+    if true_utad:
+        return "utad_watch"
+    if bias == "bull_watch":
+        return "reclaim_watch"
+    if bias == "bear_watch":
+        return "rejection_watch"
+    return "neutral_watch"
+
+
 def _level_is_relevant(*, bias: str, price: float, level: float | None, tolerance_pct: float = 0.003) -> bool:
     if level is None:
         return False
@@ -321,11 +341,16 @@ def _pick_execution_target(*, bias: str, price: float, previous_day_high: float 
     return {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
 
 
-def _projected_target(bias: str, macro_context: dict[str, Any], execution_target: dict[str, Any]) -> dict[str, Any]:
+def _projected_target(bias: str, price: float, macro_context: dict[str, Any], execution_target: dict[str, Any]) -> dict[str, Any]:
     if execution_target.get("level") is not None:
         return {**execution_target, "projected": False}
-    if bias in {"bull_watch", "bear_watch"} and macro_context.get("level") is not None:
-        return {"type": f"projected_{macro_context.get('type')}", "level": macro_context.get("level"), "reason": "macro context projected as expected destination before confirmation", "timeframe": macro_context.get("timeframe"), "projected": True}
+    level = macro_context.get("level")
+    if level is None:
+        return {"type": "none", "level": None, "reason": "no projected target", "timeframe": None, "projected": False}
+    if bias == "bull_watch" and level > price:
+        return {"type": f"projected_{macro_context.get('type')}", "level": level, "reason": "macro context projected as expected destination before confirmation", "timeframe": macro_context.get("timeframe"), "projected": True}
+    if bias == "bear_watch" and level < price:
+        return {"type": f"projected_{macro_context.get('type')}", "level": level, "reason": "macro context projected as expected destination before confirmation", "timeframe": macro_context.get("timeframe"), "projected": True}
     return {"type": "none", "level": None, "reason": "no projected target", "timeframe": None, "projected": False}
 
 
@@ -500,7 +525,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         near_macro_low=near_macro_low,
     )
 
-    state = "neutral"
+    state = "neutral_watch"
     trigger = "wait"
     bias = "neutral"
     tp_zone = False
@@ -552,7 +577,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     zone_quality = "weak"
     if utad_watch or spring_watch:
-        state, bias = _resolve_watch_direction(
+        _raw_state, bias = _resolve_watch_direction(
             spring_watch=spring_watch,
             utad_watch=utad_watch,
             htf_watch_bias=htf_watch_bias,
@@ -563,6 +588,23 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
             near_htf_high=near_htf_high,
             near_htf_low=near_htf_low,
             rsi_htf=rsi_htf,
+        )
+        state = _resolve_display_state(
+            bias=bias,
+            rsi_main=rsi_main,
+            overbought=cfg["signals"]["overbought"],
+            oversold=cfg["signals"]["oversold"],
+            near_recent_high=near_recent_high,
+            near_recent_low=near_recent_low,
+            near_htf_high=near_htf_high,
+            near_htf_low=near_htf_low,
+            near_macro_high=near_macro_high,
+            near_macro_low=near_macro_low,
+            eq_main=eq_main,
+            eq_htf=eq_htf,
+            eq_macro=eq_macro,
+            sweep_up=sweep_up,
+            sweep_down=sweep_down,
         )
         pipeline["zone"] = True
         if bos_bull or bos_bear:
@@ -740,7 +782,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         trade = {"status": "simulated", "side": "long", "entry": price, "stop": structural_stop, "target": trade_target or high_macro or high_htf or high_main, "stop_source": stop_source}; pipeline["trade"] = True
 
     score_breakdown["target_quality"] = _score_target_quality(trade)
-    projected_target = _projected_target(bias, macro_liquidity_context, execution_target)
+    projected_target = _projected_target(bias, price, macro_liquidity_context, execution_target)
     score = sum(score_breakdown.values())
 
     return {
