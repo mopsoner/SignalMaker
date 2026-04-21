@@ -28,11 +28,29 @@ class PipelineService:
     def _bundle_limits(self) -> dict[str, int]:
         runtime = self.collector.runtime["binance"]
         return {
-            "1m": int(runtime["binance_lookback_1m"]),
             "5m": int(runtime["binance_lookback_5m"]),
             "1h": int(runtime["binance_lookback_1h"]),
             "4h": int(runtime["binance_lookback_4h"]),
         }
+
+    def _collect_interval_parallel(self, symbols: list[str], interval: str, latest_close_times: dict[str, dict[str, int]], worker_count: int) -> tuple[dict[str, list[dict]], list[dict]]:
+        fetched: dict[str, list[dict]] = {}
+        errors: list[dict] = []
+
+        def _collect(symbol: str):
+            latest_close_time = latest_close_times.get(symbol.upper(), {}).get(interval)
+            return symbol, self.collector.collect_interval(symbol, interval, latest_close_time)
+
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = {pool.submit(_collect, symbol): symbol for symbol in symbols}
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    fetched_symbol, rows = future.result()
+                    fetched[fetched_symbol] = rows
+                except Exception as exc:
+                    errors.append({"symbol": symbol, "phase": f"collect_{interval}", "error": str(exc)})
+        return fetched, errors
 
     def run_once(self, limit: int | None = None) -> dict:
         symbols = self.collector.discover_symbols(limit=limit)
@@ -43,7 +61,7 @@ class PipelineService:
         candidates = 0
         candles_written = 0
         errors: list[dict] = []
-        collected_symbols: list[str] = []
+        collected_symbols: set[str] = set()
         latest_close_times = self.market_data.get_latest_close_times(symbols)
 
         pipeline_counts = Counter()
@@ -56,48 +74,64 @@ class PipelineService:
         session_counts = Counter()
         data_quality_counts = Counter()
         structure_counts = Counter()
+        interval_write_counts = Counter()
 
         max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
-        fetched_bundles: dict[str, dict[str, list[dict]]] = {}
 
-        def _collect(symbol: str):
-            return symbol, self.collector.collect_symbol_bundle(symbol, latest_close_times.get(symbol.upper(), {}))
-
-        with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            futures = {pool.submit(_collect, symbol): symbol for symbol in symbols}
-            for future in as_completed(futures):
-                symbol = futures[future]
-                try:
-                    fetched_symbol, bundle = future.result()
-                    fetched_bundles[fetched_symbol] = bundle
-                except Exception as exc:
-                    errors.append({"symbol": symbol, "phase": "collect", "error": str(exc)})
-
+        # Phase 1: collect/store 5m first for all assets.
+        fetched_5m, collect_errors = self._collect_interval_parallel(symbols, "5m", latest_close_times, worker_count)
+        errors.extend(collect_errors)
         for symbol in symbols:
-            bundle = fetched_bundles.get(symbol)
-            if not bundle:
+            rows = fetched_5m.get(symbol)
+            if rows is None:
                 continue
             try:
-                wrote_any = False
-                for interval, rows in bundle.items():
+                if rows:
+                    candles_written += self.market_data.upsert_candles(symbol, "5m", rows)
+                    interval_write_counts["5m"] += len(rows)
+                    collected_symbols.add(symbol)
+            except Exception as exc:
+                errors.append({"symbol": symbol, "phase": "store_5m", "error": str(exc)})
+
+        # Phase 2: collect/store HTF only when due.
+        for interval in ("1h", "4h"):
+            fetched_htf, collect_errors = self._collect_interval_parallel(symbols, interval, latest_close_times, worker_count)
+            errors.extend(collect_errors)
+            for symbol in symbols:
+                rows = fetched_htf.get(symbol)
+                if rows is None:
+                    continue
+                try:
                     if rows:
                         candles_written += self.market_data.upsert_candles(symbol, interval, rows)
-                        wrote_any = True
-                if wrote_any:
-                    collected_symbols.append(symbol)
-            except Exception as exc:
-                errors.append({"symbol": symbol, "phase": "store", "error": str(exc)})
+                        interval_write_counts[interval] += len(rows)
+                        collected_symbols.add(symbol)
+                except Exception as exc:
+                    errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
         limits = self._bundle_limits()
-        for symbol in collected_symbols:
+        analyzed_symbols = sorted(collected_symbols)
+        for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
-                if not all(candles.get(tf) for tf in ("1m", "5m", "1h", "4h")):
-                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing timeframe candles"})
-                    data_quality_counts["missing_timeframe_bundle"] += 1
+                quality_5m = self.market_data.validate_candle_series("5m", candles.get("5m", []), min_count=30)
+                if not quality_5m["valid"]:
+                    errors.append({"symbol": symbol, "phase": "analyze", "error": "invalid_5m_quality", "issues": quality_5m["issues"]})
+                    for issue in quality_5m["issues"]:
+                        data_quality_counts[issue] += 1
                     continue
+                if not candles.get("1h"):
+                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing_1h_candles"})
+                    data_quality_counts["missing_1h_bundle"] += 1
+                    continue
+                if not candles.get("4h"):
+                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing_4h_candles"})
+                    data_quality_counts["missing_4h_bundle"] += 1
+                    continue
+
                 signal = self.engine.compute_signal(symbol, candles)
+                signal["candle_quality_5m"] = quality_5m
                 assessment = self.planner.assess_signal(signal)
                 signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
                 signal['planner_candidate_reason'] = assessment['reason']
@@ -173,6 +207,7 @@ class PipelineService:
             "session_counts": dict(session_counts),
             "structure_counts": dict(structure_counts),
             "data_quality_counts": dict(data_quality_counts),
+            "interval_write_counts": dict(interval_write_counts),
         }
         self.live_runs.complete_run(run_id, symbols_scanned=scanned, stats=stats)
         return {
@@ -187,4 +222,5 @@ class PipelineService:
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
             "data_quality_counts": dict(data_quality_counts),
+            "interval_write_counts": dict(interval_write_counts),
         }
