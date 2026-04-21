@@ -19,6 +19,8 @@ INTERVAL_MS = {
     "1h": 3_600_000,
     "4h": 14_400_000,
 }
+PIPELINE_INTERVALS = ("5m", "1h", "4h")
+DUE_BASED_INTERVALS = {"1h", "4h"}
 
 
 class RateLimiter:
@@ -103,6 +105,7 @@ class CollectorService:
             'status': 'ready',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'base_url': self.base_url,
+            'pipeline_intervals': list(PIPELINE_INTERVALS),
         }
 
     def discover_symbols(self, limit: int | None = None) -> list[str]:
@@ -123,10 +126,13 @@ class CollectorService:
         return out[: (limit or max_symbols)]
 
     def fetch_klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
         params: dict[str, Any] = {'symbol': symbol, 'interval': interval, 'limit': limit}
         if start_time is not None:
             params['startTime'] = start_time
         raw = self._get('/api/v3/klines', params)
+        now_ms = int(time.time() * 1000)
         return [
             {
                 'open_time': int(r[0]),
@@ -138,6 +144,7 @@ class CollectorService:
                 'close_time': int(r[6]),
             }
             for r in raw
+            if int(r[6]) <= now_ms
         ]
 
     def _full_lookback(self, interval: str) -> int:
@@ -146,8 +153,18 @@ class CollectorService:
     def _incremental_min(self, interval: str) -> int:
         return int(self.runtime['binance'].get(f'binance_incremental_min_{interval}', 2))
 
+    def _interval_due(self, interval: str, latest_close_time: int | None) -> bool:
+        if interval not in DUE_BASED_INTERVALS:
+            return True
+        if latest_close_time is None:
+            return True
+        now_ms = int(time.time() * 1000)
+        return now_ms >= int(latest_close_time) + INTERVAL_MS[interval]
+
     def _compute_incremental_limit(self, interval: str, latest_close_time: int | None) -> tuple[int, int | None]:
         full_limit = self._full_lookback(interval)
+        if interval in DUE_BASED_INTERVALS and not self._interval_due(interval, latest_close_time):
+            return 0, None
         if not self.runtime['binance'].get('binance_incremental_fetch_enabled', True) or latest_close_time is None:
             return full_limit, None
         interval_ms = INTERVAL_MS[interval]
@@ -156,10 +173,13 @@ class CollectorService:
         limit = min(full_limit, max(self._incremental_min(interval), missed_bars + 2))
         return int(limit), int(latest_close_time) + 1
 
+    def collect_interval(self, symbol: str, interval: str, latest_close_time: int | None = None) -> list[dict[str, Any]]:
+        limit, start_time = self._compute_incremental_limit(interval, latest_close_time)
+        return self.fetch_klines(symbol, interval, limit, start_time=start_time)
+
     def collect_symbol_bundle(self, symbol: str, latest_close_times: dict[str, int] | None = None) -> dict[str, list[dict[str, Any]]]:
         latest_close_times = latest_close_times or {}
         bundle: dict[str, list[dict[str, Any]]] = {}
-        for interval in ('1m', '5m', '1h', '4h'):
-            limit, start_time = self._compute_incremental_limit(interval, latest_close_times.get(interval))
-            bundle[interval] = self.fetch_klines(symbol, interval, limit, start_time=start_time)
+        for interval in PIPELINE_INTERVALS:
+            bundle[interval] = self.collect_interval(symbol, interval, latest_close_times.get(interval))
         return bundle
