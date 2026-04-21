@@ -15,6 +15,21 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
         }
 
+    def _watch_reason(self, signal: dict, trade: dict) -> str:
+        bias = signal.get('bias')
+        state = signal.get('state') or 'watch'
+        execution_target = (signal.get('execution_target') or {}).get('level')
+        entry_context = signal.get('entry_liquidity_context') or {}
+        if trade.get('entry') is None:
+            if not signal.get('pipeline', {}).get('confirm'):
+                return f"watch_not_confirmed:{state}"
+            if execution_target is None:
+                return "watch_missing_target_projection"
+            if entry_context.get('level') is None:
+                return "watch_missing_entry_context"
+            return f"watch_missing_entry:{bias or state}"
+        return 'watch_unresolved'
+
     def assess_signal(self, signal: dict) -> dict:
         runtime = load_runtime_settings()
         strategy = runtime['strategy']
@@ -25,10 +40,10 @@ class PlannerService:
         target = trade.get('target')
         score = float(signal.get('score', 0.0))
 
-        if not side:
-            return {'accepted': False, 'reason': 'missing_side', 'candidate': None}
+        if not side or side == 'none':
+            return {'accepted': False, 'reason': self._watch_reason(signal, trade), 'candidate': None}
         if entry is None:
-            return {'accepted': False, 'reason': 'missing_entry', 'candidate': None}
+            return {'accepted': False, 'reason': self._watch_reason(signal, trade), 'candidate': None}
         if stop is None:
             return {'accepted': False, 'reason': 'missing_stop', 'candidate': None}
         if target is None:
