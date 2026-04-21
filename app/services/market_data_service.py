@@ -6,6 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
 
+INTERVAL_MS = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+}
+
 
 class MarketDataService:
     def __init__(self, db: Session) -> None:
@@ -107,6 +114,45 @@ class MarketDataService:
                 for row in rows
             ]
         return payload
+
+    def validate_candle_series(self, interval: str, candles: list[dict[str, Any]], *, min_count: int = 1) -> dict[str, Any]:
+        expected_step = INTERVAL_MS[interval]
+        issues: list[str] = []
+        if len(candles) < min_count:
+            issues.append(f"insufficient_count:{len(candles)}<{min_count}")
+        duplicate_count = 0
+        gap_count = 0
+        ohlc_error_count = 0
+        previous_open_time: int | None = None
+        seen_open_times: set[int] = set()
+        for candle in candles:
+            open_time = int(candle["open_time"])
+            if open_time in seen_open_times:
+                duplicate_count += 1
+            seen_open_times.add(open_time)
+            if previous_open_time is not None and open_time - previous_open_time != expected_step:
+                gap_count += 1
+            previous_open_time = open_time
+            open_price = float(candle["open"])
+            high_price = float(candle["high"])
+            low_price = float(candle["low"])
+            close_price = float(candle["close"])
+            if not (high_price >= max(open_price, close_price, low_price) and low_price <= min(open_price, close_price, high_price)):
+                ohlc_error_count += 1
+        if duplicate_count:
+            issues.append(f"duplicate_open_times:{duplicate_count}")
+        if gap_count:
+            issues.append(f"time_gaps:{gap_count}")
+        if ohlc_error_count:
+            issues.append(f"ohlc_inconsistencies:{ohlc_error_count}")
+        return {
+            "valid": len(issues) == 0,
+            "issues": issues,
+            "duplicate_count": duplicate_count,
+            "gap_count": gap_count,
+            "ohlc_error_count": ohlc_error_count,
+            "count": len(candles),
+        }
 
     def upsert_candles(self, symbol: str, interval: str, candles: list[dict]) -> int:
         count = 0
