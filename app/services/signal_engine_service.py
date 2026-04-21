@@ -11,10 +11,12 @@ class SignalEngineService:
             'status': 'ready',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'strategy': 'legacy_wyckoff_v231',
+            'primary_interval': '5m',
         }
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
         cfg = get_runtime_signal_config()
-        signal = build_signal(symbol, candles['1m'], candles['5m'], candles['1h'], candles['4h'], cfg)
+        candles_main = candles['5m']
+        signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)
         signal['engine_name'] = 'legacy_wyckoff_v231'
         return signal
