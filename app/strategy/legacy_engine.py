@@ -59,6 +59,27 @@ def _recent_pivot_level(candles: list[dict[str, Any]], *, direction: str, lookba
     return min(float(c["low"]) for c in window)
 
 
+def _latest_local_pivot(candles: list[dict[str, Any]], *, direction: str, left: int = 2, right: int = 2) -> float | None:
+    if len(candles) < left + right + 1:
+        return None
+    source = candles[:-right] if right > 0 else candles
+    for idx in range(len(source) - right - 1, left - 1, -1):
+        center = source[idx]
+        left_slice = source[idx - left:idx]
+        right_slice = candles[idx + 1: idx + 1 + right]
+        if len(left_slice) < left or len(right_slice) < right:
+            continue
+        if direction == "up":
+            level = float(center["high"])
+            if all(level > float(c["high"]) for c in left_slice + right_slice):
+                return level
+        else:
+            level = float(center["low"])
+            if all(level < float(c["low"]) for c in left_slice + right_slice):
+                return level
+    return None
+
+
 def _range_bounds(candles: list[dict[str, Any]], lookback: int = 24) -> tuple[float | None, float | None]:
     if not candles:
         return None, None
@@ -120,18 +141,28 @@ def _distance_pct(price: float, level: float | None) -> float | None:
     return abs(level - price) / price
 
 
-def _infer_htf_watch_bias(*, price: float, rsi_htf: float | None, rsi_macro: float | None, range_high_4h: float | None, range_low_4h: float | None, old_resistance_shelf: dict[str, Any] | None, old_support_shelf: dict[str, Any] | None, near_macro_high: bool, near_macro_low: bool) -> tuple[str, dict[str, int]]:
+def _infer_htf_watch_bias(*, price: float, rsi_htf: float | None, rsi_macro: float | None, range_high_4h: float | None, range_low_4h: float | None, range_high_1h: float | None, range_low_1h: float | None, old_resistance_shelf: dict[str, Any] | None, old_support_shelf: dict[str, Any] | None, near_macro_high: bool, near_macro_low: bool) -> tuple[str, dict[str, int]]:
     bull_score = 0
     bear_score = 0
 
     if range_high_4h is not None and range_low_4h is not None and range_high_4h > range_low_4h:
         range_span = range_high_4h - range_low_4h
-        if range_span > 0:
-            range_position = (price - range_low_4h) / range_span
-            if range_position <= 0.45:
-                bull_score += 3
-            elif range_position >= 0.55:
-                bear_score += 3
+        range_position = (price - range_low_4h) / range_span
+        if range_position <= 0.35:
+            bull_score += 3
+        elif range_position >= 0.70:
+            bear_score += 3
+        elif range_position >= 0.55:
+            bear_score += 1
+    if range_high_1h is not None and range_low_1h is not None and range_high_1h > range_low_1h:
+        range_span = range_high_1h - range_low_1h
+        range_position = (price - range_low_1h) / range_span
+        if range_position <= 0.35:
+            bull_score += 2
+        elif range_position >= 0.70:
+            bear_score += 2
+        elif range_position >= 0.55:
+            bear_score += 1
 
     support_level = old_support_shelf.get("level") if old_support_shelf else None
     resistance_level = old_resistance_shelf.get("level") if old_resistance_shelf else None
@@ -147,10 +178,23 @@ def _infer_htf_watch_bias(*, price: float, rsi_htf: float | None, rsi_macro: flo
     elif resistance_distance is not None:
         bear_score += 1
 
-    if rsi_htf is not None and rsi_macro is not None:
-        if rsi_htf >= 50 and rsi_macro >= 45:
+    if rsi_htf is not None:
+        if rsi_htf >= 55:
+            bull_score += 2
+        elif rsi_htf >= 50:
             bull_score += 1
-        if rsi_htf <= 50 and rsi_macro <= 55:
+        elif rsi_htf <= 45:
+            bear_score += 2
+        elif rsi_htf < 50:
+            bear_score += 1
+    if rsi_macro is not None:
+        if rsi_macro >= 55:
+            bull_score += 2
+        elif rsi_macro >= 50:
+            bull_score += 1
+        elif rsi_macro <= 45:
+            bear_score += 2
+        elif rsi_macro < 50:
             bear_score += 1
 
     if near_macro_low:
@@ -158,9 +202,9 @@ def _infer_htf_watch_bias(*, price: float, rsi_htf: float | None, rsi_macro: flo
     if near_macro_high:
         bear_score += 1
 
-    if bull_score > bear_score:
+    if bull_score >= bear_score + 2:
         return "bull", {"bull": bull_score, "bear": bear_score}
-    if bear_score > bull_score:
+    if bear_score >= bull_score + 2:
         return "bear", {"bull": bull_score, "bear": bear_score}
     return "neutral", {"bull": bull_score, "bear": bear_score}
 
@@ -171,45 +215,45 @@ def _resolve_watch_direction(*, spring_watch: bool, utad_watch: bool, htf_watch_
 
     if spring_watch and not utad_watch:
         if htf_watch_bias == "bear" and not local_bull_strong:
-            return "utad_watch", "bear_watch"
-        return "spring_watch", "bull_watch"
+            return "resistance_retest_watch", "bear_watch"
+        return "support_retest_watch", "bull_watch"
 
     if utad_watch and not spring_watch:
         if htf_watch_bias == "bull" and not local_bear_strong:
-            return "spring_watch", "bull_watch"
-        return "utad_watch", "bear_watch"
+            return "support_retest_watch", "bull_watch"
+        return "resistance_retest_watch", "bear_watch"
 
     if spring_watch and utad_watch:
         if htf_watch_bias == "bull":
-            return "spring_watch", "bull_watch"
+            return "post_breakout_pullback_watch", "bull_watch"
         if htf_watch_bias == "bear":
-            return "utad_watch", "bear_watch"
+            return "resistance_retest_watch", "bear_watch"
         if local_bull_strong and not local_bear_strong:
-            return "spring_watch", "bull_watch"
+            return "spring_watch_micro", "bull_watch"
         if local_bear_strong and not local_bull_strong:
-            return "utad_watch", "bear_watch"
-        return "spring_watch", "bull_watch"
+            return "utad_watch_micro", "bear_watch"
+        return "support_retest_watch", "bull_watch"
 
-    return "neutral", "neutral"
+    return "neutral_watch", "neutral"
 
 
-def _resolve_display_state(*, bias: str, rsi_main: float | None, overbought: float, oversold: float, near_recent_high: bool, near_recent_low: bool, near_htf_high: bool, near_htf_low: bool, near_macro_high: bool, near_macro_low: bool, eq_main: dict[str, bool], eq_htf: dict[str, bool], eq_macro: dict[str, bool], sweep_up: bool, sweep_down: bool) -> str:
-    true_spring = bool(
-        (rsi_main is not None and rsi_main <= oversold and (near_recent_low or near_htf_low or near_macro_low or eq_main["equal_lows"] or eq_htf["equal_lows"] or eq_macro["equal_lows"]))
-        or sweep_down
-    )
-    true_utad = bool(
-        (rsi_main is not None and rsi_main >= overbought and (near_recent_high or near_htf_high or near_macro_high or eq_main["equal_highs"] or eq_htf["equal_highs"] or eq_macro["equal_highs"]))
-        or sweep_up
-    )
-    if true_spring:
-        return "spring_watch"
-    if true_utad:
-        return "utad_watch"
-    if bias == "bull_watch":
-        return "reclaim_watch"
-    if bias == "bear_watch":
+def _resolve_display_state(*, bias: str, spring_watch: bool, utad_watch: bool, near_recent_high: bool, near_recent_low: bool, near_htf_high: bool, near_htf_low: bool, sweep_up: bool, sweep_down: bool, htf_watch_bias: str) -> str:
+    if spring_watch:
+        if sweep_down and htf_watch_bias == "bull":
+            return "spring_watch_micro"
+        if near_htf_low or near_recent_low:
+            return "support_retest_watch"
+        return "post_breakout_pullback_watch"
+    if utad_watch:
+        if sweep_up and htf_watch_bias == "bear":
+            return "utad_watch_micro"
+        if near_htf_high or near_recent_high:
+            return "resistance_retest_watch"
         return "rejection_watch"
+    if bias == "bull_watch":
+        return "post_breakout_pullback_watch"
+    if bias == "bear_watch":
+        return "resistance_retest_watch"
     return "neutral_watch"
 
 
@@ -228,37 +272,37 @@ def _level_is_relevant(*, bias: str, price: float, level: float | None, toleranc
 def _pick_entry_liquidity_context(*, bias: str, price: float, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None, previous_day_high: float | None = None, previous_day_low: float | None = None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         candidates = (
-            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as primary sell entry context", "timeframe": "1d", "scope": "entry"} if previous_day_high is not None else None),
-            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as secondary sell entry context", "timeframe": "4h", "scope": "entry"} if range_high_4h is not None else None),
+            ({"type": "recent_high_1h", "level": high_htf, "reason": "nearest 1h resistance used as primary sell entry context", "timeframe": "1h", "scope": "entry"} if high_htf is not None else None),
             ({**old_resistance_shelf, "scope": "entry"} if old_resistance_shelf else None),
-            ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural sell entry context", "timeframe": "4h", "scope": "entry"} if major_swing_high_4h is not None else None),
-            ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as secondary sell entry context", "timeframe": "4h", "scope": "entry"} if high_macro is not None else None),
-            ({"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as tertiary sell entry context", "timeframe": "1h", "scope": "entry"} if high_htf is not None else None),
+            ({"type": "recent_high_5m", "level": high_main, "reason": "nearest 5m resistance used as local sell entry context", "timeframe": "5m", "scope": "entry"} if high_main is not None else None),
             ({"type": "equal_highs_5m", "level": high_main, "reason": "visible buy-side liquidity above equal highs", "timeframe": "5m", "scope": "entry"} if eq["equal_highs"] else None),
             ({**imbalance_up_5m, "scope": "entry"} if imbalance_up_5m else None),
-            ({"type": "recent_high_5m", "level": high_main, "reason": "recent visible 5m high liquidity", "timeframe": "5m", "scope": "entry"} if high_main is not None else None),
-            ({"type": "today_london_high", "level": today_london_high, "reason": "today london high kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_london_high is not None else None),
-            ({"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_asia_high is not None else None),
+            ({"type": "today_london_high", "level": today_london_high, "reason": "today london high used as session sell entry context", "timeframe": "session", "scope": "entry"} if today_london_high is not None else None),
+            ({"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high used as session sell entry context", "timeframe": "session", "scope": "entry"} if today_asia_high is not None else None),
+            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as extended sell entry context", "timeframe": "1d", "scope": "entry"} if previous_day_high is not None else None),
+            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as fallback sell entry context", "timeframe": "4h", "scope": "entry"} if range_high_4h is not None else None),
+            ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as extended structural sell entry context", "timeframe": "4h", "scope": "entry"} if major_swing_high_4h is not None else None),
+            ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as final sell entry context fallback", "timeframe": "4h", "scope": "entry"} if high_macro is not None else None),
         )
         for item in candidates:
-            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
+            if item is not None and item.get('level') is not None and item['level'] >= price * 0.97:
                 return item
     if bias in {"bull_watch", "bull_confirm"}:
         candidates = (
-            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as primary buy entry context", "timeframe": "1d", "scope": "entry"} if previous_day_low is not None else None),
-            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as secondary buy entry context", "timeframe": "4h", "scope": "entry"} if range_low_4h is not None else None),
+            ({"type": "recent_low_1h", "level": low_htf, "reason": "nearest 1h support used as primary buy entry context", "timeframe": "1h", "scope": "entry"} if low_htf is not None else None),
             ({**old_support_shelf, "scope": "entry"} if old_support_shelf else None),
-            ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural buy entry context", "timeframe": "4h", "scope": "entry"} if major_swing_low_4h is not None else None),
-            ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as secondary buy entry context", "timeframe": "4h", "scope": "entry"} if low_macro is not None else None),
-            ({"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as tertiary buy entry context", "timeframe": "1h", "scope": "entry"} if low_htf is not None else None),
+            ({"type": "recent_low_5m", "level": low_main, "reason": "nearest 5m support used as local buy entry context", "timeframe": "5m", "scope": "entry"} if low_main is not None else None),
             ({"type": "equal_lows_5m", "level": low_main, "reason": "visible sell-side liquidity below equal lows", "timeframe": "5m", "scope": "entry"} if eq["equal_lows"] else None),
             ({**imbalance_down_5m, "scope": "entry"} if imbalance_down_5m else None),
-            ({"type": "recent_low_5m", "level": low_main, "reason": "recent visible 5m low liquidity", "timeframe": "5m", "scope": "entry"} if low_main is not None else None),
-            ({"type": "today_london_low", "level": today_london_low, "reason": "today london low kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_london_low is not None else None),
-            ({"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low kept as timing context fallback", "timeframe": "session", "scope": "entry"} if today_asia_low is not None else None),
+            ({"type": "today_london_low", "level": today_london_low, "reason": "today london low used as session buy entry context", "timeframe": "session", "scope": "entry"} if today_london_low is not None else None),
+            ({"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low used as session buy entry context", "timeframe": "session", "scope": "entry"} if today_asia_low is not None else None),
+            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as extended buy entry context", "timeframe": "1d", "scope": "entry"} if previous_day_low is not None else None),
+            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as fallback buy entry context", "timeframe": "4h", "scope": "entry"} if range_low_4h is not None else None),
+            ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as extended structural buy entry context", "timeframe": "4h", "scope": "entry"} if major_swing_low_4h is not None else None),
+            ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as final buy entry context fallback", "timeframe": "4h", "scope": "entry"} if low_macro is not None else None),
         )
         for item in candidates:
-            if item is not None and _level_is_relevant(bias=bias, price=price, level=item.get("level")):
+            if item is not None and item.get('level') is not None and item['level'] <= price * 1.03:
                 return item
     return {"type": "none", "level": None, "reason": "no clear entry liquidity context", "timeframe": None, "scope": "entry"}
 
@@ -266,20 +310,13 @@ def _pick_entry_liquidity_context(*, bias: str, price: float, eq: dict[str, bool
 def _pick_macro_liquidity_context(*, bias: str, price: float, eq_main: dict[str, bool], eq_htf: dict[str, bool], eq_macro: dict[str, bool], previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_4h: dict[str, Any] | None, imbalance_down_4h: dict[str, Any] | None, imbalance_up_1h: dict[str, Any] | None, imbalance_down_1h: dict[str, Any] | None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         candidates = (
-            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as primary structural buy-side draw", "timeframe": "4h", "scope": "macro"} if range_high_4h is not None else None),
-            ({**old_resistance_shelf, "scope": "macro"} if old_resistance_shelf else None),
-            ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural buy-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_high_4h is not None else None),
-            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as primary buy-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_high is not None else None),
-            ({"type": "equal_highs_4h", "level": high_macro, "reason": "4h equal highs used as macro buy-side liquidity draw", "timeframe": "4h", "scope": "macro"} if eq_macro["equal_highs"] and high_macro is not None else None),
-            ({**imbalance_up_4h, "scope": "macro"} if imbalance_up_4h else None),
-            ({"type": "recent_high_4h", "level": high_macro, "reason": "4h swing high used as macro buy-side liquidity draw", "timeframe": "4h", "scope": "macro"} if high_macro is not None else None),
-            ({"type": "equal_highs_1h", "level": high_htf, "reason": "1h equal highs used as secondary buy-side liquidity draw", "timeframe": "1h", "scope": "macro"} if eq_htf["equal_highs"] and high_htf is not None else None),
+            ({"type": "recent_high_1h", "level": high_htf, "reason": "1h swing high used as primary buy-side liquidity draw", "timeframe": "1h", "scope": "macro"} if high_htf is not None else None),
             ({**imbalance_up_1h, "scope": "macro"} if imbalance_up_1h else None),
-            ({"type": "recent_high_1h", "level": high_htf, "reason": "1h swing high used as secondary buy-side liquidity draw", "timeframe": "1h", "scope": "macro"} if high_htf is not None else None),
-            ({"type": "today_london_high", "level": today_london_high, "reason": "today london high used as session buy-side liquidity draw", "timeframe": "session", "scope": "macro"} if today_london_high is not None else None),
-            ({"type": "today_asia_high", "level": today_asia_high, "reason": "today asia high used as session buy-side liquidity draw", "timeframe": "session", "scope": "macro"} if today_asia_high is not None else None),
-            ({"type": "equal_highs_5m", "level": high_main, "reason": "equal highs used as visible local buy-side liquidity draw", "timeframe": "5m", "scope": "macro"} if eq_main["equal_highs"] else None),
-            ({"type": "recent_high_5m", "level": high_main, "reason": "5m fallback buy-side liquidity draw", "timeframe": "5m", "scope": "macro"} if high_main is not None else None),
+            ({**old_resistance_shelf, "scope": "macro"} if old_resistance_shelf else None),
+            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as structural buy-side draw", "timeframe": "4h", "scope": "macro"} if range_high_4h is not None else None),
+            ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural buy-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_high_4h is not None else None),
+            ({**imbalance_up_4h, "scope": "macro"} if imbalance_up_4h else None),
+            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as extended buy-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_high is not None else None),
             ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended fallback buy-side liquidity draw", "timeframe": "1w", "scope": "macro"} if previous_week_high is not None else None),
         )
         for item in candidates:
@@ -287,20 +324,13 @@ def _pick_macro_liquidity_context(*, bias: str, price: float, eq_main: dict[str,
                 return item
     if bias in {"bull_watch", "bull_confirm"}:
         candidates = (
-            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as primary structural sell-side draw", "timeframe": "4h", "scope": "macro"} if range_low_4h is not None else None),
-            ({**old_support_shelf, "scope": "macro"} if old_support_shelf else None),
-            ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural sell-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_low_4h is not None else None),
-            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as primary sell-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_low is not None else None),
-            ({"type": "equal_lows_4h", "level": low_macro, "reason": "4h equal lows used as macro sell-side liquidity draw", "timeframe": "4h", "scope": "macro"} if eq_macro["equal_lows"] and low_macro is not None else None),
-            ({**imbalance_down_4h, "scope": "macro"} if imbalance_down_4h else None),
-            ({"type": "recent_low_4h", "level": low_macro, "reason": "4h swing low used as macro sell-side liquidity draw", "timeframe": "4h", "scope": "macro"} if low_macro is not None else None),
-            ({"type": "equal_lows_1h", "level": low_htf, "reason": "1h equal lows used as secondary sell-side liquidity draw", "timeframe": "1h", "scope": "macro"} if eq_htf["equal_lows"] and low_htf is not None else None),
+            ({"type": "recent_low_1h", "level": low_htf, "reason": "1h swing low used as primary sell-side liquidity draw", "timeframe": "1h", "scope": "macro"} if low_htf is not None else None),
             ({**imbalance_down_1h, "scope": "macro"} if imbalance_down_1h else None),
-            ({"type": "recent_low_1h", "level": low_htf, "reason": "1h swing low used as secondary sell-side liquidity draw", "timeframe": "1h", "scope": "macro"} if low_htf is not None else None),
-            ({"type": "today_london_low", "level": today_london_low, "reason": "today london low used as session sell-side liquidity draw", "timeframe": "session", "scope": "macro"} if today_london_low is not None else None),
-            ({"type": "today_asia_low", "level": today_asia_low, "reason": "today asia low used as session sell-side liquidity draw", "timeframe": "session", "scope": "macro"} if today_asia_low is not None else None),
-            ({"type": "equal_lows_5m", "level": low_main, "reason": "equal lows used as visible local sell-side liquidity draw", "timeframe": "5m", "scope": "macro"} if eq_main["equal_lows"] else None),
-            ({"type": "recent_low_5m", "level": low_main, "reason": "5m fallback sell-side liquidity draw", "timeframe": "5m", "scope": "macro"} if low_main is not None else None),
+            ({**old_support_shelf, "scope": "macro"} if old_support_shelf else None),
+            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as structural sell-side draw", "timeframe": "4h", "scope": "macro"} if range_low_4h is not None else None),
+            ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural sell-side draw", "timeframe": "4h", "scope": "macro"} if major_swing_low_4h is not None else None),
+            ({**imbalance_down_4h, "scope": "macro"} if imbalance_down_4h else None),
+            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as extended sell-side liquidity draw", "timeframe": "1d", "scope": "macro"} if previous_day_low is not None else None),
             ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended fallback sell-side liquidity draw", "timeframe": "1w", "scope": "macro"} if previous_week_low is not None else None),
         )
         for item in candidates:
@@ -310,30 +340,28 @@ def _pick_macro_liquidity_context(*, bias: str, price: float, eq_main: dict[str,
 
 
 def _pick_execution_target(*, bias: str, price: float, previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]], range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
-    if bias == "bull_confirm":
+    if bias in {"bull_confirm", "bull_watch"}:
         return (
-            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as primary structural execution target", "timeframe": "4h"} if range_high_4h is not None and range_high_4h > price else None)
-            or (old_resistance_shelf if old_resistance_shelf and old_resistance_shelf.get("level") is not None and float(old_resistance_shelf["level"]) > price else None)
+            ({"type": "old_resistance_shelf", "level": old_resistance_shelf.get("level"), "reason": "nearest historical resistance shelf used as projected execution target", "timeframe": "4h"} if old_resistance_shelf and old_resistance_shelf.get("level") is not None and float(old_resistance_shelf["level"]) > price else None)
+            or _find_imbalance_target(candles_htf, "up", price, "1h")
+            or ({"type": "recent_high_1h", "level": high_htf, "reason": "nearest 1h resistance used as execution target", "timeframe": "1h"} if high_htf is not None and high_htf > price else None)
+            or ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as structural execution target", "timeframe": "4h"} if range_high_4h is not None and range_high_4h > price else None)
             or ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural execution target", "timeframe": "4h"} if major_swing_high_4h is not None and major_swing_high_4h > price else None)
             or _find_imbalance_target(candles_macro, "up", price, "4h")
-            or ({"type": "recent_high_4h", "level": high_macro, "reason": "4h high used as primary extended execution target", "timeframe": "4h"} if high_macro is not None and high_macro > price else None)
-            or ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as secondary extended execution target", "timeframe": "1d"} if previous_day_high is not None and previous_day_high > price else None)
-            or _find_imbalance_target(candles_htf, "up", price, "1h")
-            or ({"type": "recent_high_1h", "level": high_htf, "reason": "1h high used as secondary execution target", "timeframe": "1h"} if high_htf is not None and high_htf > price else None)
+            or ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as extended execution target", "timeframe": "1d"} if previous_day_high is not None and previous_day_high > price else None)
             or ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended execution target", "timeframe": "1w"} if previous_week_high is not None and previous_week_high > price else None)
             or ({"type": "recent_high_5m", "level": high_main, "reason": "5m fallback high used as execution target", "timeframe": "5m"} if high_main is not None and high_main > price else None)
             or {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
         )
-    if bias == "bear_confirm":
+    if bias in {"bear_confirm", "bear_watch"}:
         return (
-            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as primary structural execution target", "timeframe": "4h"} if range_low_4h is not None and range_low_4h < price else None)
-            or (old_support_shelf if old_support_shelf and old_support_shelf.get("level") is not None and float(old_support_shelf["level"]) < price else None)
+            ({"type": "old_support_shelf", "level": old_support_shelf.get("level"), "reason": "nearest historical support shelf used as projected execution target", "timeframe": "4h"} if old_support_shelf and old_support_shelf.get("level") is not None and float(old_support_shelf["level"]) < price else None)
+            or _find_imbalance_target(candles_htf, "down", price, "1h")
+            or ({"type": "recent_low_1h", "level": low_htf, "reason": "nearest 1h support used as execution target", "timeframe": "1h"} if low_htf is not None and low_htf < price else None)
+            or ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as structural execution target", "timeframe": "4h"} if range_low_4h is not None and range_low_4h < price else None)
             or ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural execution target", "timeframe": "4h"} if major_swing_low_4h is not None and major_swing_low_4h < price else None)
             or _find_imbalance_target(candles_macro, "down", price, "4h")
-            or ({"type": "recent_low_4h", "level": low_macro, "reason": "4h low used as primary extended execution target", "timeframe": "4h"} if low_macro is not None and low_macro < price else None)
-            or ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as secondary extended execution target", "timeframe": "1d"} if previous_day_low is not None and previous_day_low < price else None)
-            or _find_imbalance_target(candles_htf, "down", price, "1h")
-            or ({"type": "recent_low_1h", "level": low_htf, "reason": "1h low used as secondary execution target", "timeframe": "1h"} if low_htf is not None and low_htf < price else None)
+            or ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as extended execution target", "timeframe": "1d"} if previous_day_low is not None and previous_day_low < price else None)
             or ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended execution target", "timeframe": "1w"} if previous_week_low is not None and previous_week_low < price else None)
             or ({"type": "recent_low_5m", "level": low_main, "reason": "5m fallback low used as execution target", "timeframe": "5m"} if low_main is not None and low_main < price else None)
             or {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
@@ -343,7 +371,7 @@ def _pick_execution_target(*, bias: str, price: float, previous_day_high: float 
 
 def _projected_target(bias: str, price: float, macro_context: dict[str, Any], execution_target: dict[str, Any]) -> dict[str, Any]:
     if execution_target.get("level") is not None:
-        return {**execution_target, "projected": False}
+        return {**execution_target, "projected": bias.endswith("watch")}
     level = macro_context.get("level")
     if level is None:
         return {"type": "none", "level": None, "reason": "no projected target", "timeframe": None, "projected": False}
@@ -361,12 +389,12 @@ def _resolve_structural_stop(*, bias: str, entry_price: float, high_main: float,
     if bias == "bull_confirm":
         if low_htf is not None:
             return low_htf, "recent_low_1h"
-        if major_swing_low_4h is not None and major_swing_low_4h < entry_price and ((entry_price - major_swing_low_4h) / max(entry_price, 1e-9)) <= 0.04:
-            return major_swing_low_4h, "major_swing_low_4h"
         if sweep_down:
             return last_low, "sweep_low_5m"
-        if entry_level is not None and any(token in str(entry_type or "") for token in ["low", "lows"]):
+        if entry_level is not None and any(token in str(entry_type or "") for token in ["low", "lows", "support"]):
             return entry_level, str(entry_type)
+        if major_swing_low_4h is not None and major_swing_low_4h < entry_price and ((entry_price - major_swing_low_4h) / max(entry_price, 1e-9)) <= 0.04:
+            return major_swing_low_4h, "major_swing_low_4h"
         if today_london_low is not None:
             return today_london_low, "today_london_low"
         if today_asia_low is not None:
@@ -376,12 +404,12 @@ def _resolve_structural_stop(*, bias: str, entry_price: float, high_main: float,
     if bias == "bear_confirm":
         if high_htf is not None:
             return high_htf, "recent_high_1h"
-        if major_swing_high_4h is not None and major_swing_high_4h > entry_price and ((major_swing_high_4h - entry_price) / max(entry_price, 1e-9)) <= 0.04:
-            return major_swing_high_4h, "major_swing_high_4h"
         if sweep_up:
             return last_high, "sweep_high_5m"
-        if entry_level is not None and any(token in str(entry_type or "") for token in ["high", "highs"]):
+        if entry_level is not None and any(token in str(entry_type or "") for token in ["high", "highs", "resistance"]):
             return entry_level, str(entry_type)
+        if major_swing_high_4h is not None and major_swing_high_4h > entry_price and ((major_swing_high_4h - entry_price) / max(entry_price, 1e-9)) <= 0.04:
+            return major_swing_high_4h, "major_swing_high_4h"
         if today_london_high is not None:
             return today_london_high, "today_london_high"
         if today_asia_high is not None:
@@ -407,9 +435,18 @@ def _score_volume(candles_main: list[dict[str, Any]]) -> tuple[int, dict[str, An
 
 def _score_market_quality(candles_main: list[dict[str, Any]], price: float) -> tuple[int, dict[str, Any]]:
     recent = candles_main[-20:]
-    if len(recent) < 5 or not price:
+    if len(recent) < 5:
         return 0, {"avg_range_pct": 0.0}
-    avg_range_pct = mean([(float(c["high"]) - float(c["low"])) / price for c in recent if price > 0])
+    range_values = []
+    for c in recent:
+        close_price = float(c.get("close") or 0.0)
+        high_price = float(c.get("high") or 0.0)
+        low_price = float(c.get("low") or 0.0)
+        if close_price > 0 and high_price >= low_price:
+            range_values.append((high_price - low_price) / close_price)
+    if not range_values:
+        return 0, {"avg_range_pct": 0.0}
+    avg_range_pct = mean(range_values)
     if avg_range_pct >= 0.02:
         return 0, {"avg_range_pct": avg_range_pct}
     if 0.003 <= avg_range_pct <= 0.012:
@@ -423,14 +460,14 @@ def _score_htf_alignment(bias: str, rsi_htf: float | None, rsi_macro: float | No
     if rsi_htf is None or rsi_macro is None:
         return 0
     if bias.startswith("bull"):
-        if rsi_htf >= 50 and rsi_macro >= 45:
+        if rsi_htf >= 55 and rsi_macro >= 50:
             return 2
-        if rsi_htf >= 45:
+        if rsi_htf >= 50:
             return 1
     if bias.startswith("bear"):
-        if rsi_htf <= 50 and rsi_macro <= 55:
+        if rsi_htf <= 45 and rsi_macro <= 50:
             return 2
-        if rsi_htf <= 55:
+        if rsi_htf <= 50:
             return 1
     return 0
 
@@ -477,6 +514,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
     high_main, low_main = recent_extremes(candles_main, cfg["swing_window"] * 3)
     high_htf, low_htf = recent_extremes(candles_htf, min(len(candles_htf), cfg["swing_window"] * 6))
     high_macro, low_macro = recent_extremes(candles_macro, min(len(candles_macro), max(24, cfg["swing_window"] * 8)))
+    range_high_1h, range_low_1h = _range_bounds(candles_htf, lookback=min(len(candles_htf), max(16, cfg["swing_window"] * 6)))
     range_high_4h, range_low_4h = _range_bounds(candles_macro, lookback=min(len(candles_macro), max(16, cfg["swing_window"] * 8)))
     major_swing_high_4h = _recent_pivot_level(candles_macro, direction="up", lookback=min(len(candles_macro), max(36, cfg["swing_window"] * 12)))
     major_swing_low_4h = _recent_pivot_level(candles_macro, direction="down", lookback=min(len(candles_macro), max(36, cfg["swing_window"] * 12)))
@@ -519,6 +557,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         rsi_macro=rsi_macro,
         range_high_4h=range_high_4h,
         range_low_4h=range_low_4h,
+        range_high_1h=range_high_1h,
+        range_low_1h=range_low_1h,
         old_resistance_shelf=old_resistance_shelf,
         old_support_shelf=old_support_shelf,
         near_macro_high=near_macro_high,
@@ -560,10 +600,10 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         spring_watch = True
         score_breakdown["structure"] += 3
 
-    internal_bear_pivot_high = _recent_pivot_level(candles_main, direction="up", lookback=6)
-    internal_bull_pivot_low = _recent_pivot_level(candles_main, direction="down", lookback=6)
-    external_swing_high = _recent_pivot_level(candles_main, direction="up", lookback=18)
-    external_swing_low = _recent_pivot_level(candles_main, direction="down", lookback=18)
+    internal_bear_pivot_high = _latest_local_pivot(candles_main, direction="up", left=2, right=2)
+    internal_bull_pivot_low = _latest_local_pivot(candles_main, direction="down", left=2, right=2)
+    external_swing_high = _latest_local_pivot(candles_main, direction="up", left=4, right=4) or _recent_pivot_level(candles_main, direction="up", lookback=18)
+    external_swing_low = _latest_local_pivot(candles_main, direction="down", left=4, right=4) or _recent_pivot_level(candles_main, direction="down", lookback=18)
 
     mss_bull = bool(spring_watch and internal_bear_pivot_high is not None and float(last["close"]) > float(internal_bear_pivot_high))
     mss_bear = bool(utad_watch and internal_bull_pivot_low is not None and float(last["close"]) < float(internal_bull_pivot_low))
@@ -591,20 +631,15 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         )
         state = _resolve_display_state(
             bias=bias,
-            rsi_main=rsi_main,
-            overbought=cfg["signals"]["overbought"],
-            oversold=cfg["signals"]["oversold"],
+            spring_watch=spring_watch,
+            utad_watch=utad_watch,
             near_recent_high=near_recent_high,
             near_recent_low=near_recent_low,
             near_htf_high=near_htf_high,
             near_htf_low=near_htf_low,
-            near_macro_high=near_macro_high,
-            near_macro_low=near_macro_low,
-            eq_main=eq_main,
-            eq_htf=eq_htf,
-            eq_macro=eq_macro,
             sweep_up=sweep_up,
             sweep_down=sweep_down,
+            htf_watch_bias=htf_watch_bias,
         )
         pipeline["zone"] = True
         if bos_bull or bos_bear:
@@ -758,7 +793,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
             last_high=float(last["high"]),
             last_low=float(last["low"]),
         )
-        trade = {"status": "simulated", "side": "short", "entry": price, "stop": structural_stop, "target": trade_target or low_macro or low_htf or low_main, "stop_source": stop_source}; pipeline["trade"] = True
+        trade = {"status": "simulated", "side": "short", "entry": price, "stop": structural_stop, "target": trade_target or low_htf or low_macro or low_main, "stop_source": stop_source}; pipeline["trade"] = True
     elif trigger in {"break_up_confirm", "break_up_confirm_soft"}:
         structural_stop, stop_source = _resolve_structural_stop(
             bias=bias,
@@ -779,7 +814,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
             last_high=float(last["high"]),
             last_low=float(last["low"]),
         )
-        trade = {"status": "simulated", "side": "long", "entry": price, "stop": structural_stop, "target": trade_target or high_macro or high_htf or high_main, "stop_source": stop_source}; pipeline["trade"] = True
+        trade = {"status": "simulated", "side": "long", "entry": price, "stop": structural_stop, "target": trade_target or high_htf or high_macro or high_main, "stop_source": stop_source}; pipeline["trade"] = True
 
     score_breakdown["target_quality"] = _score_target_quality(trade)
     projected_target = _projected_target(bias, price, macro_liquidity_context, execution_target)
@@ -823,6 +858,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "equal_lows_1h": eq_htf["equal_lows"],
         "equal_highs_4h": eq_macro["equal_highs"],
         "equal_lows_4h": eq_macro["equal_lows"],
+        "range_high_1h": range_high_1h,
+        "range_low_1h": range_low_1h,
         "range_high_4h": range_high_4h,
         "range_low_4h": range_low_4h,
         "major_swing_high_4h": major_swing_high_4h,
