@@ -40,6 +40,27 @@ function summarizeScore(row) {
   return `${parts.join(' · ')}${mssBos.length ? ` · ${mssBos.join(' / ')}` : ''}`
 }
 
+function summarizeWindow(row) {
+  const window4h = stateContext(row, 'macro_window_4h')
+  if (!window4h) return '—'
+  const side = window4h.side || 'neutral'
+  const pos = window4h.range_position !== null && window4h.range_position !== undefined ? fmtNumber(window4h.range_position, 2) : '—'
+  const status = window4h.valid ? 'valid' : 'blocked'
+  return `${side} · ${status} · rp ${pos}`
+}
+
+function summarizeZoneValidity(row) {
+  const zoneValidity = stateContext(row, 'zone_validity')
+  if (!zoneValidity) return '—'
+  return `${zoneValidity.valid ? 'ok' : 'weak'} · ${fmtNumber(zoneValidity.score, 0)}`
+}
+
+function summarizeTradability(row) {
+  const tradability = stateContext(row, 'tradability_profile')
+  if (!tradability) return '—'
+  return `${tradability.valid ? 'tradable' : 'noisy'} · ${fmtNumber(tradability.score, 0)}`
+}
+
 export default function DashboardPage() {
   const settingsLoader = useCallback(() => api.adminSettings(), [])
   const { data: adminSettings } = usePollingQuery(settingsLoader, 30000)
@@ -60,6 +81,8 @@ export default function DashboardPage() {
   }, {}), [assets])
 
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6), [assets])
+  const cleanAssetsCount = useMemo(() => assets.filter((item) => stateContext(item, 'tradability_profile')?.valid).length, [assets])
+  const strongZoneCount = useMemo(() => assets.filter((item) => stateContext(item, 'zone_validity')?.valid).length, [assets])
 
   const columns = [
     {
@@ -79,9 +102,11 @@ export default function DashboardPage() {
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
     { key: 'zone_quality', title: 'Zone', render: (row) => row?.state_payload?.zone_quality || '—', sortValue: (row) => row?.state_payload?.zone_quality || '' },
+    { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
+    { key: 'tradability', title: 'Tradability', render: (row) => summarizeTradability(row), sortValue: (row) => Number(stateContext(row, 'tradability_profile')?.score ?? -1) },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
-    { key: 'rsi_main', title: 'RSI 5M', render: (row) => fmtNumber(row?.state_payload?.rsi_main, 2), sortValue: (row) => Number(row?.state_payload?.rsi_main ?? -1) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
+    { key: 'macro_window_4h', title: '4H window', render: (row) => summarizeWindow(row), sortValue: (row) => Number(stateContext(row, 'macro_window_4h')?.range_position ?? -1) },
     { key: 'macro_liquidity_context', title: 'Macro context', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context), sortValue: (row) => (stateContext(row, 'macro_liquidity_context') || row.liquidity_context)?.level ?? -1 },
     { key: 'entry_liquidity_context', title: 'Entry context', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')), sortValue: (row) => stateContext(row, 'entry_liquidity_context')?.level ?? -1 },
     { key: 'execution_target', title: 'Execution target', render: (row) => summarizeContext(row.execution_target), sortValue: (row) => row.execution_target?.level ?? -1 },
@@ -109,7 +134,11 @@ export default function DashboardPage() {
       </div>
       <div className="stats-grid">
         <StatCard label="Average score" value={avgScore} />
+        <StatCard label="Tradable assets" value={cleanAssetsCount} />
+        <StatCard label="Strong zones" value={strongZoneCount} />
         <StatCard label="London total" value={(sessionCounts.london || 0) + (sessionCounts.london_open || 0)} hint={`Open: ${sessionCounts.london_open || 0} · Core: ${sessionCounts.london || 0}`} />
+      </div>
+      <div className="stats-grid">
         <StatCard label="New York" value={sessionCounts.new_york || 0} />
         <StatCard label="Asia / off" value={(sessionCounts.asia || 0) + (sessionCounts.off_session || 0)} hint={`Asia: ${sessionCounts.asia || 0} · Off: ${sessionCounts.off_session || 0}`} />
       </div>
