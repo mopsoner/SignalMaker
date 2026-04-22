@@ -55,12 +55,6 @@ function summarizeZoneValidity(row) {
   return `${zoneValidity.valid ? 'ok' : 'weak'} · ${fmtNumber(zoneValidity.score, 0)}`
 }
 
-function summarizeTradability(row) {
-  const tradability = stateContext(row, 'tradability_profile')
-  if (!tradability) return '—'
-  return `${tradability.valid ? 'tradable' : 'noisy'} · ${fmtNumber(tradability.score, 0)}`
-}
-
 export default function DashboardPage() {
   const settingsLoader = useCallback(() => api.adminSettings(), [])
   const { data: adminSettings } = usePollingQuery(settingsLoader, 30000)
@@ -81,7 +75,6 @@ export default function DashboardPage() {
   }, {}), [assets])
 
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6), [assets])
-  const cleanAssetsCount = useMemo(() => assets.filter((item) => stateContext(item, 'tradability_profile')?.valid).length, [assets])
   const strongZoneCount = useMemo(() => assets.filter((item) => stateContext(item, 'zone_validity')?.valid).length, [assets])
 
   const columns = [
@@ -103,7 +96,6 @@ export default function DashboardPage() {
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
     { key: 'zone_quality', title: 'Zone', render: (row) => row?.state_payload?.zone_quality || '—', sortValue: (row) => row?.state_payload?.zone_quality || '' },
     { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
-    { key: 'tradability', title: 'Tradability', render: (row) => summarizeTradability(row), sortValue: (row) => Number(stateContext(row, 'tradability_profile')?.score ?? -1) },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
     { key: 'macro_window_4h', title: '4H window', render: (row) => summarizeWindow(row), sortValue: (row) => Number(stateContext(row, 'macro_window_4h')?.range_position ?? -1) },
@@ -134,12 +126,11 @@ export default function DashboardPage() {
       </div>
       <div className="stats-grid">
         <StatCard label="Average score" value={avgScore} />
-        <StatCard label="Tradable assets" value={cleanAssetsCount} />
         <StatCard label="Strong zones" value={strongZoneCount} />
         <StatCard label="London total" value={(sessionCounts.london || 0) + (sessionCounts.london_open || 0)} hint={`Open: ${sessionCounts.london_open || 0} · Core: ${sessionCounts.london || 0}`} />
+        <StatCard label="New York" value={sessionCounts.new_york || 0} />
       </div>
       <div className="stats-grid">
-        <StatCard label="New York" value={sessionCounts.new_york || 0} />
         <StatCard label="Asia / off" value={(sessionCounts.asia || 0) + (sessionCounts.off_session || 0)} hint={`Asia: ${sessionCounts.asia || 0} · Off: ${sessionCounts.off_session || 0}`} />
       </div>
       {loading ? <div className="panel">Loading assets…</div> : null}
