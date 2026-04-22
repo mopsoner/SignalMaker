@@ -119,48 +119,34 @@ class SignalEngineService:
         range_low_1h = signal.get('range_low_1h')
         eq_highs = bool(signal.get('equal_highs_1h'))
         eq_lows = bool(signal.get('equal_lows_1h'))
-        near_pct = 0.015
+        near_pct = 0.012
 
-        recent_high = signal.get('macro_liquidity_context', {}).get('level') if 'high' in str((signal.get('macro_liquidity_context') or {}).get('type', '')) else None
-        recent_low = signal.get('macro_liquidity_context', {}).get('level') if 'low' in str((signal.get('macro_liquidity_context') or {}).get('type', '')) else None
-        if range_high_1h is not None:
-            recent_high = range_high_1h if recent_high is None else max(recent_high, range_high_1h)
-        if range_low_1h is not None:
-            recent_low = range_low_1h if recent_low is None else min(recent_low, range_low_1h)
-
-        h = [float(c['high']) for c in candles_1h[-6:]] if candles_1h else []
-        l = [float(c['low']) for c in candles_1h[-6:]] if candles_1h else []
+        h = [float(c['high']) for c in candles_1h[-8:]] if candles_1h else []
+        l = [float(c['low']) for c in candles_1h[-8:]] if candles_1h else []
         c_last = candles_1h[-1] if candles_1h else None
         prev_high = max(h[:-1]) if len(h) > 1 else None
         prev_low = min(l[:-1]) if len(l) > 1 else None
         utad = bool(c_last and prev_high is not None and float(c_last['high']) > prev_high and float(c_last['close']) < prev_high)
         spring = bool(c_last and prev_low is not None and float(c_last['low']) < prev_low and float(c_last['close']) > prev_low)
+        near_entry = self._near(price, entry_ctx.get('level'), near_pct)
+        near_high = self._near(price, range_high_1h, near_pct)
+        near_low = self._near(price, range_low_1h, near_pct)
 
         if bias.startswith('bear'):
-            valid = any([
-                self._near(price, entry_ctx.get('level'), near_pct),
-                self._near(price, range_high_1h, near_pct),
-                eq_highs,
-                utad,
-            ])
+            valid = bool(utad or near_high or (eq_highs and near_entry) or (near_entry and near_high))
             return {
                 'valid': valid,
                 'side': 'bear',
                 'reason': '1h_utad_or_resistance_retest' if valid else 'no_1h_bear_setup',
                 'utad_watch_1h': utad,
                 'spring_watch_1h': False,
-                'near_range_high_1h': self._near(price, range_high_1h, near_pct),
+                'near_range_high_1h': near_high,
                 'near_range_low_1h': False,
                 'equal_highs_1h': eq_highs,
                 'equal_lows_1h': eq_lows,
             }
         if bias.startswith('bull'):
-            valid = any([
-                self._near(price, entry_ctx.get('level'), near_pct),
-                self._near(price, range_low_1h, near_pct),
-                eq_lows,
-                spring,
-            ])
+            valid = bool(spring or near_low or (eq_lows and near_entry) or (near_entry and near_low))
             return {
                 'valid': valid,
                 'side': 'bull',
@@ -168,7 +154,7 @@ class SignalEngineService:
                 'utad_watch_1h': False,
                 'spring_watch_1h': spring,
                 'near_range_high_1h': False,
-                'near_range_low_1h': self._near(price, range_low_1h, near_pct),
+                'near_range_low_1h': near_low,
                 'equal_highs_1h': eq_highs,
                 'equal_lows_1h': eq_lows,
             }
@@ -195,14 +181,139 @@ class SignalEngineService:
             'bos_bear': bool(signal.get('bos_bear')),
         }
 
-    def _apply_hierarchy(self, signal: dict, candles_1h: list[dict], cfg: dict) -> dict:
+    def _tradability_profile(self, signal: dict, candles_5m: list[dict]) -> dict:
+        price = float(signal.get('price') or 0.0)
+        if not candles_5m:
+            return {'valid': False, 'score': 0, 'reason': 'no_5m_candles'}
+        recent = candles_5m[-24:]
+        closes = [float(c['close']) for c in recent]
+        highs = [float(c['high']) for c in recent]
+        lows = [float(c['low']) for c in recent]
+        volumes = [float(c.get('volume') or 0.0) for c in recent]
+        distinct_ratio = len(set(closes)) / max(len(closes), 1)
+        avg_range_pct = mean(((h - l) / c) for h, l, c in zip(highs, lows, closes) if c > 0 and h >= l) if closes else 0.0
+        nonzero_volume_ratio = sum(1 for v in volumes if v > 0) / max(len(volumes), 1)
+        score = 0
+        reasons = []
+        if price >= 0.005:
+            score += 1
+        else:
+            reasons.append('micro_price')
+        if distinct_ratio >= 0.55:
+            score += 1
+        else:
+            reasons.append('flat_5m_series')
+        if avg_range_pct >= 0.0015:
+            score += 1
+        else:
+            reasons.append('tiny_5m_range')
+        if nonzero_volume_ratio >= 0.85:
+            score += 1
+        else:
+            reasons.append('irregular_volume')
+        valid = score >= 3
+        return {
+            'valid': valid,
+            'score': score,
+            'reason': ','.join(reasons) if reasons else 'tradable',
+            'distinct_close_ratio': distinct_ratio,
+            'avg_range_pct_5m': avg_range_pct,
+            'nonzero_volume_ratio': nonzero_volume_ratio,
+        }
+
+    def _preferred_macro_context(self, signal: dict) -> dict:
+        bias = signal.get('bias') or 'neutral'
+        price = float(signal.get('price') or 0.0)
+        prev_day_high = signal.get('previous_day_high')
+        prev_day_low = signal.get('previous_day_low')
+        prev_week_high = signal.get('previous_week_high')
+        prev_week_low = signal.get('previous_week_low')
+        range_high_4h = signal.get('range_high_4h')
+        range_low_4h = signal.get('range_low_4h')
+        swing_high = signal.get('major_swing_high_4h')
+        swing_low = signal.get('major_swing_low_4h')
+        old_res = signal.get('old_resistance_shelf')
+        old_sup = signal.get('old_support_shelf')
+
+        if bias.startswith('bear'):
+            candidates = [
+                ({'type': 'old_resistance_shelf', 'level': old_res.get('level'), 'reason': '4h resistance shelf used as macro sell-side context', 'timeframe': '4h', 'scope': 'macro'} if old_res and old_res.get('level') is not None and old_res.get('level') >= price * 0.95 else None),
+                ({'type': 'range_high_4h', 'level': range_high_4h, 'reason': '4h range high used as macro sell-side context', 'timeframe': '4h', 'scope': 'macro'} if range_high_4h is not None else None),
+                ({'type': 'major_swing_high_4h', 'level': swing_high, 'reason': 'major 4h swing high used as macro sell-side context', 'timeframe': '4h', 'scope': 'macro'} if swing_high is not None else None),
+                ({'type': 'previous_day_high', 'level': prev_day_high, 'reason': 'previous day high used as macro sell-side context', 'timeframe': '1d', 'scope': 'macro'} if prev_day_high is not None else None),
+                ({'type': 'previous_week_high', 'level': prev_week_high, 'reason': 'previous week high used as macro sell-side context', 'timeframe': '1w', 'scope': 'macro'} if prev_week_high is not None else None),
+            ]
+        elif bias.startswith('bull'):
+            candidates = [
+                ({'type': 'old_support_shelf', 'level': old_sup.get('level'), 'reason': '4h support shelf used as macro buy-side context', 'timeframe': '4h', 'scope': 'macro'} if old_sup and old_sup.get('level') is not None and old_sup.get('level') <= price * 1.05 else None),
+                ({'type': 'range_low_4h', 'level': range_low_4h, 'reason': '4h range low used as macro buy-side context', 'timeframe': '4h', 'scope': 'macro'} if range_low_4h is not None else None),
+                ({'type': 'major_swing_low_4h', 'level': swing_low, 'reason': 'major 4h swing low used as macro buy-side context', 'timeframe': '4h', 'scope': 'macro'} if swing_low is not None else None),
+                ({'type': 'previous_day_low', 'level': prev_day_low, 'reason': 'previous day low used as macro buy-side context', 'timeframe': '1d', 'scope': 'macro'} if prev_day_low is not None else None),
+                ({'type': 'previous_week_low', 'level': prev_week_low, 'reason': 'previous week low used as macro buy-side context', 'timeframe': '1w', 'scope': 'macro'} if prev_week_low is not None else None),
+            ]
+        else:
+            candidates = []
+        for item in candidates:
+            if item is not None and item.get('level') is not None:
+                return item
+        return signal.get('macro_liquidity_context') or signal.get('liquidity_context') or {'type': 'none', 'level': None, 'reason': 'no macro context', 'timeframe': None, 'scope': 'macro'}
+
+    def _coherent_state(self, signal: dict) -> tuple[str, str]:
+        bias = signal.get('bias') or 'neutral'
+        rsi_htf = signal.get('rsi_htf')
+        macro_window = signal.get('macro_window_4h') or {}
+        refinement = signal.get('refinement_context_1h') or {}
+        if bias.startswith('bull'):
+            if rsi_htf is not None and rsi_htf >= 78:
+                return 'liquidity', 'neutral_watch'
+            if macro_window.get('valid') and refinement.get('valid'):
+                if 'discount' in str(macro_window.get('reason', '')) or macro_window.get('near_support_4h'):
+                    return 'discount_4h_reclaim_watch', 'support_retest_watch'
+                return 'support_retest_watch', signal.get('state') or 'support_retest_watch'
+        if bias.startswith('bear'):
+            if rsi_htf is not None and rsi_htf <= 22:
+                return 'liquidity', 'neutral_watch'
+            if macro_window.get('valid') and refinement.get('valid'):
+                if 'premium' in str(macro_window.get('reason', '')) or macro_window.get('near_resistance_4h'):
+                    return 'premium_4h_rejection_watch', 'resistance_retest_watch'
+                return 'resistance_retest_watch', signal.get('state') or 'resistance_retest_watch'
+        return signal.get('state') or 'neutral_watch', signal.get('state') or 'neutral_watch'
+
+    def _zone_validity(self, signal: dict, tradability: dict) -> dict:
+        macro_window = signal.get('macro_window_4h') or {}
+        refinement = signal.get('refinement_context_1h') or {}
+        exec_target = (signal.get('execution_target') or {}).get('level')
+        projected_target = (signal.get('projected_target') or {}).get('level')
+        target_ok = exec_target is not None or projected_target is not None
+        score = 0
+        if macro_window.get('valid'):
+            score += 2
+        if refinement.get('valid'):
+            score += 2
+        if tradability.get('valid'):
+            score += 2
+        if target_ok:
+            score += 2
+        valid = score >= 6
+        return {
+            'valid': valid,
+            'score': score,
+            'target_ok': target_ok,
+            'reason': 'valid_zone' if valid else 'weak_zone_filters',
+        }
+
+    def _apply_hierarchy(self, signal: dict, candles_1h: list[dict], candles_5m: list[dict], cfg: dict) -> dict:
         macro_window = self._macro_window_4h(signal, cfg)
         refinement = self._refinement_context_1h(signal, candles_1h)
         exec_trigger = self._execution_trigger_5m(signal)
+        tradability = self._tradability_profile(signal, candles_5m)
         signal['macro_window_4h'] = macro_window
         signal['refinement_context_1h'] = refinement
         signal['execution_trigger_5m'] = exec_trigger
+        signal['tradability_profile'] = tradability
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
+        signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
+        signal['liquidity_context'] = signal['macro_liquidity_context']
 
         bias = signal.get('bias') or 'neutral'
         allowed = False
@@ -227,15 +338,29 @@ class SignalEngineService:
             allowed = False
             block_reason = 'blocked_no_5m_confirm'
 
+        state_label, fallback_state = self._coherent_state(signal)
+        zone_validity = self._zone_validity(signal, tradability)
+        signal['zone_validity'] = zone_validity
         signal['hierarchy_block_reason'] = block_reason
+
+        if signal.get('pipeline', {}).get('zone'):
+            if not macro_window.get('valid') or not refinement.get('valid') or not tradability.get('valid') or not zone_validity.get('target_ok'):
+                signal['pipeline']['zone'] = False
+                signal['zone_quality'] = 'weak'
+                signal['state'] = 'neutral_watch'
+                signal['bias'] = 'neutral'
+            else:
+                signal['state'] = state_label
+                signal['score_breakdown']['market_quality'] = max(int(signal['score_breakdown'].get('market_quality', 0)), tradability.get('score', 0) - 2)
+
         if not allowed:
             signal['trigger'] = 'wait'
             if bias.startswith('bear'):
                 signal['bias'] = 'bear_watch'
-                signal['state'] = 'resistance_retest_watch'
+                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'resistance_retest_watch'
             elif bias.startswith('bull'):
                 signal['bias'] = 'bull_watch'
-                signal['state'] = 'support_retest_watch'
+                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'support_retest_watch'
             else:
                 signal['bias'] = 'neutral'
                 signal['state'] = 'neutral_watch'
@@ -254,5 +379,5 @@ class SignalEngineService:
         cfg = get_runtime_signal_config()
         candles_main = candles['5m']
         signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)
-        signal = self._apply_hierarchy(signal, candles['1h'], cfg)
+        signal = self._apply_hierarchy(signal, candles['1h'], candles_main, cfg)
         return signal
