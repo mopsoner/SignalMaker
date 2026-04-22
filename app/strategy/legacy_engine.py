@@ -80,6 +80,19 @@ def _latest_local_pivot(candles: list[dict[str, Any]], *, direction: str, left: 
     return None
 
 
+def _find_consistent_external_swings(candles: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    high = _latest_local_pivot(candles, direction="up", left=4, right=4) or _recent_pivot_level(candles, direction="up", lookback=18)
+    low = _latest_local_pivot(candles, direction="down", left=4, right=4) or _recent_pivot_level(candles, direction="down", lookback=18)
+    if high is not None and low is not None and high <= low:
+        fallback_high = _recent_pivot_level(candles, direction="up", lookback=24)
+        fallback_low = _recent_pivot_level(candles, direction="down", lookback=24)
+        if fallback_high is not None and fallback_low is not None and fallback_high > fallback_low:
+            return fallback_high, fallback_low
+        if high <= low:
+            return None, None
+    return high, low
+
+
 def _range_bounds(candles: list[dict[str, Any]], lookback: int = 24) -> tuple[float | None, float | None]:
     if not candles:
         return None, None
@@ -339,33 +352,54 @@ def _pick_macro_liquidity_context(*, bias: str, price: float, eq_main: dict[str,
     return {"type": "none", "level": None, "reason": "no clear macro liquidity context", "timeframe": None, "scope": "macro"}
 
 
-def _pick_execution_target(*, bias: str, price: float, previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]], range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
+def _pick_execution_target(*, bias: str, price: float, previous_day_high: float | None, previous_day_low: float | None, previous_week_high: float | None, previous_week_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]], range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None, stop_level: float | None = None, min_rr_hint: float = 0.75) -> dict[str, Any]:
+    def _enough_rr(level: float | None) -> bool:
+        if level is None or stop_level is None:
+            return True
+        risk = abs(stop_level - price)
+        reward = abs(price - level)
+        if risk <= 0:
+            return True
+        return (reward / risk) >= min_rr_hint
+
     if bias in {"bull_confirm", "bull_watch"}:
-        return (
-            ({"type": "old_resistance_shelf", "level": old_resistance_shelf.get("level"), "reason": "nearest historical resistance shelf used as projected execution target", "timeframe": "4h"} if old_resistance_shelf and old_resistance_shelf.get("level") is not None and float(old_resistance_shelf["level"]) > price else None)
-            or _find_imbalance_target(candles_htf, "up", price, "1h")
-            or ({"type": "recent_high_1h", "level": high_htf, "reason": "nearest 1h resistance used as execution target", "timeframe": "1h"} if high_htf is not None and high_htf > price else None)
-            or ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as structural execution target", "timeframe": "4h"} if range_high_4h is not None and range_high_4h > price else None)
-            or ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural execution target", "timeframe": "4h"} if major_swing_high_4h is not None and major_swing_high_4h > price else None)
-            or _find_imbalance_target(candles_macro, "up", price, "4h")
-            or ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as extended execution target", "timeframe": "1d"} if previous_day_high is not None and previous_day_high > price else None)
-            or ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended execution target", "timeframe": "1w"} if previous_week_high is not None and previous_week_high > price else None)
-            or ({"type": "recent_high_5m", "level": high_main, "reason": "5m fallback high used as execution target", "timeframe": "5m"} if high_main is not None and high_main > price else None)
-            or {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
-        )
+        candidates = [
+            ({"type": "old_resistance_shelf", "level": old_resistance_shelf.get("level"), "reason": "nearest historical resistance shelf used as projected execution target", "timeframe": "4h"} if old_resistance_shelf and old_resistance_shelf.get("level") is not None and float(old_resistance_shelf["level"]) > price else None),
+            _find_imbalance_target(candles_htf, "up", price, "1h"),
+            ({"type": "recent_high_1h", "level": high_htf, "reason": "nearest 1h resistance used as execution target", "timeframe": "1h"} if high_htf is not None and high_htf > price else None),
+            ({"type": "range_high", "level": range_high_4h, "reason": "4h range high used as structural execution target", "timeframe": "4h"} if range_high_4h is not None and range_high_4h > price else None),
+            ({"type": "major_swing_high_4h", "level": major_swing_high_4h, "reason": "major 4h swing high used as structural execution target", "timeframe": "4h"} if major_swing_high_4h is not None and major_swing_high_4h > price else None),
+            _find_imbalance_target(candles_macro, "up", price, "4h"),
+            ({"type": "previous_day_high", "level": previous_day_high, "reason": "previous day high used as extended execution target", "timeframe": "1d"} if previous_day_high is not None and previous_day_high > price else None),
+            ({"type": "previous_week_high", "level": previous_week_high, "reason": "previous week high used as extended execution target", "timeframe": "1w"} if previous_week_high is not None and previous_week_high > price else None),
+            ({"type": "recent_high_5m", "level": high_main, "reason": "5m fallback high used as execution target", "timeframe": "5m"} if high_main is not None and high_main > price else None),
+        ]
+        for item in candidates:
+            if item is not None and _enough_rr(item.get('level')):
+                return item
+        for item in candidates:
+            if item is not None:
+                return item
+        return {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
     if bias in {"bear_confirm", "bear_watch"}:
-        return (
-            ({"type": "old_support_shelf", "level": old_support_shelf.get("level"), "reason": "nearest historical support shelf used as projected execution target", "timeframe": "4h"} if old_support_shelf and old_support_shelf.get("level") is not None and float(old_support_shelf["level"]) < price else None)
-            or _find_imbalance_target(candles_htf, "down", price, "1h")
-            or ({"type": "recent_low_1h", "level": low_htf, "reason": "nearest 1h support used as execution target", "timeframe": "1h"} if low_htf is not None and low_htf < price else None)
-            or ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as structural execution target", "timeframe": "4h"} if range_low_4h is not None and range_low_4h < price else None)
-            or ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural execution target", "timeframe": "4h"} if major_swing_low_4h is not None and major_swing_low_4h < price else None)
-            or _find_imbalance_target(candles_macro, "down", price, "4h")
-            or ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as extended execution target", "timeframe": "1d"} if previous_day_low is not None and previous_day_low < price else None)
-            or ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended execution target", "timeframe": "1w"} if previous_week_low is not None and previous_week_low < price else None)
-            or ({"type": "recent_low_5m", "level": low_main, "reason": "5m fallback low used as execution target", "timeframe": "5m"} if low_main is not None and low_main < price else None)
-            or {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
-        )
+        candidates = [
+            ({"type": "old_support_shelf", "level": old_support_shelf.get("level"), "reason": "nearest historical support shelf used as projected execution target", "timeframe": "4h"} if old_support_shelf and old_support_shelf.get("level") is not None and float(old_support_shelf["level"]) < price else None),
+            _find_imbalance_target(candles_htf, "down", price, "1h"),
+            ({"type": "recent_low_1h", "level": low_htf, "reason": "nearest 1h support used as execution target", "timeframe": "1h"} if low_htf is not None and low_htf < price else None),
+            ({"type": "range_low", "level": range_low_4h, "reason": "4h range low used as structural execution target", "timeframe": "4h"} if range_low_4h is not None and range_low_4h < price else None),
+            ({"type": "major_swing_low_4h", "level": major_swing_low_4h, "reason": "major 4h swing low used as structural execution target", "timeframe": "4h"} if major_swing_low_4h is not None and major_swing_low_4h < price else None),
+            _find_imbalance_target(candles_macro, "down", price, "4h"),
+            ({"type": "previous_day_low", "level": previous_day_low, "reason": "previous day low used as extended execution target", "timeframe": "1d"} if previous_day_low is not None and previous_day_low < price else None),
+            ({"type": "previous_week_low", "level": previous_week_low, "reason": "previous week low used as extended execution target", "timeframe": "1w"} if previous_week_low is not None and previous_week_low < price else None),
+            ({"type": "recent_low_5m", "level": low_main, "reason": "5m fallback low used as execution target", "timeframe": "5m"} if low_main is not None and low_main < price else None),
+        ]
+        for item in candidates:
+            if item is not None and _enough_rr(item.get('level')):
+                return item
+        for item in candidates:
+            if item is not None:
+                return item
+        return {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
     return {"type": "none", "level": None, "reason": "no execution target", "timeframe": None}
 
 
@@ -602,8 +636,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     internal_bear_pivot_high = _latest_local_pivot(candles_main, direction="up", left=2, right=2)
     internal_bull_pivot_low = _latest_local_pivot(candles_main, direction="down", left=2, right=2)
-    external_swing_high = _latest_local_pivot(candles_main, direction="up", left=4, right=4) or _recent_pivot_level(candles_main, direction="up", lookback=18)
-    external_swing_low = _latest_local_pivot(candles_main, direction="down", left=4, right=4) or _recent_pivot_level(candles_main, direction="down", lookback=18)
+    external_swing_high, external_swing_low = _find_consistent_external_swings(candles_main)
 
     mss_bull = bool(spring_watch and internal_bear_pivot_high is not None and float(last["close"]) > float(internal_bear_pivot_high))
     mss_bear = bool(utad_watch and internal_bull_pivot_low is not None and float(last["close"]) < float(internal_bull_pivot_low))
@@ -749,6 +782,25 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         old_resistance_shelf=old_resistance_shelf,
         old_support_shelf=old_support_shelf,
     )
+    provisional_stop, _ = _resolve_structural_stop(
+        bias=bias,
+        entry_price=price,
+        high_main=high_main,
+        low_main=low_main,
+        high_htf=high_htf,
+        low_htf=low_htf,
+        major_swing_high_4h=major_swing_high_4h,
+        major_swing_low_4h=major_swing_low_4h,
+        entry_context=entry_liquidity_context,
+        today_london_high=today_london_high,
+        today_london_low=today_london_low,
+        today_asia_high=today_asia_high,
+        today_asia_low=today_asia_low,
+        sweep_up=sweep_up,
+        sweep_down=sweep_down,
+        last_high=float(last["high"]),
+        last_low=float(last["low"]),
+    )
     execution_target = _pick_execution_target(
         bias=bias,
         price=price,
@@ -770,6 +822,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         major_swing_low_4h=major_swing_low_4h,
         old_resistance_shelf=old_resistance_shelf,
         old_support_shelf=old_support_shelf,
+        stop_level=provisional_stop,
     )
 
     trade_target = execution_target.get("level")
