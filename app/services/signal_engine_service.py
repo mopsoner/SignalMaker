@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from statistics import mean
 
 from app.services.runtime_settings import get_runtime_signal_config
 from app.strategy.legacy_engine import build_signal
@@ -181,46 +180,6 @@ class SignalEngineService:
             'bos_bear': bool(signal.get('bos_bear')),
         }
 
-    def _tradability_profile(self, signal: dict, candles_5m: list[dict]) -> dict:
-        price = float(signal.get('price') or 0.0)
-        if not candles_5m:
-            return {'valid': False, 'score': 0, 'reason': 'no_5m_candles'}
-        recent = candles_5m[-24:]
-        closes = [float(c['close']) for c in recent]
-        highs = [float(c['high']) for c in recent]
-        lows = [float(c['low']) for c in recent]
-        volumes = [float(c.get('volume') or 0.0) for c in recent]
-        distinct_ratio = len(set(closes)) / max(len(closes), 1)
-        avg_range_pct = mean(((h - l) / c) for h, l, c in zip(highs, lows, closes) if c > 0 and h >= l) if closes else 0.0
-        nonzero_volume_ratio = sum(1 for v in volumes if v > 0) / max(len(volumes), 1)
-        score = 0
-        reasons = []
-        if price >= 0.005:
-            score += 1
-        else:
-            reasons.append('micro_price')
-        if distinct_ratio >= 0.55:
-            score += 1
-        else:
-            reasons.append('flat_5m_series')
-        if avg_range_pct >= 0.0015:
-            score += 1
-        else:
-            reasons.append('tiny_5m_range')
-        if nonzero_volume_ratio >= 0.85:
-            score += 1
-        else:
-            reasons.append('irregular_volume')
-        valid = score >= 3
-        return {
-            'valid': valid,
-            'score': score,
-            'reason': ','.join(reasons) if reasons else 'tradable',
-            'distinct_close_ratio': distinct_ratio,
-            'avg_range_pct_5m': avg_range_pct,
-            'nonzero_volume_ratio': nonzero_volume_ratio,
-        }
-
     def _preferred_macro_context(self, signal: dict) -> dict:
         bias = signal.get('bias') or 'neutral'
         price = float(signal.get('price') or 0.0)
@@ -279,7 +238,7 @@ class SignalEngineService:
                 return 'resistance_retest_watch', signal.get('state') or 'resistance_retest_watch'
         return signal.get('state') or 'neutral_watch', signal.get('state') or 'neutral_watch'
 
-    def _zone_validity(self, signal: dict, tradability: dict) -> dict:
+    def _zone_validity(self, signal: dict) -> dict:
         macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
         exec_target = (signal.get('execution_target') or {}).get('level')
@@ -290,11 +249,9 @@ class SignalEngineService:
             score += 2
         if refinement.get('valid'):
             score += 2
-        if tradability.get('valid'):
-            score += 2
         if target_ok:
             score += 2
-        valid = score >= 6
+        valid = score >= 4
         return {
             'valid': valid,
             'score': score,
@@ -306,11 +263,9 @@ class SignalEngineService:
         macro_window = self._macro_window_4h(signal, cfg)
         refinement = self._refinement_context_1h(signal, candles_1h)
         exec_trigger = self._execution_trigger_5m(signal)
-        tradability = self._tradability_profile(signal, candles_5m)
         signal['macro_window_4h'] = macro_window
         signal['refinement_context_1h'] = refinement
         signal['execution_trigger_5m'] = exec_trigger
-        signal['tradability_profile'] = tradability
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']
@@ -339,19 +294,18 @@ class SignalEngineService:
             block_reason = 'blocked_no_5m_confirm'
 
         state_label, fallback_state = self._coherent_state(signal)
-        zone_validity = self._zone_validity(signal, tradability)
+        zone_validity = self._zone_validity(signal)
         signal['zone_validity'] = zone_validity
         signal['hierarchy_block_reason'] = block_reason
 
         if signal.get('pipeline', {}).get('zone'):
-            if not macro_window.get('valid') or not refinement.get('valid') or not tradability.get('valid') or not zone_validity.get('target_ok'):
+            if not macro_window.get('valid') or not refinement.get('valid') or not zone_validity.get('target_ok'):
                 signal['pipeline']['zone'] = False
                 signal['zone_quality'] = 'weak'
                 signal['state'] = 'neutral_watch'
                 signal['bias'] = 'neutral'
             else:
                 signal['state'] = state_label
-                signal['score_breakdown']['market_quality'] = max(int(signal['score_breakdown'].get('market_quality', 0)), tradability.get('score', 0) - 2)
 
         if not allowed:
             signal['trigger'] = 'wait'
