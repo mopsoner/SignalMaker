@@ -259,6 +259,66 @@ class SignalEngineService:
             'reason': 'valid_zone' if valid else 'weak_zone_filters',
         }
 
+    def _compute_final_score(self, signal: dict) -> tuple[float, dict]:
+        base_score = float(signal.get('score') or 0.0)
+        macro_window = signal.get('macro_window_4h') or {}
+        refinement = signal.get('refinement_context_1h') or {}
+        exec_trigger = signal.get('execution_trigger_5m') or {}
+        zone_validity = signal.get('zone_validity') or {}
+        pipeline = signal.get('pipeline') or {}
+        state = signal.get('state') or ''
+        bias = signal.get('bias') or ''
+        block_reason = signal.get('hierarchy_block_reason')
+
+        adjustments = {
+            'macro_window': 0.0,
+            'refinement': 0.0,
+            'zone_validity': 0.0,
+            'confirm': 0.0,
+            'trade': 0.0,
+            'state_fit': 0.0,
+            'block_penalty': 0.0,
+        }
+
+        if macro_window.get('valid'):
+            adjustments['macro_window'] += 2.0
+            if macro_window.get('side') != 'neutral' and bias.startswith(macro_window.get('side', '')):
+                adjustments['macro_window'] += 1.0
+        else:
+            adjustments['block_penalty'] -= 2.0
+
+        if refinement.get('valid'):
+            adjustments['refinement'] += 2.0
+        else:
+            adjustments['refinement'] -= 1.0
+
+        if zone_validity.get('valid'):
+            adjustments['zone_validity'] += 2.0
+        else:
+            adjustments['zone_validity'] -= 1.0
+
+        if exec_trigger.get('valid'):
+            adjustments['confirm'] += 2.0
+        if pipeline.get('trade'):
+            adjustments['trade'] += 3.0
+        elif pipeline.get('confirm'):
+            adjustments['trade'] += 1.0
+
+        if state in {'discount_4h_reclaim_watch', 'premium_4h_rejection_watch'}:
+            adjustments['state_fit'] += 1.0
+        elif state in {'support_retest_watch', 'resistance_retest_watch'}:
+            adjustments['state_fit'] += 0.5
+        elif state == 'neutral_watch':
+            adjustments['state_fit'] -= 1.0
+
+        if block_reason == 'blocked_no_5m_confirm':
+            adjustments['block_penalty'] -= 0.5
+        elif block_reason in {'blocked_no_1h_setup', 'blocked_no_4h_bull_window', 'blocked_no_4h_bear_window'}:
+            adjustments['block_penalty'] -= 1.5
+
+        final_score = max(0.0, base_score + sum(adjustments.values()))
+        return final_score, adjustments
+
     def _apply_hierarchy(self, signal: dict, candles_1h: list[dict], candles_5m: list[dict], cfg: dict) -> dict:
         macro_window = self._macro_window_4h(signal, cfg)
         refinement = self._refinement_context_1h(signal, candles_1h)
@@ -327,6 +387,10 @@ class SignalEngineService:
                 'stop': None,
                 'target': None,
             }
+
+        final_score, final_score_breakdown = self._compute_final_score(signal)
+        signal['final_score'] = final_score
+        signal['final_score_breakdown'] = final_score_breakdown
         return signal
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
