@@ -18,8 +18,15 @@ function stateContext(row, key) {
   return row?.state_payload?.[key] || null
 }
 
+function displayScore(row) {
+  const finalScore = stateContext(row, 'final_score')
+  if (finalScore !== null && finalScore !== undefined) return Number(finalScore)
+  return Number(row.score || 0)
+}
+
 function summarizeScore(row) {
   const breakdown = row?.state_payload?.score_breakdown
+  const finalBreakdown = row?.state_payload?.final_score_breakdown
   if (!breakdown) return '—'
   const parts = [
     `L${breakdown.liquidity || 0}`,
@@ -37,7 +44,8 @@ function summarizeScore(row) {
   if (row?.state_payload?.mss_bear) mssBos.push('MSS↓')
   if (row?.state_payload?.bos_bull) mssBos.push('BOS↑')
   if (row?.state_payload?.bos_bear) mssBos.push('BOS↓')
-  return `${parts.join(' · ')}${mssBos.length ? ` · ${mssBos.join(' / ')}` : ''}`
+  const finalInfo = finalBreakdown ? ` · F${fmtNumber(displayScore(row), 1)}` : ''
+  return `${parts.join(' · ')}${mssBos.length ? ` · ${mssBos.join(' / ')}` : ''}${finalInfo}`
 }
 
 function summarizeWindow(row) {
@@ -66,7 +74,7 @@ export default function DashboardPage() {
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
   const confirmCount = assets.filter((item) => item.stage === 'confirm').length
   const zoneCount = assets.filter((item) => item.stage === 'zone').length
-  const avgScore = assets.length ? (assets.reduce((sum, item) => sum + (item.score || 0), 0) / assets.length).toFixed(2) : '0.00'
+  const avgScore = assets.length ? (assets.reduce((sum, item) => sum + displayScore(item), 0) / assets.length).toFixed(2) : '0.00'
 
   const sessionCounts = useMemo(() => assets.reduce((acc, item) => {
     const key = item.session || 'unknown'
@@ -74,7 +82,7 @@ export default function DashboardPage() {
     return acc
   }, {}), [assets])
 
-  const strongestAssets = useMemo(() => [...assets].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6), [assets])
+  const strongestAssets = useMemo(() => [...assets].sort((a, b) => displayScore(b) - displayScore(a)).slice(0, 6), [assets])
   const strongZoneCount = useMemo(() => assets.filter((item) => stateContext(item, 'zone_validity')?.valid).length, [assets])
 
   const columns = [
@@ -93,7 +101,7 @@ export default function DashboardPage() {
     { key: 'state', title: 'State', render: (row) => row?.state_payload?.state || '—', sortValue: (row) => row?.state_payload?.state || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
-    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
     { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
@@ -110,7 +118,7 @@ export default function DashboardPage() {
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
     { key: 'state', title: 'State', render: (row) => row?.state_payload?.state || '—', sortValue: (row) => row?.state_payload?.state || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
-    { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
     { key: 'score_breakdown', title: 'Breakdown', render: (row) => summarizeScore(row), sortValue: (row) => JSON.stringify(row?.state_payload?.score_breakdown || {}) },
   ]
 
