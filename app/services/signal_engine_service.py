@@ -260,7 +260,7 @@ class SignalEngineService:
         }
 
     def _compute_final_score(self, signal: dict) -> tuple[float, dict]:
-        base_score = float(signal.get('score') or 0.0)
+        base_score = float(signal.get('legacy_score', signal.get('score') or 0.0))
         macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
         exec_trigger = signal.get('execution_trigger_5m') or {}
@@ -388,9 +388,12 @@ class SignalEngineService:
                 'target': None,
             }
 
+        signal['legacy_score'] = float(signal.get('score') or 0.0)
+        signal['legacy_score_breakdown'] = dict(signal.get('score_breakdown') or {})
         final_score, final_score_breakdown = self._compute_final_score(signal)
         signal['final_score'] = final_score
         signal['final_score_breakdown'] = final_score_breakdown
+        signal['score'] = final_score
         return signal
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
