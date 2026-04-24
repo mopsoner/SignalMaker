@@ -16,8 +16,50 @@ def lows(candles: list[dict[str, Any]]) -> list[float]:
     return [c["low"] for c in candles]
 
 
+def _trade_count(candle: dict[str, Any]) -> int:
+    return int(candle.get("number_of_trades") or candle.get("trades") or 0)
+
+
+def _trade_count_ok(candles: list[dict[str, Any]], index: int) -> bool:
+    """Reject volume confirmation on candles with too few actual trades.
+
+    Binance quote volume can occasionally look usable on thin books while the
+    candle was built from only a few executions. We accept either an absolute
+    minimum of trades or a relative spike versus the recent local average.
+    """
+    if not candles:
+        return False
+    candle = candles[index]
+    trade_count = _trade_count(candle)
+    if trade_count >= 30:
+        return True
+
+    start = max(0, index - 19)
+    window = candles[start:index + 1]
+    trade_counts = [_trade_count(c) for c in window]
+    avg_trades = sum(trade_counts) / len(trade_counts) if trade_counts else 0.0
+    if avg_trades <= 0:
+        # Backward compatibility: old stored candles have no trade count yet.
+        # Do not block them forever; new Binance candles will populate this.
+        return True
+    return (trade_count / avg_trades) >= 1.2
+
+
 def volumes(candles: list[dict[str, Any]]) -> list[float]:
-    return [float(c.get("volume", 0.0) or 0.0) for c in candles]
+    """Return the execution-quality volume series used by confirmations.
+
+    Prefer Binance quote asset volume because it is normalized in the quote
+    currency, usually USDT, and is more comparable across altcoins than base
+    asset volume. Apply the number_of_trades quality gate to the latest candle
+    so a reclaim/MSS/BOS confirmation is not boosted by a very thin candle.
+    """
+    out: list[float] = []
+    for idx, candle in enumerate(candles):
+        value = float(candle.get("quote_volume") or candle.get("quoteVolume") or candle.get("volume", 0.0) or 0.0)
+        if idx == len(candles) - 1 and not _trade_count_ok(candles, idx):
+            value = 0.0
+        out.append(value)
+    return out
 
 
 def rsi(values: list[float], period: int = 14) -> float | None:
