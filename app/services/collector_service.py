@@ -108,22 +108,81 @@ class CollectorService:
             'pipeline_intervals': list(PIPELINE_INTERVALS),
         }
 
+    def _runtime_csv(self, key: str) -> list[str]:
+        return [
+            item.strip().upper()
+            for item in str(self.runtime['binance'].get(key, '')).split(',')
+            if item.strip()
+        ]
+
+    def _fetch_24h_stats(self) -> dict[str, dict[str, Any]]:
+        rows = self._get('/api/v3/ticker/24hr')
+        return {str(row.get('symbol', '')).upper(): row for row in rows if row.get('symbol')}
+
     def discover_symbols(self, limit: int | None = None) -> list[str]:
         info = self._get('/api/v3/exchangeInfo')
-        out: list[str] = []
-        allowed_quotes = [item.strip().upper() for item in self.runtime['binance']['binance_quote_assets'].split(',') if item.strip()]
+        stats_24h = self._fetch_24h_stats()
+        allowed_quotes = self._runtime_csv('binance_quote_assets')
+        excluded_bases = set(self._runtime_csv('binance_excluded_base_assets'))
         status_name = self.runtime['binance']['binance_symbol_status']
-        max_symbols = self.runtime['binance']['binance_max_symbols']
+        max_symbols = int(limit or self.runtime['binance']['binance_max_symbols'])
+        min_quote_volume = float(self.runtime['binance'].get('binance_min_quote_volume_24h', 0) or 0)
+        min_trades = int(self.runtime['binance'].get('binance_min_trades_24h', 0) or 0)
+
+        ranked: list[dict[str, Any]] = []
+        fallback: list[str] = []
         for row in info.get('symbols', []):
+            symbol = str(row.get('symbol', '')).upper()
+            base_asset = str(row.get('baseAsset', '')).upper()
+            quote_asset = str(row.get('quoteAsset', '')).upper()
             if row.get('status') != status_name:
                 continue
-            if row.get('quoteAsset') not in allowed_quotes:
+            if quote_asset not in allowed_quotes:
+                continue
+            if base_asset in excluded_bases:
                 continue
             if not row.get('isSpotTradingAllowed', False):
                 continue
-            out.append(row['symbol'])
-        out = sorted(set(out))
-        return out[: (limit or max_symbols)]
+
+            stats = stats_24h.get(symbol) or {}
+            quote_volume = float(stats.get('quoteVolume') or 0.0)
+            trade_count = int(stats.get('count') or 0)
+            fallback.append(symbol)
+            if quote_volume < min_quote_volume:
+                continue
+            if trade_count < min_trades:
+                continue
+            ranked.append({
+                'symbol': symbol,
+                'quote_volume': quote_volume,
+                'trade_count': trade_count,
+                'price_change_pct': abs(float(stats.get('priceChangePercent') or 0.0)),
+            })
+
+        ranked = sorted(
+            ranked,
+            key=lambda item: (
+                item['quote_volume'],
+                item['trade_count'],
+                item['price_change_pct'],
+                item['symbol'],
+            ),
+            reverse=True,
+        )
+        symbols = [item['symbol'] for item in ranked[:max_symbols]]
+        if symbols:
+            logger.info(
+                "Discovered %d symbols by 24h liquidity. Top=%s min_quote_volume=%s min_trades=%s",
+                len(symbols), symbols[:10], min_quote_volume, min_trades,
+            )
+            return symbols
+
+        fallback = sorted(set(fallback))[:max_symbols]
+        logger.warning(
+            "No symbols passed liquidity filters; falling back to alphabetical discovery. min_quote_volume=%s min_trades=%s fallback=%d",
+            min_quote_volume, min_trades, len(fallback),
+        )
+        return fallback
 
     def fetch_klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict[str, Any]]:
         if limit <= 0:
