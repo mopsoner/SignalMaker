@@ -142,6 +142,10 @@ class CollectorService:
                 'close': float(r[4]),
                 'volume': float(r[5]),
                 'close_time': int(r[6]),
+                'quote_volume': float(r[7]),
+                'number_of_trades': int(r[8]),
+                'taker_buy_base_volume': float(r[9]),
+                'taker_buy_quote_volume': float(r[10]),
             }
             for r in raw
             if int(r[6]) <= now_ms
