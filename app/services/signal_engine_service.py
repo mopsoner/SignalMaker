@@ -24,6 +24,18 @@ class SignalEngineService:
             return False
         return abs(price - level) / price <= pct
 
+    def _level(self, level_type: str, level: float | None, timeframe: str, side: str, source: str, quality: int) -> dict | None:
+        if level is None:
+            return None
+        return {
+            'type': level_type,
+            'level': level,
+            'timeframe': timeframe,
+            'side': side,
+            'source': source,
+            'quality': quality,
+        }
+
     def _macro_window_4h(self, signal: dict, cfg: dict) -> dict:
         price = float(signal.get('price') or 0.0)
         rsi_macro = signal.get('rsi_macro')
@@ -123,6 +135,9 @@ class SignalEngineService:
         h = [float(c['high']) for c in candles_1h[-8:]] if candles_1h else []
         l = [float(c['low']) for c in candles_1h[-8:]] if candles_1h else []
         c_last = candles_1h[-1] if candles_1h else None
+        last_high = float(c_last['high']) if c_last else None
+        last_low = float(c_last['low']) if c_last else None
+        last_close = float(c_last['close']) if c_last else None
         prev_high = max(h[:-1]) if len(h) > 1 else None
         prev_low = min(l[:-1]) if len(l) > 1 else None
         utad = bool(c_last and prev_high is not None and float(c_last['high']) > prev_high and float(c_last['close']) < prev_high)
@@ -131,9 +146,17 @@ class SignalEngineService:
         near_high = self._near(price, range_high_1h, near_pct)
         near_low = self._near(price, range_low_1h, near_pct)
 
+        base = {
+            'last_high_1h': last_high,
+            'last_low_1h': last_low,
+            'last_close_1h': last_close,
+            'previous_high_1h': prev_high,
+            'previous_low_1h': prev_low,
+        }
         if bias.startswith('bear'):
             valid = bool(utad or near_high or (eq_highs and near_entry) or (near_entry and near_high))
             return {
+                **base,
                 'valid': valid,
                 'side': 'bear',
                 'reason': '1h_utad_or_resistance_retest' if valid else 'no_1h_bear_setup',
@@ -147,6 +170,7 @@ class SignalEngineService:
         if bias.startswith('bull'):
             valid = bool(spring or near_low or (eq_lows and near_entry) or (near_entry and near_low))
             return {
+                **base,
                 'valid': valid,
                 'side': 'bull',
                 'reason': '1h_spring_or_support_retest' if valid else 'no_1h_bull_setup',
@@ -158,6 +182,7 @@ class SignalEngineService:
                 'equal_lows_1h': eq_lows,
             }
         return {
+            **base,
             'valid': False,
             'side': 'neutral',
             'reason': 'neutral_bias',
@@ -169,30 +194,118 @@ class SignalEngineService:
             'equal_lows_1h': eq_lows,
         }
 
+    def _wyckoff_event_level(self, signal: dict) -> dict:
+        bias = signal.get('bias') or 'neutral'
+        price = float(signal.get('price') or 0.0)
+        macro_ctx = signal.get('macro_liquidity_context') or signal.get('liquidity_context') or {}
+        entry_ctx = signal.get('entry_liquidity_context') or {}
+        old_res = signal.get('old_resistance_shelf') or {}
+        old_sup = signal.get('old_support_shelf') or {}
+        candidates = []
+
+        if bias.startswith('bear'):
+            raw = [
+                self._level(macro_ctx.get('type', 'macro_context'), macro_ctx.get('level'), macro_ctx.get('timeframe') or '4h', 'bear', 'macro_context', 100),
+                self._level('previous_week_high', signal.get('previous_week_high'), '1w', 'bear', 'previous_week', 90),
+                self._level('previous_day_high', signal.get('previous_day_high'), '1d', 'bear', 'previous_day', 85),
+                self._level('range_high_4h', signal.get('range_high_4h'), '4h', 'bear', 'range', 80),
+                self._level('major_swing_high_4h', signal.get('major_swing_high_4h'), '4h', 'bear', 'swing', 75),
+                self._level(old_res.get('type', 'old_resistance_shelf'), old_res.get('level'), old_res.get('timeframe') or '4h', 'bear', 'shelf', 70),
+                self._level('range_high_1h', signal.get('range_high_1h'), '1h', 'bear', 'range', 60),
+                self._level(entry_ctx.get('type', 'entry_context'), entry_ctx.get('level'), entry_ctx.get('timeframe') or '5m', 'bear', 'entry_fallback', 20),
+            ]
+            candidates = [c for c in raw if c and c.get('level') is not None]
+        elif bias.startswith('bull'):
+            raw = [
+                self._level(macro_ctx.get('type', 'macro_context'), macro_ctx.get('level'), macro_ctx.get('timeframe') or '4h', 'bull', 'macro_context', 100),
+                self._level('previous_week_low', signal.get('previous_week_low'), '1w', 'bull', 'previous_week', 90),
+                self._level('previous_day_low', signal.get('previous_day_low'), '1d', 'bull', 'previous_day', 85),
+                self._level('range_low_4h', signal.get('range_low_4h'), '4h', 'bull', 'range', 80),
+                self._level('major_swing_low_4h', signal.get('major_swing_low_4h'), '4h', 'bull', 'swing', 75),
+                self._level(old_sup.get('type', 'old_support_shelf'), old_sup.get('level'), old_sup.get('timeframe') or '4h', 'bull', 'shelf', 70),
+                self._level('range_low_1h', signal.get('range_low_1h'), '1h', 'bull', 'range', 60),
+                self._level(entry_ctx.get('type', 'entry_context'), entry_ctx.get('level'), entry_ctx.get('timeframe') or '5m', 'bull', 'entry_fallback', 20),
+            ]
+            candidates = [c for c in raw if c and c.get('level') is not None]
+
+        if not candidates:
+            return {'valid': False, 'type': 'none', 'level': None, 'reason': 'no_wyckoff_event_level'}
+
+        seen = set()
+        deduped = []
+        for c in candidates:
+            key = (c['type'], c['timeframe'], round(float(c['level']), 12))
+            if key not in seen:
+                seen.add(key)
+                distance_pct = abs(price - float(c['level'])) / price if price > 0 else None
+                c['distance_pct'] = distance_pct
+                deduped.append(c)
+
+        # Prefer structural HTF levels, then closest distance. 5m is only a fallback.
+        selected = sorted(deduped, key=lambda x: (-int(x.get('quality', 0)), x.get('distance_pct') if x.get('distance_pct') is not None else 999))[0]
+        level = float(selected['level'])
+        if bias.startswith('bear'):
+            selected['swept'] = bool(price > level)
+            selected['reclaimed'] = bool(price < level)
+        elif bias.startswith('bull'):
+            selected['swept'] = bool(price < level)
+            selected['reclaimed'] = bool(price > level)
+        selected['valid'] = True
+        selected['reason'] = 'structural Wyckoff event level selected before local entry context'
+        return selected
+
     def _wyckoff_requirement(self, signal: dict) -> dict:
         bias = signal.get('bias') or 'neutral'
         macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
         exec_trigger = signal.get('execution_trigger_5m') or {}
-        entry_ctx = signal.get('entry_liquidity_context') or {}
+        event_level = signal.get('wyckoff_event_level') or {}
         price = float(signal.get('price') or 0.0)
-        level = entry_ctx.get('level')
+        level = event_level.get('level')
+        last_high = refinement.get('last_high_1h')
+        last_low = refinement.get('last_low_1h')
+        last_close = refinement.get('last_close_1h')
         distance_pct = abs(price - level) / price if price > 0 and level is not None else None
 
         if bias.startswith('bear'):
             expected = 'utad'
-            event_confirmed = bool(refinement.get('utad_watch_1h'))
-            setup_ready = bool(event_confirmed or (refinement.get('near_range_high_1h') and refinement.get('equal_highs_1h')))
-            status = 'confirmed' if event_confirmed else 'setup_ready' if setup_ready else 'waiting'
-            reason = '1h UTAD confirmed' if event_confirmed else 'near 1h resistance/equal highs, waiting for UTAD or 5m breakdown' if setup_ready else 'bear window valid but no 1h UTAD/sweep/rejection yet'
+            swept = bool(level is not None and ((last_high is not None and last_high > level) or price > level))
+            rejected = bool(swept and level is not None and ((last_close is not None and last_close < level) or price < level))
+            event_confirmed = bool(refinement.get('utad_watch_1h') or rejected)
+            setup_ready = bool(swept or event_confirmed)
+            if event_confirmed and exec_trigger.get('valid'):
+                status = 'execution_ready'
+                reason = 'UTAD/rejection confirmed and 5m structure confirmed'
+            elif event_confirmed:
+                status = 'rejected_waiting_5m_confirm'
+                reason = 'liquidity swept, rejection detected, waiting for 5m MSS/BOS bear'
+            elif swept:
+                status = 'swept_waiting_rejection'
+                reason = 'price swept structural resistance, waiting for rejection below level or 5m breakdown'
+            else:
+                status = 'waiting_sweep'
+                reason = 'bear window valid, waiting for sweep/UTAD of structural resistance'
         elif bias.startswith('bull'):
             expected = 'spring'
-            event_confirmed = bool(refinement.get('spring_watch_1h'))
-            setup_ready = bool(event_confirmed or (refinement.get('near_range_low_1h') and refinement.get('equal_lows_1h')))
-            status = 'confirmed' if event_confirmed else 'setup_ready' if setup_ready else 'waiting'
-            reason = '1h Spring confirmed' if event_confirmed else 'near 1h support/equal lows, waiting for Spring or 5m reclaim' if setup_ready else 'bull window valid but no 1h Spring/sweep/reclaim yet'
+            swept = bool(level is not None and ((last_low is not None and last_low < level) or price < level))
+            reclaimed = bool(swept and level is not None and ((last_close is not None and last_close > level) or price > level))
+            event_confirmed = bool(refinement.get('spring_watch_1h') or reclaimed)
+            setup_ready = bool(swept or event_confirmed)
+            if event_confirmed and exec_trigger.get('valid'):
+                status = 'execution_ready'
+                reason = 'Spring/reclaim confirmed and 5m structure confirmed'
+            elif event_confirmed:
+                status = 'reclaimed_waiting_5m_confirm'
+                reason = 'liquidity swept, reclaim detected, waiting for 5m MSS/BOS bull'
+            elif swept:
+                status = 'swept_waiting_reclaim'
+                reason = 'price swept structural support, waiting for reclaim above level or 5m reclaim'
+            else:
+                status = 'waiting_sweep'
+                reason = 'bull window valid, waiting for sweep/Spring of structural support'
         else:
             expected = 'none'
+            swept = False
             event_confirmed = False
             setup_ready = False
             status = 'not_required'
@@ -201,9 +314,6 @@ class SignalEngineService:
         if not macro_window.get('valid'):
             status = 'blocked'
             reason = '4h window not valid for Wyckoff event'
-        elif exec_trigger.get('valid') and event_confirmed:
-            status = 'execution_ready'
-            reason = f'{expected} confirmed and 5m structure confirmed'
 
         return {
             'needed': bias.startswith('bull') or bias.startswith('bear'),
@@ -211,7 +321,9 @@ class SignalEngineService:
             'status': status,
             'confirmed': event_confirmed,
             'setup_ready': setup_ready,
-            'timeframe': '1h',
+            'swept': swept,
+            'timeframe': event_level.get('timeframe') or '1h',
+            'event_level': event_level,
             'entry_level': level,
             'distance_pct': distance_pct,
             'reason': reason,
@@ -269,45 +381,54 @@ class SignalEngineService:
         bias = signal.get('bias') or 'neutral'
         rsi_htf = signal.get('rsi_htf')
         macro_window = signal.get('macro_window_4h') or {}
-        refinement = signal.get('refinement_context_1h') or {}
         wyckoff = signal.get('wyckoff_requirement') or {}
+        status = wyckoff.get('status')
         if bias.startswith('bull'):
             if rsi_htf is not None and rsi_htf >= 78:
                 return 'liquidity', 'neutral_watch'
-            if macro_window.get('valid') and refinement.get('valid'):
-                if wyckoff.get('status') == 'confirmed':
-                    return 'spring_confirmed_watch', 'support_retest_watch'
-                if wyckoff.get('status') == 'setup_ready':
-                    return 'awaiting_spring_watch', 'support_retest_watch'
+            if macro_window.get('valid'):
+                if status == 'execution_ready':
+                    return 'spring_execution_ready', 'spring_execution_ready'
+                if status == 'reclaimed_waiting_5m_confirm':
+                    return 'spring_confirmed_watch', 'spring_confirmed_watch'
+                if status == 'swept_waiting_reclaim':
+                    return 'awaiting_reclaim_watch', 'awaiting_reclaim_watch'
+                if status == 'waiting_sweep':
+                    return 'awaiting_spring_watch', 'awaiting_spring_watch'
                 if 'discount' in str(macro_window.get('reason', '')) or macro_window.get('near_support_4h'):
                     return 'discount_4h_reclaim_watch', 'support_retest_watch'
-                return 'support_retest_watch', signal.get('state') or 'support_retest_watch'
         if bias.startswith('bear'):
             if rsi_htf is not None and rsi_htf <= 22:
                 return 'liquidity', 'neutral_watch'
-            if macro_window.get('valid') and refinement.get('valid'):
-                if wyckoff.get('status') == 'confirmed':
-                    return 'utad_confirmed_watch', 'resistance_retest_watch'
-                if wyckoff.get('status') == 'setup_ready':
-                    return 'awaiting_utad_watch', 'resistance_retest_watch'
+            if macro_window.get('valid'):
+                if status == 'execution_ready':
+                    return 'utad_execution_ready', 'utad_execution_ready'
+                if status == 'rejected_waiting_5m_confirm':
+                    return 'utad_confirmed_watch', 'utad_confirmed_watch'
+                if status == 'swept_waiting_rejection':
+                    return 'awaiting_rejection_watch', 'awaiting_rejection_watch'
+                if status == 'waiting_sweep':
+                    return 'awaiting_utad_watch', 'awaiting_utad_watch'
                 if 'premium' in str(macro_window.get('reason', '')) or macro_window.get('near_resistance_4h'):
                     return 'premium_4h_rejection_watch', 'resistance_retest_watch'
-                return 'resistance_retest_watch', signal.get('state') or 'resistance_retest_watch'
         return signal.get('state') or 'neutral_watch', signal.get('state') or 'neutral_watch'
 
     def _zone_validity(self, signal: dict) -> dict:
         macro_window = signal.get('macro_window_4h') or {}
-        refinement = signal.get('refinement_context_1h') or {}
         wyckoff = signal.get('wyckoff_requirement') or {}
         exec_target = (signal.get('execution_target') or {}).get('level')
         projected_target = (signal.get('projected_target') or {}).get('level')
         target_ok = exec_target is not None or projected_target is not None
-        wyckoff_ok = wyckoff.get('status') in {'setup_ready', 'confirmed', 'execution_ready'}
+        wyckoff_ok = wyckoff.get('status') in {
+            'swept_waiting_rejection',
+            'swept_waiting_reclaim',
+            'rejected_waiting_5m_confirm',
+            'reclaimed_waiting_5m_confirm',
+            'execution_ready',
+        }
         score = 0
         if macro_window.get('valid'):
             score += 2
-        if refinement.get('valid'):
-            score += 1
         if wyckoff_ok:
             score += 2
         if target_ok:
@@ -354,16 +475,16 @@ class SignalEngineService:
         if refinement.get('valid'):
             adjustments['refinement'] += 1.0
         else:
-            adjustments['refinement'] -= 1.0
+            adjustments['refinement'] -= 0.5
 
         wyckoff_status = wyckoff.get('status')
         if wyckoff_status == 'execution_ready':
             adjustments['wyckoff'] += 3.0
-        elif wyckoff_status == 'confirmed':
+        elif wyckoff_status in {'rejected_waiting_5m_confirm', 'reclaimed_waiting_5m_confirm'}:
             adjustments['wyckoff'] += 2.5
-        elif wyckoff_status == 'setup_ready':
+        elif wyckoff_status in {'swept_waiting_rejection', 'swept_waiting_reclaim'}:
             adjustments['wyckoff'] += 1.5
-        elif wyckoff_status == 'waiting':
+        elif wyckoff_status == 'waiting_sweep':
             adjustments['wyckoff'] -= 0.5
         elif wyckoff_status == 'blocked':
             adjustments['wyckoff'] -= 1.5
@@ -380,23 +501,25 @@ class SignalEngineService:
         elif pipeline.get('confirm'):
             adjustments['trade'] += 1.0
 
-        if state in {'spring_confirmed_watch', 'utad_confirmed_watch'}:
+        if state in {'spring_execution_ready', 'utad_execution_ready'}:
+            adjustments['state_fit'] += 2.0
+        elif state in {'spring_confirmed_watch', 'utad_confirmed_watch'}:
             adjustments['state_fit'] += 1.5
-        elif state in {'awaiting_spring_watch', 'awaiting_utad_watch'}:
+        elif state in {'awaiting_reclaim_watch', 'awaiting_rejection_watch'}:
             adjustments['state_fit'] += 1.0
+        elif state in {'awaiting_spring_watch', 'awaiting_utad_watch'}:
+            adjustments['state_fit'] += 0.5
         elif state in {'discount_4h_reclaim_watch', 'premium_4h_rejection_watch'}:
-            adjustments['state_fit'] += 0.75
-        elif state in {'support_retest_watch', 'resistance_retest_watch'}:
-            adjustments['state_fit'] += 0.25
+            adjustments['state_fit'] += 0.5
         elif state == 'neutral_watch':
             adjustments['state_fit'] -= 1.0
 
         if block_reason == 'blocked_no_5m_confirm':
             adjustments['block_penalty'] -= 0.25
-        elif block_reason in {'blocked_no_wyckoff_event'}:
-            adjustments['block_penalty'] -= 1.0
+        elif block_reason == 'blocked_no_wyckoff_event':
+            adjustments['block_penalty'] -= 0.75
         elif block_reason in {'blocked_no_1h_setup', 'blocked_no_4h_bull_window', 'blocked_no_4h_bear_window'}:
-            adjustments['block_penalty'] -= 1.5
+            adjustments['block_penalty'] -= 1.25
 
         final_score = max(0.0, base_score + sum(adjustments.values()))
         return final_score, adjustments
@@ -411,6 +534,7 @@ class SignalEngineService:
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']
+        signal['wyckoff_event_level'] = self._wyckoff_event_level(signal)
         signal['wyckoff_requirement'] = self._wyckoff_requirement(signal)
 
         bias = signal.get('bias') or 'neutral'
@@ -430,10 +554,7 @@ class SignalEngineService:
         else:
             block_reason = 'blocked_neutral_bias'
 
-        if allowed and not refinement['valid']:
-            allowed = False
-            block_reason = 'blocked_no_1h_setup'
-        if allowed and wyckoff.get('status') not in {'confirmed', 'execution_ready'}:
+        if allowed and wyckoff.get('status') not in {'rejected_waiting_5m_confirm', 'reclaimed_waiting_5m_confirm', 'execution_ready'}:
             allowed = False
             block_reason = 'blocked_no_wyckoff_event'
         if allowed and not exec_trigger['valid']:
@@ -446,11 +567,10 @@ class SignalEngineService:
         signal['hierarchy_block_reason'] = block_reason
 
         if signal.get('pipeline', {}).get('zone'):
-            if not macro_window.get('valid') or not zone_validity.get('target_ok'):
+            if not zone_validity.get('valid'):
                 signal['pipeline']['zone'] = False
                 signal['zone_quality'] = 'weak'
-                signal['state'] = 'neutral_watch'
-                signal['bias'] = 'neutral'
+                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'neutral_watch'
             else:
                 signal['state'] = state_label
 
@@ -458,22 +578,16 @@ class SignalEngineService:
             signal['trigger'] = 'wait'
             if bias.startswith('bear'):
                 signal['bias'] = 'bear_watch'
-                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'awaiting_utad_watch'
+                signal['state'] = state_label if state_label != 'neutral_watch' else 'awaiting_utad_watch'
             elif bias.startswith('bull'):
                 signal['bias'] = 'bull_watch'
-                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'awaiting_spring_watch'
+                signal['state'] = state_label if state_label != 'neutral_watch' else 'awaiting_spring_watch'
             else:
                 signal['bias'] = 'neutral'
                 signal['state'] = 'neutral_watch'
             signal['pipeline']['confirm'] = False
             signal['pipeline']['trade'] = False
-            signal['trade'] = {
-                'status': 'watch',
-                'side': 'none',
-                'entry': None,
-                'stop': None,
-                'target': None,
-            }
+            signal['trade'] = {'status': 'watch', 'side': 'none', 'entry': None, 'stop': None, 'target': None}
 
         signal['legacy_score'] = float(signal.get('score') or 0.0)
         signal['legacy_score_breakdown'] = dict(signal.get('score_breakdown') or {})
