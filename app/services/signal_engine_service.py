@@ -169,6 +169,54 @@ class SignalEngineService:
             'equal_lows_1h': eq_lows,
         }
 
+    def _wyckoff_requirement(self, signal: dict) -> dict:
+        bias = signal.get('bias') or 'neutral'
+        macro_window = signal.get('macro_window_4h') or {}
+        refinement = signal.get('refinement_context_1h') or {}
+        exec_trigger = signal.get('execution_trigger_5m') or {}
+        entry_ctx = signal.get('entry_liquidity_context') or {}
+        price = float(signal.get('price') or 0.0)
+        level = entry_ctx.get('level')
+        distance_pct = abs(price - level) / price if price > 0 and level is not None else None
+
+        if bias.startswith('bear'):
+            expected = 'utad'
+            event_confirmed = bool(refinement.get('utad_watch_1h'))
+            setup_ready = bool(event_confirmed or (refinement.get('near_range_high_1h') and refinement.get('equal_highs_1h')))
+            status = 'confirmed' if event_confirmed else 'setup_ready' if setup_ready else 'waiting'
+            reason = '1h UTAD confirmed' if event_confirmed else 'near 1h resistance/equal highs, waiting for UTAD or 5m breakdown' if setup_ready else 'bear window valid but no 1h UTAD/sweep/rejection yet'
+        elif bias.startswith('bull'):
+            expected = 'spring'
+            event_confirmed = bool(refinement.get('spring_watch_1h'))
+            setup_ready = bool(event_confirmed or (refinement.get('near_range_low_1h') and refinement.get('equal_lows_1h')))
+            status = 'confirmed' if event_confirmed else 'setup_ready' if setup_ready else 'waiting'
+            reason = '1h Spring confirmed' if event_confirmed else 'near 1h support/equal lows, waiting for Spring or 5m reclaim' if setup_ready else 'bull window valid but no 1h Spring/sweep/reclaim yet'
+        else:
+            expected = 'none'
+            event_confirmed = False
+            setup_ready = False
+            status = 'not_required'
+            reason = 'neutral bias'
+
+        if not macro_window.get('valid'):
+            status = 'blocked'
+            reason = '4h window not valid for Wyckoff event'
+        elif exec_trigger.get('valid') and event_confirmed:
+            status = 'execution_ready'
+            reason = f'{expected} confirmed and 5m structure confirmed'
+
+        return {
+            'needed': bias.startswith('bull') or bias.startswith('bear'),
+            'expected': expected,
+            'status': status,
+            'confirmed': event_confirmed,
+            'setup_ready': setup_ready,
+            'timeframe': '1h',
+            'entry_level': level,
+            'distance_pct': distance_pct,
+            'reason': reason,
+        }
+
     def _execution_trigger_5m(self, signal: dict) -> dict:
         return {
             'valid': bool(signal.get('pipeline', {}).get('confirm')),
@@ -222,10 +270,15 @@ class SignalEngineService:
         rsi_htf = signal.get('rsi_htf')
         macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
+        wyckoff = signal.get('wyckoff_requirement') or {}
         if bias.startswith('bull'):
             if rsi_htf is not None and rsi_htf >= 78:
                 return 'liquidity', 'neutral_watch'
             if macro_window.get('valid') and refinement.get('valid'):
+                if wyckoff.get('status') == 'confirmed':
+                    return 'spring_confirmed_watch', 'support_retest_watch'
+                if wyckoff.get('status') == 'setup_ready':
+                    return 'awaiting_spring_watch', 'support_retest_watch'
                 if 'discount' in str(macro_window.get('reason', '')) or macro_window.get('near_support_4h'):
                     return 'discount_4h_reclaim_watch', 'support_retest_watch'
                 return 'support_retest_watch', signal.get('state') or 'support_retest_watch'
@@ -233,6 +286,10 @@ class SignalEngineService:
             if rsi_htf is not None and rsi_htf <= 22:
                 return 'liquidity', 'neutral_watch'
             if macro_window.get('valid') and refinement.get('valid'):
+                if wyckoff.get('status') == 'confirmed':
+                    return 'utad_confirmed_watch', 'resistance_retest_watch'
+                if wyckoff.get('status') == 'setup_ready':
+                    return 'awaiting_utad_watch', 'resistance_retest_watch'
                 if 'premium' in str(macro_window.get('reason', '')) or macro_window.get('near_resistance_4h'):
                     return 'premium_4h_rejection_watch', 'resistance_retest_watch'
                 return 'resistance_retest_watch', signal.get('state') or 'resistance_retest_watch'
@@ -241,21 +298,26 @@ class SignalEngineService:
     def _zone_validity(self, signal: dict) -> dict:
         macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
+        wyckoff = signal.get('wyckoff_requirement') or {}
         exec_target = (signal.get('execution_target') or {}).get('level')
         projected_target = (signal.get('projected_target') or {}).get('level')
         target_ok = exec_target is not None or projected_target is not None
+        wyckoff_ok = wyckoff.get('status') in {'setup_ready', 'confirmed', 'execution_ready'}
         score = 0
         if macro_window.get('valid'):
             score += 2
         if refinement.get('valid'):
+            score += 1
+        if wyckoff_ok:
             score += 2
         if target_ok:
             score += 2
-        valid = score >= 4
+        valid = score >= 5
         return {
             'valid': valid,
             'score': score,
             'target_ok': target_ok,
+            'wyckoff_ok': wyckoff_ok,
             'reason': 'valid_zone' if valid else 'weak_zone_filters',
         }
 
@@ -265,6 +327,7 @@ class SignalEngineService:
         refinement = signal.get('refinement_context_1h') or {}
         exec_trigger = signal.get('execution_trigger_5m') or {}
         zone_validity = signal.get('zone_validity') or {}
+        wyckoff = signal.get('wyckoff_requirement') or {}
         pipeline = signal.get('pipeline') or {}
         state = signal.get('state') or ''
         bias = signal.get('bias') or ''
@@ -273,6 +336,7 @@ class SignalEngineService:
         adjustments = {
             'macro_window': 0.0,
             'refinement': 0.0,
+            'wyckoff': 0.0,
             'zone_validity': 0.0,
             'confirm': 0.0,
             'trade': 0.0,
@@ -288,12 +352,24 @@ class SignalEngineService:
             adjustments['block_penalty'] -= 2.0
 
         if refinement.get('valid'):
-            adjustments['refinement'] += 2.0
+            adjustments['refinement'] += 1.0
         else:
             adjustments['refinement'] -= 1.0
 
+        wyckoff_status = wyckoff.get('status')
+        if wyckoff_status == 'execution_ready':
+            adjustments['wyckoff'] += 3.0
+        elif wyckoff_status == 'confirmed':
+            adjustments['wyckoff'] += 2.5
+        elif wyckoff_status == 'setup_ready':
+            adjustments['wyckoff'] += 1.5
+        elif wyckoff_status == 'waiting':
+            adjustments['wyckoff'] -= 0.5
+        elif wyckoff_status == 'blocked':
+            adjustments['wyckoff'] -= 1.5
+
         if zone_validity.get('valid'):
-            adjustments['zone_validity'] += 2.0
+            adjustments['zone_validity'] += 1.5
         else:
             adjustments['zone_validity'] -= 1.0
 
@@ -304,15 +380,21 @@ class SignalEngineService:
         elif pipeline.get('confirm'):
             adjustments['trade'] += 1.0
 
-        if state in {'discount_4h_reclaim_watch', 'premium_4h_rejection_watch'}:
+        if state in {'spring_confirmed_watch', 'utad_confirmed_watch'}:
+            adjustments['state_fit'] += 1.5
+        elif state in {'awaiting_spring_watch', 'awaiting_utad_watch'}:
             adjustments['state_fit'] += 1.0
+        elif state in {'discount_4h_reclaim_watch', 'premium_4h_rejection_watch'}:
+            adjustments['state_fit'] += 0.75
         elif state in {'support_retest_watch', 'resistance_retest_watch'}:
-            adjustments['state_fit'] += 0.5
+            adjustments['state_fit'] += 0.25
         elif state == 'neutral_watch':
             adjustments['state_fit'] -= 1.0
 
         if block_reason == 'blocked_no_5m_confirm':
-            adjustments['block_penalty'] -= 0.5
+            adjustments['block_penalty'] -= 0.25
+        elif block_reason in {'blocked_no_wyckoff_event'}:
+            adjustments['block_penalty'] -= 1.0
         elif block_reason in {'blocked_no_1h_setup', 'blocked_no_4h_bull_window', 'blocked_no_4h_bear_window'}:
             adjustments['block_penalty'] -= 1.5
 
@@ -329,8 +411,10 @@ class SignalEngineService:
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']
+        signal['wyckoff_requirement'] = self._wyckoff_requirement(signal)
 
         bias = signal.get('bias') or 'neutral'
+        wyckoff = signal.get('wyckoff_requirement') or {}
         allowed = False
         block_reason = None
         if bias.startswith('bear'):
@@ -349,6 +433,9 @@ class SignalEngineService:
         if allowed and not refinement['valid']:
             allowed = False
             block_reason = 'blocked_no_1h_setup'
+        if allowed and wyckoff.get('status') not in {'confirmed', 'execution_ready'}:
+            allowed = False
+            block_reason = 'blocked_no_wyckoff_event'
         if allowed and not exec_trigger['valid']:
             allowed = False
             block_reason = 'blocked_no_5m_confirm'
@@ -359,7 +446,7 @@ class SignalEngineService:
         signal['hierarchy_block_reason'] = block_reason
 
         if signal.get('pipeline', {}).get('zone'):
-            if not macro_window.get('valid') or not refinement.get('valid') or not zone_validity.get('target_ok'):
+            if not macro_window.get('valid') or not zone_validity.get('target_ok'):
                 signal['pipeline']['zone'] = False
                 signal['zone_quality'] = 'weak'
                 signal['state'] = 'neutral_watch'
@@ -371,10 +458,10 @@ class SignalEngineService:
             signal['trigger'] = 'wait'
             if bias.startswith('bear'):
                 signal['bias'] = 'bear_watch'
-                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'resistance_retest_watch'
+                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'awaiting_utad_watch'
             elif bias.startswith('bull'):
                 signal['bias'] = 'bull_watch'
-                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'support_retest_watch'
+                signal['state'] = fallback_state if fallback_state != 'neutral_watch' else 'awaiting_spring_watch'
             else:
                 signal['bias'] = 'neutral'
                 signal['state'] = 'neutral_watch'
