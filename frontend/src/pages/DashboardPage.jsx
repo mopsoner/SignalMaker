@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import DataTable from '../components/DataTable'
 import PageHeader from '../components/PageHeader'
@@ -22,6 +22,25 @@ function displayScore(row) {
   const finalScore = stateContext(row, 'final_score')
   if (finalScore !== null && finalScore !== undefined) return Number(finalScore)
   return Number(row.score || 0)
+}
+
+function plannerReason(row) {
+  return row?.state_payload?.planner_candidate_reason || row?.planner_candidate_reason || row?.state_payload?.hierarchy_block_reason || '—'
+}
+
+function isInvalidData(row) {
+  const reason = plannerReason(row)
+  const volume = stateContext(row, 'volume_debug') || {}
+  const market = stateContext(row, 'market_quality_debug') || {}
+  return String(reason).startsWith('invalid_market_data') || (
+    Number(volume.last || 0) <= 0 &&
+    Number(volume.average || 0) <= 0 &&
+    Number(market.avg_range_pct || 0) <= 0
+  )
+}
+
+function isValidData(row) {
+  return !isInvalidData(row)
 }
 
 function summarizeScore(row) {
@@ -71,7 +90,45 @@ function summarizeZoneValidity(row) {
   return `${zoneValidity.valid ? 'ok' : 'weak'} · ${fmtNumber(zoneValidity.score, 0)}`
 }
 
+function MobileAssetCards({ rows }) {
+  if (!rows.length) return <div className="empty-cell">No asset state available</div>
+
+  return (
+    <div className="mobile-card-grid market-mobile-cards">
+      {rows.map((row) => {
+        const reason = plannerReason(row)
+        const target = summarizeContext(row.execution_target || stateContext(row, 'projected_target'))
+        const dataStatus = isInvalidData(row) ? 'Invalid data' : 'Valid data'
+        return (
+          <article className="mobile-asset-card" key={row.id || row.symbol}>
+            <div className="mobile-asset-top">
+              <div>
+                <Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link>
+                <div className="mobile-asset-meta">{row?.state_payload?.state || '—'} · {row.bias || '—'}</div>
+              </div>
+              <span className={stageBadgeClass(row.stage)}>{row.stage}</span>
+            </div>
+            <div className="mobile-kpi-grid">
+              <div><span>Score</span><strong>{fmtNumber(displayScore(row), 2)}</strong></div>
+              <div><span>Price</span><strong>{fmtNumber(row.price, 4)}</strong></div>
+              <div><span>Wyckoff</span><strong>{summarizeWyckoff(row)}</strong></div>
+              <div><span>Target</span><strong>{target}</strong></div>
+            </div>
+            <div className={`mobile-data-status ${isInvalidData(row) ? 'invalid' : 'valid'}`}>{dataStatus}</div>
+            <div className="mobile-reason"><span>Reason</span><strong>{reason}</strong></div>
+            <div className="mobile-asset-actions">
+              <Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link>
+              <a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function DashboardPage() {
+  const [marketFilter, setMarketFilter] = useState('all')
   const settingsLoader = useCallback(() => api.adminSettings(), [])
   const { data: adminSettings } = usePollingQuery(settingsLoader, 30000)
   const assetLimit = Number(adminSettings?.binance?.binance_max_symbols || 50)
@@ -82,6 +139,7 @@ export default function DashboardPage() {
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
   const confirmCount = assets.filter((item) => item.stage === 'confirm').length
   const zoneCount = assets.filter((item) => item.stage === 'zone').length
+  const invalidDataCount = assets.filter(isInvalidData).length
   const avgScore = assets.length ? (assets.reduce((sum, item) => sum + displayScore(item), 0) / assets.length).toFixed(2) : '0.00'
 
   const sessionCounts = useMemo(() => assets.reduce((acc, item) => {
@@ -92,6 +150,13 @@ export default function DashboardPage() {
 
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => displayScore(b) - displayScore(a)).slice(0, 6), [assets])
   const strongZoneCount = useMemo(() => assets.filter((item) => stateContext(item, 'zone_validity')?.valid).length, [assets])
+
+  const filteredAssets = useMemo(() => {
+    if (marketFilter === 'zone') return assets.filter((item) => item.stage === 'zone')
+    if (marketFilter === 'valid') return assets.filter(isValidData)
+    if (marketFilter === 'invalid') return assets.filter(isInvalidData)
+    return assets
+  }, [assets, marketFilter])
 
   const columns = [
     {
@@ -110,6 +175,7 @@ export default function DashboardPage() {
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
+    { key: 'planner_reason', title: 'Planner reason', render: (row) => <span className={isInvalidData(row) ? 'reason-invalid' : ''}>{plannerReason(row)}</span>, sortValue: (row) => plannerReason(row) },
     { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
     { key: 'wyckoff_requirement', title: 'Wyckoff wait', render: (row) => summarizeWyckoff(row), sortValue: (row) => stateContext(row, 'wyckoff_requirement')?.status || '' },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
@@ -128,7 +194,15 @@ export default function DashboardPage() {
     { key: 'state', title: 'State', render: (row) => row?.state_payload?.state || '—', sortValue: (row) => row?.state_payload?.state || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
+    { key: 'planner_reason', title: 'Reason', render: (row) => plannerReason(row), sortValue: (row) => plannerReason(row) },
     { key: 'score_breakdown', title: 'Breakdown', render: (row) => summarizeScore(row), sortValue: (row) => JSON.stringify(row?.state_payload?.score_breakdown || {}) },
+  ]
+
+  const filterOptions = [
+    { key: 'all', label: `All (${assets.length})` },
+    { key: 'zone', label: `Zone only (${zoneCount})` },
+    { key: 'valid', label: `Valid data (${assets.length - invalidDataCount})` },
+    { key: 'invalid', label: `Invalid data (${invalidDataCount})` },
   ]
 
   return (
@@ -143,10 +217,11 @@ export default function DashboardPage() {
       <div className="stats-grid">
         <StatCard label="Average score" value={avgScore} />
         <StatCard label="Strong zones" value={strongZoneCount} />
+        <StatCard label="Invalid data" value={invalidDataCount} hint="zero volume/range or invalid_market_data" />
         <StatCard label="London total" value={(sessionCounts.london || 0) + (sessionCounts.london_open || 0)} hint={`Open: ${sessionCounts.london_open || 0} · Core: ${sessionCounts.london || 0}`} />
-        <StatCard label="New York" value={sessionCounts.new_york || 0} />
       </div>
       <div className="stats-grid">
+        <StatCard label="New York" value={sessionCounts.new_york || 0} />
         <StatCard label="Asia / off" value={(sessionCounts.asia || 0) + (sessionCounts.off_session || 0)} hint={`Asia: ${sessionCounts.asia || 0} · Off: ${sessionCounts.off_session || 0}`} />
       </div>
       {loading ? <div className="panel">Loading assets…</div> : null}
@@ -163,7 +238,25 @@ export default function DashboardPage() {
           <h2>Market view 360</h2>
           <span className="collapse-indicator">⌄</span>
         </summary>
-        <DataTable columns={columns} rows={assets} empty="No asset state available" defaultSortKey="updated_at" defaultSortDir="desc" />
+        <div className="market-toolbar">
+          <div className="filter-chips" role="tablist" aria-label="Market filters">
+            {filterOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`filter-chip ${marketFilter === option.key ? 'active' : ''}`}
+                onClick={() => setMarketFilter(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div>
+        </div>
+        <div className="desktop-market-table">
+          <DataTable columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="updated_at" defaultSortDir="desc" />
+        </div>
+        <MobileAssetCards rows={filteredAssets} />
       </details>
     </div>
   )
