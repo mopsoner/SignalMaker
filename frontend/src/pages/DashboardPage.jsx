@@ -57,6 +57,14 @@ function summarizeWindow(row) {
   return `${side} · ${status} · rp ${pos}`
 }
 
+function summarizeWyckoff(row) {
+  const wyckoff = stateContext(row, 'wyckoff_requirement')
+  if (!wyckoff) return '—'
+  const expected = wyckoff.expected || 'none'
+  const status = wyckoff.status || 'waiting'
+  return `${expected} · ${status}`
+}
+
 function summarizeZoneValidity(row) {
   const zoneValidity = stateContext(row, 'zone_validity')
   if (!zoneValidity) return '—'
@@ -103,6 +111,7 @@ export default function DashboardPage() {
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
     { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
+    { key: 'wyckoff_requirement', title: 'Wyckoff wait', render: (row) => summarizeWyckoff(row), sortValue: (row) => stateContext(row, 'wyckoff_requirement')?.status || '' },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
     { key: 'macro_window_4h', title: '4H window', render: (row) => summarizeWindow(row), sortValue: (row) => Number(stateContext(row, 'macro_window_4h')?.range_position ?? -1) },
