@@ -43,6 +43,70 @@ function isValidData(row) {
   return !isInvalidData(row)
 }
 
+function cycleStepClass(done, active, blocked) {
+  if (blocked) return '#7f1d1d'
+  if (active) return '#f59e0b'
+  if (done) return '#166534'
+  return '#374151'
+}
+
+function summarizeCycle(row) {
+  const macro = stateContext(row, 'macro_window_4h') || {}
+  const wyckoff = stateContext(row, 'wyckoff_requirement') || {}
+  const trigger = stateContext(row, 'execution_trigger_5m') || {}
+  const zone = stateContext(row, 'zone_validity') || {}
+  const trade = row?.state_payload?.trade || {}
+  const side = macro.side || row.bias || 'neutral'
+  const status = wyckoff.status || 'waiting'
+  const macroDone = Boolean(macro.valid)
+  const swept = ['swept_waiting_rejection', 'swept_waiting_reclaim', 'rejected_waiting_5m_confirm', 'reclaimed_waiting_5m_confirm', 'execution_ready'].includes(status)
+  const eventDone = ['rejected_waiting_5m_confirm', 'reclaimed_waiting_5m_confirm', 'execution_ready'].includes(status)
+  const triggerDone = Boolean(trigger.valid)
+  const tradeDone = trade.status && trade.status !== 'watch' && trade.side && trade.side !== 'none'
+  const blocked = !macroDone || String(plannerReason(row)).includes('blocked')
+  const steps = [
+    { key: '4H', label: side === 'neutral' ? '4H' : `${side} 4H`, done: macroDone, active: !macroDone, blocked: !macroDone },
+    { key: 'SWP', label: swept ? 'sweep' : 'wait sweep', done: swept, active: macroDone && !swept, blocked: false },
+    { key: 'WY', label: eventDone ? (wyckoff.expected || 'event') : `wait ${wyckoff.expected || 'event'}`, done: eventDone, active: swept && !eventDone, blocked: false },
+    { key: '5M', label: triggerDone ? '5m confirm' : 'wait 5m', done: triggerDone, active: eventDone && !triggerDone, blocked: false },
+    { key: 'TRD', label: tradeDone ? 'trade' : 'no trade', done: tradeDone, active: triggerDone && !tradeDone, blocked: false },
+  ]
+  return { steps, zoneOk: Boolean(zone.valid), status }
+}
+
+function CycleView({ row }) {
+  const cycle = summarizeCycle(row)
+  return (
+    <div style={{ display: 'grid', gap: 4, minWidth: 230 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        {cycle.steps.map((step, index) => (
+          <span key={step.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span
+              title={step.label}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 22,
+                borderRadius: 999,
+                background: cycleStepClass(step.done, step.active, step.blocked),
+                color: 'white',
+                fontSize: 10,
+                fontWeight: 700,
+              }}
+            >
+              {step.done ? '✓' : step.active ? '…' : '·'}
+            </span>
+            {index < cycle.steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}
+          </span>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, opacity: 0.85 }}>{cycle.status} · {cycle.zoneOk ? 'zone ok' : 'zone weak'}</div>
+    </div>
+  )
+}
+
 function summarizeScore(row) {
   const breakdown = row?.state_payload?.score_breakdown
   const finalBreakdown = row?.state_payload?.final_score_breakdown
@@ -108,6 +172,7 @@ function MobileAssetCards({ rows }) {
               </div>
               <span className={stageBadgeClass(row.stage)}>{row.stage}</span>
             </div>
+            <CycleView row={row} />
             <div className="mobile-kpi-grid">
               <div><span>Score</span><strong>{fmtNumber(displayScore(row), 2)}</strong></div>
               <div><span>Price</span><strong>{fmtNumber(row.price, 4)}</strong></div>
@@ -171,6 +236,7 @@ export default function DashboardPage() {
       sortValue: (row) => row.symbol,
     },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
+    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: (row) => summarizeCycle(row).status },
     { key: 'state', title: 'State', render: (row) => row?.state_payload?.state || '—', sortValue: (row) => row?.state_payload?.state || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
@@ -182,6 +248,7 @@ export default function DashboardPage() {
     { key: 'rsi_1h', title: 'RSI 1H', render: (row) => fmtNumber(row.rsi_1h, 2), sortValue: (row) => Number(row.rsi_1h ?? -1) },
     { key: 'macro_window_4h', title: '4H window', render: (row) => summarizeWindow(row), sortValue: (row) => Number(stateContext(row, 'macro_window_4h')?.range_position ?? -1) },
     { key: 'macro_liquidity_context', title: 'Macro context', render: (row) => summarizeContext(stateContext(row, 'macro_liquidity_context') || row.liquidity_context), sortValue: (row) => (stateContext(row, 'macro_liquidity_context') || row.liquidity_context)?.level ?? -1 },
+    { key: 'wyckoff_event_level', title: 'Wyckoff level', render: (row) => summarizeContext(stateContext(row, 'wyckoff_event_level')), sortValue: (row) => stateContext(row, 'wyckoff_event_level')?.level ?? -1 },
     { key: 'entry_liquidity_context', title: 'Entry context', render: (row) => summarizeContext(stateContext(row, 'entry_liquidity_context')), sortValue: (row) => stateContext(row, 'entry_liquidity_context')?.level ?? -1 },
     { key: 'execution_target', title: 'Execution target', render: (row) => summarizeContext(row.execution_target), sortValue: (row) => row.execution_target?.level ?? -1 },
     { key: 'projected_target', title: 'Projected', render: (row) => summarizeContext(stateContext(row, 'projected_target')), sortValue: (row) => stateContext(row, 'projected_target')?.level ?? -1 },
@@ -191,6 +258,7 @@ export default function DashboardPage() {
   const strongestColumns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <Link to={`/assets/${encodeURIComponent(row.symbol)}`}>{row.symbol}</Link>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
+    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: (row) => summarizeCycle(row).status },
     { key: 'state', title: 'State', render: (row) => row?.state_payload?.state || '—', sortValue: (row) => row?.state_payload?.state || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
