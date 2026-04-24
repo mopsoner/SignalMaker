@@ -17,6 +17,19 @@ INTERVAL_MS = {
 class MarketDataService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self._ensure_optional_candle_columns()
+
+    def _ensure_optional_candle_columns(self) -> None:
+        """Keep existing Replit/Postgres databases compatible with new Binance kline fields."""
+        columns = {
+            "quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "number_of_trades": "INTEGER NOT NULL DEFAULT 0",
+            "taker_buy_base_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "taker_buy_quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        }
+        for column, definition in columns.items():
+            self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}"))
+        self.db.commit()
 
     def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
         if latest:
@@ -110,6 +123,10 @@ class MarketDataService:
                     "low": row.low,
                     "close": row.close,
                     "volume": row.volume,
+                    "quote_volume": row.quote_volume,
+                    "number_of_trades": row.number_of_trades,
+                    "taker_buy_base_volume": row.taker_buy_base_volume,
+                    "taker_buy_quote_volume": row.taker_buy_quote_volume,
                 }
                 for row in rows
             ]
@@ -169,6 +186,10 @@ class MarketDataService:
             row.low = float(candle["low"])
             row.close = float(candle["close"])
             row.volume = float(candle["volume"])
+            row.quote_volume = float(candle.get("quote_volume") or 0.0)
+            row.number_of_trades = int(candle.get("number_of_trades") or 0)
+            row.taker_buy_base_volume = float(candle.get("taker_buy_base_volume") or 0.0)
+            row.taker_buy_quote_volume = float(candle.get("taker_buy_quote_volume") or 0.0)
             row.ingested_at = datetime.now(timezone.utc)
             count += 1
         self.db.commit()
