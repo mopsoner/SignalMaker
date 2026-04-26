@@ -15,29 +15,7 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
         }
 
-    def _market_data_invalid_reason(self, signal: dict) -> str | None:
-        volume_debug = signal.get('volume_debug', {}) or {}
-        market_quality_debug = signal.get('market_quality_debug', {}) or {}
-        candle_quality = signal.get('candle_quality_5m', {}) or {}
-
-        volume_last = float(volume_debug.get('last') or 0.0)
-        volume_average = float(volume_debug.get('average') or 0.0)
-        avg_range_pct = float(market_quality_debug.get('avg_range_pct') or 0.0)
-        candle_count = int(candle_quality.get('count') or 0)
-
-        if candle_count > 0 and volume_last <= 0 and volume_average <= 0 and avg_range_pct <= 0:
-            return 'invalid_market_data:zero_volume_zero_range'
-        if candle_count > 0 and volume_average <= 0:
-            return 'invalid_market_data:zero_average_volume'
-        if candle_count > 0 and avg_range_pct <= 0:
-            return 'invalid_market_data:zero_average_range'
-        return None
-
     def _watch_reason(self, signal: dict, trade: dict) -> str:
-        invalid_data_reason = self._market_data_invalid_reason(signal)
-        if invalid_data_reason:
-            return invalid_data_reason
-
         hierarchy_block_reason = signal.get('hierarchy_block_reason')
         if hierarchy_block_reason:
             return hierarchy_block_reason
@@ -55,7 +33,7 @@ class PlannerService:
             if not refinement.get('valid', True):
                 return f"watch_missing_1h_setup:{refinement.get('reason', state)}"
             if not exec_trigger.get('valid', True):
-                return f"watch_missing_5m_trigger:{exec_trigger.get('trigger', state)}"
+                return f"watch_missing_execution_trigger:{exec_trigger.get('trigger', state)}"
             if not signal.get('pipeline', {}).get('confirm'):
                 return f"watch_not_confirmed:{state}"
             if execution_target is None:
@@ -74,10 +52,6 @@ class PlannerService:
         stop = trade.get('stop')
         target = trade.get('target')
         score = float(signal.get('score', 0.0))
-
-        invalid_data_reason = self._market_data_invalid_reason(signal)
-        if invalid_data_reason:
-            return {'accepted': False, 'reason': invalid_data_reason, 'candidate': None}
 
         if not side or side == 'none':
             return {'accepted': False, 'reason': self._watch_reason(signal, trade), 'candidate': None}
