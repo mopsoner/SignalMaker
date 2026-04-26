@@ -42,10 +42,12 @@ class Settings(BaseSettings):
     binance_incremental_fetch_enabled: bool = Field(default=True, alias="BINANCE_INCREMENTAL_FETCH_ENABLED")
     binance_incremental_min_1m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_1M")
     binance_incremental_min_5m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_5M")
+    binance_incremental_min_15m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_15M")
     binance_incremental_min_1h: int = Field(default=2, alias="BINANCE_INCREMENTAL_MIN_1H")
     binance_incremental_min_4h: int = Field(default=2, alias="BINANCE_INCREMENTAL_MIN_4H")
     binance_lookback_1m: int = Field(default=180, alias="BINANCE_LOOKBACK_1M")
     binance_lookback_5m: int = Field(default=180, alias="BINANCE_LOOKBACK_5M")
+    binance_lookback_15m: int = Field(default=180, alias="BINANCE_LOOKBACK_15M")
     binance_lookback_1h: int = Field(default=180, alias="BINANCE_LOOKBACK_1H")
     binance_lookback_4h: int = Field(default=120, alias="BINANCE_LOOKBACK_4H")
 
