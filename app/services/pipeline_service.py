@@ -14,6 +14,9 @@ from app.services.signal_engine_service import SignalEngineService
 from app.services.trade_candidate_service import TradeCandidateService
 
 
+EXECUTION_INTERVAL = "15m"
+
+
 class PipelineService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -28,7 +31,7 @@ class PipelineService:
     def _bundle_limits(self) -> dict[str, int]:
         runtime = self.collector.runtime["binance"]
         return {
-            "5m": int(runtime["binance_lookback_5m"]),
+            EXECUTION_INTERVAL: int(runtime.get("binance_lookback_15m", runtime.get("binance_lookback_5m", 180))),
             "1h": int(runtime["binance_lookback_1h"]),
             "4h": int(runtime["binance_lookback_4h"]),
         }
@@ -79,20 +82,20 @@ class PipelineService:
         max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
 
-        # Phase 1: collect/store 5m first for all assets.
-        fetched_5m, collect_errors = self._collect_interval_parallel(symbols, "5m", latest_close_times, worker_count)
+        # Phase 1: collect/store execution TF first for all assets.
+        fetched_exec, collect_errors = self._collect_interval_parallel(symbols, EXECUTION_INTERVAL, latest_close_times, worker_count)
         errors.extend(collect_errors)
         for symbol in symbols:
-            rows = fetched_5m.get(symbol)
+            rows = fetched_exec.get(symbol)
             if rows is None:
                 continue
             try:
                 if rows:
-                    candles_written += self.market_data.upsert_candles(symbol, "5m", rows)
-                    interval_write_counts["5m"] += len(rows)
+                    candles_written += self.market_data.upsert_candles(symbol, EXECUTION_INTERVAL, rows)
+                    interval_write_counts[EXECUTION_INTERVAL] += len(rows)
                     collected_symbols.add(symbol)
             except Exception as exc:
-                errors.append({"symbol": symbol, "phase": "store_5m", "error": str(exc)})
+                errors.append({"symbol": symbol, "phase": f"store_{EXECUTION_INTERVAL}", "error": str(exc)})
 
         # Phase 2: collect/store HTF only when due.
         for interval in ("1h", "4h"):
@@ -115,10 +118,10 @@ class PipelineService:
         for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
-                quality_5m = self.market_data.validate_candle_series("5m", candles.get("5m", []), min_count=30)
-                if not quality_5m["valid"]:
-                    errors.append({"symbol": symbol, "phase": "analyze", "error": "invalid_5m_quality", "issues": quality_5m["issues"]})
-                    for issue in quality_5m["issues"]:
+                quality_exec = self.market_data.validate_candle_series(EXECUTION_INTERVAL, candles.get(EXECUTION_INTERVAL, []), min_count=30)
+                if not quality_exec["valid"]:
+                    errors.append({"symbol": symbol, "phase": "analyze", "error": f"invalid_{EXECUTION_INTERVAL}_quality", "issues": quality_exec["issues"]})
+                    for issue in quality_exec["issues"]:
                         data_quality_counts[issue] += 1
                     continue
                 if not candles.get("1h"):
@@ -131,7 +134,8 @@ class PipelineService:
                     continue
 
                 signal = self.engine.compute_signal(symbol, candles)
-                signal["candle_quality_5m"] = quality_5m
+                signal[f"candle_quality_{EXECUTION_INTERVAL}"] = quality_exec
+                signal["execution_timeframe"] = EXECUTION_INTERVAL
                 assessment = self.planner.assess_signal(signal)
                 signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
                 signal['planner_candidate_reason'] = assessment['reason']
@@ -177,7 +181,7 @@ class PipelineService:
                     data_quality_counts['volume_average_zero'] += 1
                 if (market_quality_debug.get('avg_range_pct') or 0) == 0:
                     data_quality_counts['market_range_zero'] += 1
-                if signal.get('signal_interval') == '5m' and signal.get('rsi_main') in (0, 100):
+                if signal.get('signal_interval') == EXECUTION_INTERVAL and signal.get('rsi_main') in (0, 100):
                     data_quality_counts['rsi_main_extreme_edge'] += 1
                 if signal.get('internal_bear_pivot_high') == signal.get('internal_bull_pivot_low'):
                     data_quality_counts['internal_pivots_flat'] += 1
@@ -196,6 +200,7 @@ class PipelineService:
             "symbols_collected": len(collected_symbols),
             "symbols_scanned": scanned,
             "collect_workers": worker_count,
+            "execution_interval": EXECUTION_INTERVAL,
             "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
@@ -218,6 +223,7 @@ class PipelineService:
             "candles_written": candles_written,
             "candidates_created": candidates,
             "collect_workers": worker_count,
+            "execution_interval": EXECUTION_INTERVAL,
             "errors": errors,
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
