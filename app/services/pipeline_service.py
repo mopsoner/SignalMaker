@@ -133,9 +133,18 @@ class PipelineService:
                     data_quality_counts["missing_4h_bundle"] += 1
                     continue
 
+                # Low-impact migration: the legacy engine still reads the primary execution series as "5m".
+                # Feed it with the cleaner 15m execution candles while preserving the existing engine API.
+                candles["5m"] = candles.get(EXECUTION_INTERVAL, [])
                 signal = self.engine.compute_signal(symbol, candles)
                 signal[f"candle_quality_{EXECUTION_INTERVAL}"] = quality_exec
                 signal["execution_timeframe"] = EXECUTION_INTERVAL
+                signal["signal_interval"] = EXECUTION_INTERVAL
+                if "rsi_main_timeframe" in signal:
+                    signal["rsi_main_timeframe"] = EXECUTION_INTERVAL
+                if signal.get("confirm_source") == "5m_bos":
+                    signal["confirm_source"] = "15m_bos"
+
                 assessment = self.planner.assess_signal(signal)
                 signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
                 signal['planner_candidate_reason'] = assessment['reason']
