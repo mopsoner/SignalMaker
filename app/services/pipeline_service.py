@@ -120,10 +120,9 @@ class PipelineService:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
                 quality_exec = self.market_data.validate_candle_series(EXECUTION_INTERVAL, candles.get(EXECUTION_INTERVAL, []), min_count=30)
                 if not quality_exec["valid"]:
-                    errors.append({"symbol": symbol, "phase": "analyze", "error": f"invalid_{EXECUTION_INTERVAL}_quality", "issues": quality_exec["issues"]})
+                    errors.append({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{EXECUTION_INTERVAL}_quality", "issues": quality_exec["issues"]})
                     for issue in quality_exec["issues"]:
                         data_quality_counts[issue] += 1
-                    continue
                 if not candles.get("1h"):
                     errors.append({"symbol": symbol, "phase": "analyze", "error": "missing_1h_candles"})
                     data_quality_counts["missing_1h_bundle"] += 1
