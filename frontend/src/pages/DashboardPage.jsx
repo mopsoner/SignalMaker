@@ -198,7 +198,7 @@ export default function DashboardPage() {
   const { data: adminSettings } = usePollingQuery(settingsLoader, 30000)
   const assetLimit = Number(adminSettings?.binance?.binance_max_symbols || 50)
 
-  const loadAssets = useCallback(() => api.assets(`?limit=${assetLimit}`), [assetLimit])
+  const loadAssets = useCallback(() => api.assets(`?limit=${assetLimit}&sort_by=updated_at`), [assetLimit])
   const { data: assets = [], loading, error } = usePollingQuery(loadAssets, 15000)
 
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
@@ -277,7 +277,7 @@ export default function DashboardPage() {
     <div className="page-stack">
       <PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." />
       <div className="stats-grid">
-        <StatCard label="Tracked assets" value={assets.length} hint={`limit ${assetLimit}`} />
+        <StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} />
         <StatCard label="Trade stage" value={tradeCount} />
         <StatCard label="Confirm stage" value={confirmCount} />
         <StatCard label="Zone stage" value={zoneCount} />

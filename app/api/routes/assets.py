@@ -13,9 +13,10 @@ def list_assets(
     limit: int = Query(default=100, ge=1, le=1000),
     min_score: float | None = Query(default=None),
     stage: str | None = Query(default=None),
+    sort_by: str = Query(default="score", pattern="^(score|updated_at)$"),
     db: Session = Depends(get_db),
 ) -> list[AssetStateRead]:
-    return AssetStateService(db).list_assets(limit=limit, min_score=min_score, stage=stage)
+    return AssetStateService(db).list_assets(limit=limit, min_score=min_score, stage=stage, sort_by=sort_by)
 
 
 @router.get("/{symbol}", response_model=AssetStateRead)

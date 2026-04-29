@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -6,18 +7,24 @@ from sqlalchemy.orm import Session
 from app.models.asset_state import AssetStateCurrent
 from app.schemas.asset_state import AssetStateUpsert
 
+AssetSortBy = Literal["score", "updated_at"]
+
 
 class AssetStateService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_assets(self, *, limit: int, min_score: float | None, stage: str | None) -> list[AssetStateCurrent]:
+    def list_assets(self, *, limit: int, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
         stmt = select(AssetStateCurrent)
         if min_score is not None:
             stmt = stmt.where(AssetStateCurrent.score >= min_score)
         if stage:
             stmt = stmt.where(AssetStateCurrent.stage == stage)
-        stmt = stmt.order_by(AssetStateCurrent.score.desc(), AssetStateCurrent.updated_at.desc()).limit(limit)
+        if sort_by == "updated_at":
+            stmt = stmt.order_by(AssetStateCurrent.updated_at.desc(), AssetStateCurrent.score.desc())
+        else:
+            stmt = stmt.order_by(AssetStateCurrent.score.desc(), AssetStateCurrent.updated_at.desc())
+        stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())
 
     def get_by_symbol(self, symbol: str) -> AssetStateCurrent | None:
