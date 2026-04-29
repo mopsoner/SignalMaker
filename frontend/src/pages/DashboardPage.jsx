@@ -28,21 +28,6 @@ function plannerReason(row) {
   return row?.state_payload?.planner_candidate_reason || row?.planner_candidate_reason || row?.state_payload?.hierarchy_block_reason || '—'
 }
 
-function isInvalidData(row) {
-  const reason = plannerReason(row)
-  const volume = stateContext(row, 'volume_debug') || {}
-  const market = stateContext(row, 'market_quality_debug') || {}
-  return String(reason).startsWith('invalid_market_data') || (
-    Number(volume.last || 0) <= 0 &&
-    Number(volume.average || 0) <= 0 &&
-    Number(market.avg_range_pct || 0) <= 0
-  )
-}
-
-function isValidData(row) {
-  return !isInvalidData(row)
-}
-
 function cycleStepClass(done, active, blocked) {
   if (blocked) return '#7f1d1d'
   if (active) return '#f59e0b'
@@ -162,7 +147,6 @@ function MobileAssetCards({ rows }) {
       {rows.map((row) => {
         const reason = plannerReason(row)
         const target = summarizeContext(row.execution_target || stateContext(row, 'projected_target'))
-        const dataStatus = isInvalidData(row) ? 'Invalid data' : 'Valid data'
         return (
           <article className="mobile-asset-card" key={row.id || row.symbol}>
             <div className="mobile-asset-top">
@@ -179,7 +163,6 @@ function MobileAssetCards({ rows }) {
               <div><span>Wyckoff</span><strong>{summarizeWyckoff(row)}</strong></div>
               <div><span>Target</span><strong>{target}</strong></div>
             </div>
-            <div className={`mobile-data-status ${isInvalidData(row) ? 'invalid' : 'valid'}`}>{dataStatus}</div>
             <div className="mobile-reason"><span>Reason</span><strong>{reason}</strong></div>
             <div className="mobile-asset-actions">
               <Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link>
@@ -204,7 +187,6 @@ export default function DashboardPage() {
   const tradeCount = assets.filter((item) => item.stage === 'trade').length
   const confirmCount = assets.filter((item) => item.stage === 'confirm').length
   const zoneCount = assets.filter((item) => item.stage === 'zone').length
-  const invalidDataCount = assets.filter(isInvalidData).length
   const avgScore = assets.length ? (assets.reduce((sum, item) => sum + displayScore(item), 0) / assets.length).toFixed(2) : '0.00'
 
   const sessionCounts = useMemo(() => assets.reduce((acc, item) => {
@@ -218,8 +200,6 @@ export default function DashboardPage() {
 
   const filteredAssets = useMemo(() => {
     if (marketFilter === 'zone') return assets.filter((item) => item.stage === 'zone')
-    if (marketFilter === 'valid') return assets.filter(isValidData)
-    if (marketFilter === 'invalid') return assets.filter(isInvalidData)
     return assets
   }, [assets, marketFilter])
 
@@ -241,7 +221,7 @@ export default function DashboardPage() {
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'session_phase', title: 'Session', render: (row) => row?.state_payload?.session_phase || row.session, sortValue: (row) => row?.state_payload?.session_phase || row.session },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(displayScore(row), 2), sortValue: (row) => displayScore(row) },
-    { key: 'planner_reason', title: 'Planner reason', render: (row) => <span className={isInvalidData(row) ? 'reason-invalid' : ''}>{plannerReason(row)}</span>, sortValue: (row) => plannerReason(row) },
+    { key: 'planner_reason', title: 'Planner reason', render: (row) => plannerReason(row), sortValue: (row) => plannerReason(row) },
     { key: 'zone_validity', title: 'Zone validity', render: (row) => summarizeZoneValidity(row), sortValue: (row) => Number(stateContext(row, 'zone_validity')?.score ?? -1) },
     { key: 'wyckoff_requirement', title: 'Wyckoff wait', render: (row) => summarizeWyckoff(row), sortValue: (row) => stateContext(row, 'wyckoff_requirement')?.status || '' },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 4), sortValue: (row) => Number(row.price || 0) },
@@ -269,8 +249,6 @@ export default function DashboardPage() {
   const filterOptions = [
     { key: 'all', label: `All (${assets.length})` },
     { key: 'zone', label: `Zone only (${zoneCount})` },
-    { key: 'valid', label: `Valid data (${assets.length - invalidDataCount})` },
-    { key: 'invalid', label: `Invalid data (${invalidDataCount})` },
   ]
 
   return (
@@ -285,11 +263,10 @@ export default function DashboardPage() {
       <div className="stats-grid">
         <StatCard label="Average score" value={avgScore} />
         <StatCard label="Strong zones" value={strongZoneCount} />
-        <StatCard label="Invalid data" value={invalidDataCount} hint="zero volume/range or invalid_market_data" />
         <StatCard label="London total" value={(sessionCounts.london || 0) + (sessionCounts.london_open || 0)} hint={`Open: ${sessionCounts.london_open || 0} · Core: ${sessionCounts.london || 0}`} />
+        <StatCard label="New York" value={sessionCounts.new_york || 0} />
       </div>
       <div className="stats-grid">
-        <StatCard label="New York" value={sessionCounts.new_york || 0} />
         <StatCard label="Asia / off" value={(sessionCounts.asia || 0) + (sessionCounts.off_session || 0)} hint={`Asia: ${sessionCounts.asia || 0} · Off: ${sessionCounts.off_session || 0}`} />
       </div>
       {loading ? <div className="panel">Loading assets…</div> : null}
