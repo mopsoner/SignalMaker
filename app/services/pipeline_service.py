@@ -14,7 +14,9 @@ from app.services.signal_engine_service import SignalEngineService
 from app.services.trade_candidate_service import TradeCandidateService
 
 
-EXECUTION_INTERVAL = "15m"
+DEFAULT_EXECUTION_INTERVAL = "15m"
+ALLOWED_EXECUTION_INTERVALS = {"5m", "15m"}
+LEGACY_ENGINE_INTERVAL = "5m"
 
 
 class PipelineService:
@@ -28,10 +30,18 @@ class PipelineService:
         self.trade_candidates = TradeCandidateService(db)
         self.market_data = MarketDataService(db)
 
-    def _bundle_limits(self) -> dict[str, int]:
+    def _execution_interval(self) -> str:
+        raw = self.collector.runtime.get("strategy", {}).get("signal_execution_interval", DEFAULT_EXECUTION_INTERVAL)
+        interval = str(raw or DEFAULT_EXECUTION_INTERVAL).strip().lower()
+        return interval if interval in ALLOWED_EXECUTION_INTERVALS else DEFAULT_EXECUTION_INTERVAL
+
+    def _lookback_key(self, interval: str) -> str:
+        return f"binance_lookback_{interval}"
+
+    def _bundle_limits(self, execution_interval: str) -> dict[str, int]:
         runtime = self.collector.runtime["binance"]
         return {
-            EXECUTION_INTERVAL: int(runtime.get("binance_lookback_15m", runtime.get("binance_lookback_5m", 180))),
+            execution_interval: int(runtime.get(self._lookback_key(execution_interval), 180)),
             "1h": int(runtime["binance_lookback_1h"]),
             "4h": int(runtime["binance_lookback_4h"]),
         }
@@ -56,6 +66,7 @@ class PipelineService:
         return fetched, errors
 
     def run_once(self, limit: int | None = None) -> dict:
+        execution_interval = self._execution_interval()
         symbols = self.collector.discover_symbols(limit=limit)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
         self.live_runs.start_run(run_id=run_id, mode="paper", symbols_total=len(symbols))
@@ -82,8 +93,8 @@ class PipelineService:
         max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
 
-        # Phase 1: collect/store execution TF first for all assets.
-        fetched_exec, collect_errors = self._collect_interval_parallel(symbols, EXECUTION_INTERVAL, latest_close_times, worker_count)
+        # Phase 1: collect/store selected execution timeframe first for all assets.
+        fetched_exec, collect_errors = self._collect_interval_parallel(symbols, execution_interval, latest_close_times, worker_count)
         errors.extend(collect_errors)
         for symbol in symbols:
             rows = fetched_exec.get(symbol)
@@ -91,11 +102,11 @@ class PipelineService:
                 continue
             try:
                 if rows:
-                    candles_written += self.market_data.upsert_candles(symbol, EXECUTION_INTERVAL, rows)
-                    interval_write_counts[EXECUTION_INTERVAL] += len(rows)
+                    candles_written += self.market_data.upsert_candles(symbol, execution_interval, rows)
+                    interval_write_counts[execution_interval] += len(rows)
                     collected_symbols.add(symbol)
             except Exception as exc:
-                errors.append({"symbol": symbol, "phase": f"store_{EXECUTION_INTERVAL}", "error": str(exc)})
+                errors.append({"symbol": symbol, "phase": f"store_{execution_interval}", "error": str(exc)})
 
         # Phase 2: collect/store HTF only when due.
         for interval in ("1h", "4h"):
@@ -113,14 +124,15 @@ class PipelineService:
                 except Exception as exc:
                     errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
-        limits = self._bundle_limits()
+        limits = self._bundle_limits(execution_interval)
         analyzed_symbols = sorted(collected_symbols)
         for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
-                quality_exec = self.market_data.validate_candle_series(EXECUTION_INTERVAL, candles.get(EXECUTION_INTERVAL, []), min_count=30)
+                execution_candles = candles.get(execution_interval, [])
+                quality_exec = self.market_data.validate_candle_series(execution_interval, execution_candles, min_count=30)
                 if not quality_exec["valid"]:
-                    errors.append({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{EXECUTION_INTERVAL}_quality", "issues": quality_exec["issues"]})
+                    errors.append({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{execution_interval}_quality", "issues": quality_exec["issues"]})
                     for issue in quality_exec["issues"]:
                         data_quality_counts[issue] += 1
                 if not candles.get("1h"):
@@ -132,17 +144,17 @@ class PipelineService:
                     data_quality_counts["missing_4h_bundle"] += 1
                     continue
 
-                # Low-impact migration: the legacy engine still reads the primary execution series as "5m".
-                # Feed it with the cleaner 15m execution candles while preserving the existing engine API.
-                candles["5m"] = candles.get(EXECUTION_INTERVAL, [])
+                # Low-impact compatibility: legacy Wyckoff v231 still consumes the primary execution series as "5m".
+                # The admin setting decides whether that series is real 5m candles or cleaner 15m candles.
+                candles[LEGACY_ENGINE_INTERVAL] = execution_candles
                 signal = self.engine.compute_signal(symbol, candles)
-                signal[f"candle_quality_{EXECUTION_INTERVAL}"] = quality_exec
-                signal["execution_timeframe"] = EXECUTION_INTERVAL
-                signal["signal_interval"] = EXECUTION_INTERVAL
+                signal[f"candle_quality_{execution_interval}"] = quality_exec
+                signal["execution_timeframe"] = execution_interval
+                signal["signal_interval"] = execution_interval
                 if "rsi_main_timeframe" in signal:
-                    signal["rsi_main_timeframe"] = EXECUTION_INTERVAL
-                if signal.get("confirm_source") == "5m_bos":
-                    signal["confirm_source"] = "15m_bos"
+                    signal["rsi_main_timeframe"] = execution_interval
+                if execution_interval != LEGACY_ENGINE_INTERVAL and signal.get("confirm_source") == "5m_bos":
+                    signal["confirm_source"] = f"{execution_interval}_bos"
 
                 assessment = self.planner.assess_signal(signal)
                 signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
@@ -189,7 +201,7 @@ class PipelineService:
                     data_quality_counts['volume_average_zero'] += 1
                 if (market_quality_debug.get('avg_range_pct') or 0) == 0:
                     data_quality_counts['market_range_zero'] += 1
-                if signal.get('signal_interval') == EXECUTION_INTERVAL and signal.get('rsi_main') in (0, 100):
+                if signal.get('signal_interval') == execution_interval and signal.get('rsi_main') in (0, 100):
                     data_quality_counts['rsi_main_extreme_edge'] += 1
                 if signal.get('internal_bear_pivot_high') == signal.get('internal_bull_pivot_low'):
                     data_quality_counts['internal_pivots_flat'] += 1
@@ -208,7 +220,7 @@ class PipelineService:
             "symbols_collected": len(collected_symbols),
             "symbols_scanned": scanned,
             "collect_workers": worker_count,
-            "execution_interval": EXECUTION_INTERVAL,
+            "execution_interval": execution_interval,
             "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
@@ -231,7 +243,7 @@ class PipelineService:
             "candles_written": candles_written,
             "candidates_created": candidates,
             "collect_workers": worker_count,
-            "execution_interval": EXECUTION_INTERVAL,
+            "execution_interval": execution_interval,
             "errors": errors,
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
