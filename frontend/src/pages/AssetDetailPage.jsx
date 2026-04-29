@@ -49,7 +49,7 @@ export default function AssetDetailPage() {
             <div>
               <h2>Signal summary</h2>
               <DebugRow label="Price" value={fmtNumber(asset.price, 6)} />
-              <DebugRow label="RSI 5M" value={fmtNumber(asset.rsi_5m, 2)} />
+              <DebugRow label="RSI 15M" value={fmtNumber(asset.rsi_15m ?? payload.rsi_15m ?? payload.rsi_main, 2)} />
               <DebugRow label="RSI 1H" value={fmtNumber(asset.rsi_1h, 2)} />
               <DebugRow label="RSI 4H" value={fmtNumber(payload.rsi_macro, 2)} />
               <DebugRow label="Zone quality" value={payload.zone_quality} />
