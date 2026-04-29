@@ -2,6 +2,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from uuid import uuid4
+import re
 
 from sqlalchemy.orm import Session
 
@@ -45,11 +46,10 @@ class PipelineService:
 
     def _clean_public_text(self, value):
         if isinstance(value, str):
-            return (
-                value.replace("5m", "15m")
-                .replace("5M", "15M")
-                .replace("blocked_no_15m_confirm", "blocked_no_15m_confirm")
-            )
+            # Replace legacy standalone 5m labels without corrupting already-normalized 15m values.
+            cleaned = re.sub(r"(?<!\d)5m\b", "15m", value)
+            cleaned = re.sub(r"(?<!\d)5M\b", "15M", cleaned)
+            return cleaned
         if isinstance(value, list):
             return [self._clean_public_text(item) for item in value]
         if isinstance(value, dict):
@@ -61,6 +61,8 @@ class PipelineService:
         legacy_trigger = payload.pop("execution_trigger_5m", None)
         if legacy_trigger and "execution_trigger" not in payload:
             payload["execution_trigger"] = {**legacy_trigger, "timeframe": EXECUTION_INTERVAL}
+        if isinstance(payload.get("execution_trigger"), dict):
+            payload["execution_trigger"]["timeframe"] = EXECUTION_INTERVAL
         payload.pop("rsi_5m", None)
         payload["rsi_15m"] = payload.get("rsi_main")
         payload["rsi_main_timeframe"] = EXECUTION_INTERVAL
