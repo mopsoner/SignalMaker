@@ -17,6 +17,12 @@ class Settings(BaseSettings):
                 return "postgresql+psycopg://" + v[len("postgresql://"):]
         return v
 
+    @field_validator("signal_execution_interval", mode="before")
+    @classmethod
+    def validate_execution_interval(cls, v: str) -> str:
+        value = str(v or "15m").strip().lower()
+        return value if value in {"5m", "15m"} else "15m"
+
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
@@ -64,6 +70,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str = Field(default="", alias="DISCORD_WEBHOOK_URL")
 
     session_timezone_offset_hours: int = Field(default=-4, alias="SESSION_TIMEZONE_OFFSET_HOURS")
+    signal_execution_interval: str = Field(default="15m", alias="SIGNAL_EXECUTION_INTERVAL")
     signal_rsi_period: int = Field(default=14, alias="SIGNAL_RSI_PERIOD")
     signal_swing_window: int = Field(default=8, alias="SIGNAL_SWING_WINDOW")
     signal_equal_level_tolerance_pct: float = Field(default=0.002, alias="SIGNAL_EQUAL_LEVEL_TOLERANCE_PCT")
@@ -94,6 +101,7 @@ class Settings(BaseSettings):
 
     def signal_config(self) -> dict:
         return {
+            "execution_interval": self.signal_execution_interval,
             "rsi_period": self.signal_rsi_period,
             "swing_window": self.signal_swing_window,
             "equal_level_tolerance_pct": self.signal_equal_level_tolerance_pct,
