@@ -39,7 +39,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
-        "signal_execution_interval": base_settings.signal_execution_interval,
+        "signal_execution_interval": "15m",
         "signal_rsi_period": base_settings.signal_rsi_period,
         "signal_swing_window": base_settings.signal_swing_window,
         "signal_equal_level_tolerance_pct": base_settings.signal_equal_level_tolerance_pct,
@@ -87,8 +87,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
-        interval = str(payload["strategy"].get("signal_execution_interval") or "15m").strip().lower()
-        payload["strategy"]["signal_execution_interval"] = interval if interval in {"5m", "15m"} else "15m"
+        payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         return payload
     finally:
         if owns_session:
@@ -97,9 +96,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
 
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     strategy = payload.get("strategy")
-    if isinstance(strategy, dict) and "signal_execution_interval" in strategy:
-        interval = str(strategy.get("signal_execution_interval") or "15m").strip().lower()
-        strategy["signal_execution_interval"] = interval if interval in {"5m", "15m"} else "15m"
+    if isinstance(strategy, dict):
+        strategy["signal_execution_interval"] = "15m"
 
     for category, values in payload.items():
         if not isinstance(values, dict):
@@ -119,7 +117,7 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
     strategy = load_runtime_settings(db)["strategy"]
     return {
-        "execution_interval": strategy["signal_execution_interval"],
+        "execution_interval": "15m",
         "rsi_period": strategy["signal_rsi_period"],
         "swing_window": strategy["signal_swing_window"],
         "equal_level_tolerance_pct": strategy["signal_equal_level_tolerance_pct"],
