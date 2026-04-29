@@ -18,6 +18,19 @@ from app.services.trade_candidate_service import TradeCandidateService
 EXECUTION_INTERVAL = "15m"
 LEGACY_ENGINE_INTERVAL = "5m"
 
+PUBLIC_STATUS_REPLACEMENTS = {
+    "blocked_no_5m_confirm": "blocked_no_confirm",
+    "blocked_no_15m_confirm": "blocked_no_confirm",
+    "reclaimed_waiting_5m_confirm": "reclaimed_waiting_confirm",
+    "reclaimed_waiting_15m_confirm": "reclaimed_waiting_confirm",
+    "rejected_waiting_5m_confirm": "rejected_waiting_confirm",
+    "rejected_waiting_15m_confirm": "rejected_waiting_confirm",
+    "waiting_5m_confirm": "waiting_confirm",
+    "waiting_15m_confirm": "waiting_confirm",
+    "5m_confirm": "confirm",
+    "15m_confirm": "confirm",
+}
+
 
 class PipelineService:
     def __init__(self, db: Session) -> None:
@@ -46,8 +59,10 @@ class PipelineService:
 
     def _clean_public_text(self, value):
         if isinstance(value, str):
-            # Replace legacy standalone 5m labels without corrupting already-normalized 15m values.
-            cleaned = re.sub(r"(?<!\d)5m\b", "15m", value)
+            cleaned = value
+            for old, new in PUBLIC_STATUS_REPLACEMENTS.items():
+                cleaned = cleaned.replace(old, new)
+            cleaned = re.sub(r"(?<!\d)5m\b", "15m", cleaned)
             cleaned = re.sub(r"(?<!\d)5M\b", "15M", cleaned)
             return cleaned
         if isinstance(value, list):
