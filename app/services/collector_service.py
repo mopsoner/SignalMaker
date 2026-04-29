@@ -131,7 +131,7 @@ class CollectorService:
         min_trades = int(self.runtime['binance'].get('binance_min_trades_24h', 0) or 0)
 
         ranked: list[dict[str, Any]] = []
-        fallback: list[str] = []
+        eligible_count = 0
         for row in info.get('symbols', []):
             symbol = str(row.get('symbol', '')).upper()
             base_asset = str(row.get('baseAsset', '')).upper()
@@ -145,10 +145,10 @@ class CollectorService:
             if not row.get('isSpotTradingAllowed', False):
                 continue
 
+            eligible_count += 1
             stats = stats_24h.get(symbol) or {}
             quote_volume = float(stats.get('quoteVolume') or 0.0)
             trade_count = int(stats.get('count') or 0)
-            fallback.append(symbol)
             if quote_volume < min_quote_volume:
                 continue
             if trade_count < min_trades:
@@ -178,12 +178,11 @@ class CollectorService:
             )
             return symbols
 
-        fallback = sorted(set(fallback))[:max_symbols]
         logger.warning(
-            "No symbols passed liquidity filters; falling back to alphabetical discovery. min_quote_volume=%s min_trades=%s fallback=%d",
-            min_quote_volume, min_trades, len(fallback),
+            "No symbols passed liquidity filters. min_quote_volume=%s min_trades=%s eligible=%d",
+            min_quote_volume, min_trades, eligible_count,
         )
-        return fallback
+        return []
 
     def fetch_klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict[str, Any]]:
         if limit <= 0:
