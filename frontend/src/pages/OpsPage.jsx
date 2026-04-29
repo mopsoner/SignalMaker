@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import DataTable from '../components/DataTable'
+import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
@@ -14,25 +14,16 @@ function fmtSpan(hours) {
 
 function objectToRows(obj) {
   if (!obj || typeof obj !== 'object') return []
-  return Object.entries(obj)
-    .map(([key, value]) => ({ id: key, metric: key, value }))
-    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+  return Object.entries(obj).map(([key, value]) => ({ id: key, metric: key, value })).sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
 }
 
 export default function OpsPage() {
-  const healthLoader = useCallback(() => api.health(), [])
-  const servicesLoader = useCallback(() => api.services(), [])
-  const fillsLoader = useCallback(() => api.fills('?limit=50'), [])
-  const candlesLoader = useCallback(() => api.candles('?latest=true&limit=200'), [])
-  const summaryLoader = useCallback(() => api.candleSummary(), [])
-  const liveRunsLoader = useCallback(() => api.liveRuns('?limit=10'), [])
-
-  const { data: health, error: healthError } = usePollingQuery(healthLoader, 10000)
-  const { data: services } = usePollingQuery(servicesLoader, 10000)
-  const { data: fills = [] } = usePollingQuery(fillsLoader, 10000)
-  const { data: candles = [] } = usePollingQuery(candlesLoader, 10000)
-  const { data: summary = [] } = usePollingQuery(summaryLoader, 30000)
-  const { data: liveRuns = [] } = usePollingQuery(liveRunsLoader, 15000)
+  const { data: health, error: healthError } = usePollingQuery(useCallback(() => api.health(), []), 10000)
+  const { data: services } = usePollingQuery(useCallback(() => api.services(), []), 10000)
+  const { data: fills = [] } = usePollingQuery(useCallback(() => api.fills('?limit=50'), []), 10000)
+  const { data: candles = [] } = usePollingQuery(useCallback(() => api.candles('?latest=true&limit=200'), []), 10000)
+  const { data: summary = [] } = usePollingQuery(useCallback(() => api.candleSummary(), []), 30000)
+  const { data: liveRuns = [] } = usePollingQuery(useCallback(() => api.liveRuns('?limit=10'), []), 15000)
 
   const serviceRows = services ? Object.entries(services).map(([name, meta]) => ({ id: name, name, ...meta })) : []
   const serviceColumns = [
@@ -64,91 +55,27 @@ export default function OpsPage() {
     { key: 'last_close', title: "Jusqu'à", render: (row) => fmtDate(row.last_close) },
     { key: 'last_ingested', title: 'Ingéré', render: (row) => fmtDate(row.last_ingested) },
   ]
-  const metricColumns = [
-    { key: 'metric', title: 'Metric' },
-    { key: 'value', title: 'Value' },
-  ]
+  const metricColumns = [{ key: 'metric', title: 'Metric' }, { key: 'value', title: 'Value' }]
 
   const symbols = [...new Set(summary.map((r) => r.symbol))].length
   const totalCandles = summary.reduce((s, r) => s + (r.candle_count || 0), 0)
-
   const latestRun = useMemo(() => (Array.isArray(liveRuns) && liveRuns.length ? liveRuns[0] : null), [liveRuns])
-  const latestRunWithStats = useMemo(() => {
-    if (!Array.isArray(liveRuns)) return null
-    return liveRuns.find((run) => run?.stats && Object.keys(run.stats || {}).length > 0) || null
-  }, [liveRuns])
+  const latestRunWithStats = useMemo(() => Array.isArray(liveRuns) ? liveRuns.find((run) => run?.stats && Object.keys(run.stats || {}).length > 0) || null : null, [liveRuns])
   const displayRun = latestRunWithStats || latestRun
   const latestStats = displayRun?.stats || {}
   const pipelineMetricRows = objectToRows(latestStats.pipeline_counts)
   const plannerMetricRows = objectToRows(latestStats.planner_reason_counts)
   const dataQualityMetricRows = objectToRows(latestStats.data_quality_counts)
   const structureMetricRows = objectToRows(latestStats.structure_counts)
-  const hasAnyMetrics = Boolean(
-    pipelineMetricRows.length || plannerMetricRows.length || dataQualityMetricRows.length || structureMetricRows.length,
-  )
+  const hasAnyMetrics = Boolean(pipelineMetricRows.length || plannerMetricRows.length || dataQualityMetricRows.length || structureMetricRows.length)
 
-  return (
-    <div className="page-stack">
-      <PageHeader title="Ops" subtitle="Service health, fills and market ingestion state" />
-      <div className="stats-grid">
-        <StatCard label="API status" value={health?.status || '—'} hint={healthError || ''} />
-        <StatCard label="Environment" value={health?.env || '—'} />
-        <StatCard label="Database" value={health?.database || '—'} />
-        <StatCard label="Symbols tracked" value={symbols || '—'} hint={`${totalCandles.toLocaleString()} candles total`} />
-      </div>
-      <div className="stats-grid">
-        <StatCard label="Last pipeline run" value={displayRun ? fmtDate(displayRun.started_at) : '—'} hint={displayRun?.run_id || ''} />
-        <StatCard label="Scanned" value={latestStats.symbols_scanned ?? displayRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? displayRun?.symbols_total ?? '—'}`} />
-        <StatCard label="Candidates" value={latestStats.candidates_created ?? '—'} hint={`Workers: ${latestStats.collect_workers ?? '—'}`} />
-        <StatCard label="Candles written" value={latestStats.candles_written ?? '—'} />
-      </div>
-      <section className="panel">
-        <h2>Pipeline audit metrics</h2>
-        {!displayRun ? <div>No live run data yet.</div> : null}
-        {displayRun && !hasAnyMetrics ? <div>Latest runs found, but no saved stats yet. Run the pipeline once after backend restart.</div> : null}
-        {displayRun && hasAnyMetrics ? (
-          <div className="two-col">
-            <div>
-              <h3>Pipeline counts</h3>
-              <DataTable columns={metricColumns} rows={pipelineMetricRows} empty="No pipeline metrics" />
-            </div>
-            <div>
-              <h3>Planner rejection reasons</h3>
-              <DataTable columns={metricColumns} rows={plannerMetricRows} empty="No planner metrics" />
-            </div>
-            <div>
-              <h3>Data quality alerts</h3>
-              <DataTable columns={metricColumns} rows={dataQualityMetricRows} empty="No data quality alerts" />
-            </div>
-            <div>
-              <h3>Structure counters</h3>
-              <DataTable columns={metricColumns} rows={structureMetricRows} empty="No structure counters" />
-            </div>
-          </div>
-        ) : null}
-      </section>
-      <section className="panel">
-        <h2>Service health</h2>
-        <DataTable columns={serviceColumns} rows={serviceRows} empty="No service data" />
-      </section>
-      <section className="panel">
-        <h2>Étendue des candles par symbole / timeframe</h2>
-        <DataTable
-          columns={summaryColumns}
-          rows={summary.map((r) => ({ ...r, id: `${r.symbol}-${r.interval}` }))}
-          empty="Aucune donnée"
-        />
-      </section>
-      <section className="panel two-col">
-        <div>
-          <h2>Recent fills</h2>
-          <DataTable columns={fillColumns} rows={fills} empty="No fills yet" />
-        </div>
-        <div>
-          <h2>Recent candles</h2>
-          <DataTable columns={candleColumns} rows={candles} empty="No candles stored yet" />
-        </div>
-      </section>
-    </div>
-  )
+  return <div className="page-stack">
+    <PageHeader title="Ops" subtitle="Service health, fills and market ingestion state" />
+    <div className="stats-grid"><StatCard label="API status" value={health?.status || '—'} hint={healthError || ''} /><StatCard label="Environment" value={health?.env || '—'} /><StatCard label="Database" value={health?.database || '—'} /><StatCard label="Symbols tracked" value={symbols || '—'} hint={`${totalCandles.toLocaleString()} candles total`} /></div>
+    <div className="stats-grid"><StatCard label="Last pipeline run" value={displayRun ? fmtDate(displayRun.started_at) : '—'} hint={displayRun?.run_id || ''} /><StatCard label="Scanned" value={latestStats.symbols_scanned ?? displayRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? displayRun?.symbols_total ?? '—'}`} /><StatCard label="Candidates" value={latestStats.candidates_created ?? '—'} hint={`Workers: ${latestStats.collect_workers ?? '—'}`} /><StatCard label="Candles written" value={latestStats.candles_written ?? '—'} /></div>
+    <section className="panel"><h2>Pipeline audit metrics</h2>{!displayRun ? <div>No live run data yet.</div> : null}{displayRun && !hasAnyMetrics ? <div>Latest runs found, but no saved stats yet. Run the pipeline once after backend restart.</div> : null}{displayRun && hasAnyMetrics ? <div className="two-col"><FoldableTable title="Pipeline counts" columns={metricColumns} rows={pipelineMetricRows} empty="No pipeline metrics" /><FoldableTable title="Planner rejection reasons" columns={metricColumns} rows={plannerMetricRows} empty="No planner metrics" /><FoldableTable title="Data quality alerts" columns={metricColumns} rows={dataQualityMetricRows} empty="No data quality alerts" defaultOpen={false} /><FoldableTable title="Structure counters" columns={metricColumns} rows={structureMetricRows} empty="No structure counters" /></div> : null}</section>
+    <FoldableTable title="Service health" columns={serviceColumns} rows={serviceRows} empty="No service data" />
+    <FoldableTable title="Étendue des candles par symbole / timeframe" columns={summaryColumns} rows={summary.map((r) => ({ ...r, id: `${r.symbol}-${r.interval}` }))} empty="Aucune donnée" />
+    <section className="panel two-col"><FoldableTable title="Recent fills" columns={fillColumns} rows={fills} empty="No fills yet" /><FoldableTable title="Recent candles" columns={candleColumns} rows={candles} empty="No candles stored yet" /></section>
+  </div>
 }
