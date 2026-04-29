@@ -1,6 +1,7 @@
 import logging
 import math
 import time
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -110,11 +111,36 @@ class CollectorService:
         }
 
     def _runtime_csv(self, key: str) -> list[str]:
-        return [
-            item.strip().upper()
-            for item in str(self.runtime['binance'].get(key, '')).split(',')
-            if item.strip()
-        ]
+        raw = str(self.runtime['binance'].get(key, '')).replace(';', ',').replace('\n', ',')
+        values: list[str] = []
+        for item in raw.split(','):
+            value = item.strip().upper()
+            if value and value not in values:
+                values.append(value)
+        return values
+
+    def _round_robin_by_quote(self, buckets: dict[str, list[str]], allowed_quotes: list[str], max_symbols: int) -> list[str]:
+        picked: list[str] = []
+        seen: set[str] = set()
+        indexes = {quote: 0 for quote in allowed_quotes}
+        while len(picked) < max_symbols:
+            added = False
+            for quote in allowed_quotes:
+                bucket = buckets.get(quote, [])
+                while indexes[quote] < len(bucket) and bucket[indexes[quote]] in seen:
+                    indexes[quote] += 1
+                if indexes[quote] >= len(bucket):
+                    continue
+                symbol = bucket[indexes[quote]]
+                indexes[quote] += 1
+                picked.append(symbol)
+                seen.add(symbol)
+                added = True
+                if len(picked) >= max_symbols:
+                    break
+            if not added:
+                break
+        return picked
 
     def discover_symbols(self, limit: int | None = None) -> list[str]:
         info = self._get('/api/v3/exchangeInfo')
@@ -123,7 +149,8 @@ class CollectorService:
         status_name = self.runtime['binance']['binance_symbol_status']
         max_symbols = int(limit or self.runtime['binance']['binance_max_symbols'])
 
-        symbols: list[str] = []
+        buckets: dict[str, list[str]] = defaultdict(list)
+        eligible_by_quote = Counter()
         for row in info.get('symbols', []):
             symbol = str(row.get('symbol', '')).upper()
             base_asset = str(row.get('baseAsset', '')).upper()
@@ -136,12 +163,23 @@ class CollectorService:
                 continue
             if not row.get('isSpotTradingAllowed', False):
                 continue
-            symbols.append(symbol)
+            eligible_by_quote[quote_asset] += 1
+            buckets[quote_asset].append(symbol)
 
-        symbols = sorted(set(symbols))[:max_symbols]
+        for quote in allowed_quotes:
+            buckets[quote] = sorted(set(buckets.get(quote, [])))
+
+        symbols = self._round_robin_by_quote(buckets, allowed_quotes, max_symbols)
+        selected_by_quote = Counter()
+        for symbol in symbols:
+            for quote in allowed_quotes:
+                if symbol.endswith(quote):
+                    selected_by_quote[quote] += 1
+                    break
+
         logger.info(
-            "Discovered %d symbols without liquidity filters. quotes=%s status=%s max_symbols=%s",
-            len(symbols), allowed_quotes, status_name, max_symbols,
+            "Discovered %d symbols without liquidity filters. quotes=%s eligible_by_quote=%s selected_by_quote=%s max_symbols=%s",
+            len(symbols), allowed_quotes, dict(eligible_by_quote), dict(selected_by_quote), max_symbols,
         )
         return symbols
 
