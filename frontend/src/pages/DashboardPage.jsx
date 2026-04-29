@@ -24,22 +24,25 @@ const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear'))
 const bos = (row) => Boolean(get(row, 'bos_bull') || get(row, 'bos_bear'))
 
 function CycleView({ row }) {
-  const macro = get(row, 'macro_window_4h') || {}
-  const t = trigger(row) || {}
+  const pipeline = row?.state_payload?.pipeline || {}
+  const currentStage = row.stage || 'collect'
   const trade = row?.state_payload?.trade || {}
+  const liquidityDone = Boolean(pipeline.liquidity) || ['liquidity', 'zone', 'confirm', 'trade'].includes(currentStage)
+  const zoneDone = Boolean(pipeline.zone) || ['zone', 'confirm', 'trade'].includes(currentStage)
+  const confirmDone = Boolean(pipeline.confirm) || ['confirm', 'trade'].includes(currentStage) || executionReady(row)
+  const tradeDone = Boolean(pipeline.trade) || currentStage === 'trade' || Boolean(trade.status && trade.status !== 'watch' && trade.side && trade.side !== 'none')
   const steps = [
-    ['4H', Boolean(macro.valid), !macro.valid],
-    ['SWP', swept(row), false],
-    ['WY', ['rejected_waiting_15m_confirm', 'reclaimed_waiting_15m_confirm', 'execution_ready'].includes(wyckoffStatus(row)), false],
-    ['15M', Boolean(t.valid), false],
-    ['TRD', Boolean(trade.status && trade.status !== 'watch' && trade.side && trade.side !== 'none'), false],
+    ['Liquidity', liquidityDone],
+    ['Zone', zoneDone],
+    ['Confirm', confirmDone],
+    ['Trade', tradeDone],
   ]
-  return <div style={{ display: 'grid', gap: 4, minWidth: 190 }}><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done, isBlocked]) => <span key={key} style={{ borderRadius: 999, padding: '3px 8px', background: isBlocked ? '#7f1d1d' : done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{wyckoffStatus(row)}</div></div>
+  return <div style={{ display: 'grid', gap: 4, minWidth: 250 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 58, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{wyckoffStatus(row)} · {strongZone(row) ? 'zone ok' : 'zone weak'}</div></div>
 }
 
 function MobileAssetCards({ rows }) {
   if (!rows.length) return <div className="empty-cell">No asset state available</div>
-  return <div className="mobile-card-grid market-mobile-cards">{rows.map((row) => <article className="mobile-asset-card" key={row.id || row.symbol}><div className="mobile-asset-top"><div><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><div className="mobile-asset-meta">{get(row, 'state') || '—'} · {row.bias || '—'}</div></div><span className={stageBadgeClass(row.stage)}>{row.stage}</span></div><CycleView row={row} /><div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI 15M</span><strong>{fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2)}</strong></div><div><span>Wyckoff</span><strong>{wyckoffStatus(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div><div className="mobile-reason"><span>Reason</span><strong>{reason(row)}</strong></div><div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div></article>)}</div>
+  return <div className="mobile-card-grid market-mobile-cards">{rows.map((row) => <article className="mobile-asset-card" key={row.id || row.symbol}><div className="mobile-asset-top"><div><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><div className="mobile-asset-meta">{get(row, 'state') || '—'} · {row.bias || '—'}</div></div><span className={stageBadgeClass(row.stage)}>{row.stage}</span></div><CycleView row={row} /><div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI</span><strong>{fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2)}</strong></div><div><span>Wyckoff</span><strong>{wyckoffStatus(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div><div className="mobile-reason"><span>Reason</span><strong>{reason(row)}</strong></div><div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div></article>)}</div>
 }
 
 export default function DashboardPage() {
@@ -87,11 +90,11 @@ export default function DashboardPage() {
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span>, sortValue: (row) => row.stage },
-    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: wyckoffStatus },
+    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: (row) => row.stage },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
-    { key: 'rsi_15m', title: 'RSI 15M', render: (row) => fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2), sortValue: (row) => Number(row.rsi_15m ?? get(row, 'rsi_main') ?? -1) },
+    { key: 'rsi', title: 'RSI', render: (row) => fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2), sortValue: (row) => Number(row.rsi_15m ?? get(row, 'rsi_main') ?? -1) },
     { key: 'reason', title: 'Planner reason', render: reason, sortValue: reason },
     { key: 'trigger', title: 'Execution trigger', render: (row) => trigger(row)?.trigger || '—', sortValue: (row) => trigger(row)?.trigger || '' },
     { key: 'wyckoff', title: 'Wyckoff wait', render: wyckoffStatus, sortValue: wyckoffStatus },
