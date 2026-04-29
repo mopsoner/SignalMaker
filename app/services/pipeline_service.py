@@ -125,7 +125,9 @@ class PipelineService:
                     errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
         limits = self._bundle_limits(execution_interval)
-        analyzed_symbols = sorted(collected_symbols)
+        # Analyze every requested symbol after ingestion. Incremental fetch can write 0 new candles
+        # when bars are already current, but the dashboard still needs a fresh asset_state_current update.
+        analyzed_symbols = sorted(set(symbols))
         for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)

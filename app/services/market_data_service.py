@@ -9,6 +9,7 @@ from app.models.market_candle import MarketCandle
 INTERVAL_MS = {
     "1m": 60_000,
     "5m": 300_000,
+    "15m": 900_000,
     "1h": 3_600_000,
     "4h": 14_400_000,
 }
