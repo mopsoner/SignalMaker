@@ -14,8 +14,7 @@ from app.services.signal_engine_service import SignalEngineService
 from app.services.trade_candidate_service import TradeCandidateService
 
 
-DEFAULT_EXECUTION_INTERVAL = "15m"
-ALLOWED_EXECUTION_INTERVALS = {"5m", "15m"}
+EXECUTION_INTERVAL = "15m"
 LEGACY_ENGINE_INTERVAL = "5m"
 
 
@@ -31,9 +30,7 @@ class PipelineService:
         self.market_data = MarketDataService(db)
 
     def _execution_interval(self) -> str:
-        raw = self.collector.runtime.get("strategy", {}).get("signal_execution_interval", DEFAULT_EXECUTION_INTERVAL)
-        interval = str(raw or DEFAULT_EXECUTION_INTERVAL).strip().lower()
-        return interval if interval in ALLOWED_EXECUTION_INTERVALS else DEFAULT_EXECUTION_INTERVAL
+        return EXECUTION_INTERVAL
 
     def _lookback_key(self, interval: str) -> str:
         return f"binance_lookback_{interval}"
@@ -45,6 +42,33 @@ class PipelineService:
             "1h": int(runtime["binance_lookback_1h"]),
             "4h": int(runtime["binance_lookback_4h"]),
         }
+
+    def _clean_public_text(self, value):
+        if isinstance(value, str):
+            return (
+                value.replace("5m", "15m")
+                .replace("5M", "15M")
+                .replace("blocked_no_15m_confirm", "blocked_no_15m_confirm")
+            )
+        if isinstance(value, list):
+            return [self._clean_public_text(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._clean_public_text(item) for key, item in value.items()}
+        return value
+
+    def _public_signal(self, signal: dict) -> dict:
+        payload = self._clean_public_text(dict(signal))
+        legacy_trigger = payload.pop("execution_trigger_5m", None)
+        if legacy_trigger and "execution_trigger" not in payload:
+            payload["execution_trigger"] = {**legacy_trigger, "timeframe": EXECUTION_INTERVAL}
+        payload.pop("rsi_5m", None)
+        payload["rsi_15m"] = payload.get("rsi_main")
+        payload["rsi_main_timeframe"] = EXECUTION_INTERVAL
+        payload["signal_interval"] = EXECUTION_INTERVAL
+        payload["execution_timeframe"] = EXECUTION_INTERVAL
+        if payload.get("confirm_source") == "5m_bos":
+            payload["confirm_source"] = "15m_bos"
+        return payload
 
     def _collect_interval_parallel(self, symbols: list[str], interval: str, latest_close_times: dict[str, dict[str, int]], worker_count: int) -> tuple[dict[str, list[dict]], list[dict]]:
         fetched: dict[str, list[dict]] = {}
@@ -93,7 +117,6 @@ class PipelineService:
         max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
 
-        # Phase 1: collect/store selected execution timeframe first for all assets.
         fetched_exec, collect_errors = self._collect_interval_parallel(symbols, execution_interval, latest_close_times, worker_count)
         errors.extend(collect_errors)
         for symbol in symbols:
@@ -108,7 +131,6 @@ class PipelineService:
             except Exception as exc:
                 errors.append({"symbol": symbol, "phase": f"store_{execution_interval}", "error": str(exc)})
 
-        # Phase 2: collect/store HTF only when due.
         for interval in ("1h", "4h"):
             fetched_htf, collect_errors = self._collect_interval_parallel(symbols, interval, latest_close_times, worker_count)
             errors.extend(collect_errors)
@@ -125,8 +147,6 @@ class PipelineService:
                     errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
         limits = self._bundle_limits(execution_interval)
-        # Analyze every requested symbol after ingestion. Incremental fetch can write 0 new candles
-        # when bars are already current, but the dashboard still needs a fresh asset_state_current update.
         analyzed_symbols = sorted(set(symbols))
         for symbol in analyzed_symbols:
             try:
@@ -146,25 +166,29 @@ class PipelineService:
                     data_quality_counts["missing_4h_bundle"] += 1
                     continue
 
-                # Low-impact compatibility: legacy Wyckoff v231 still consumes the primary execution series as "5m".
-                # The admin setting decides whether that series is real 5m candles or cleaner 15m candles.
+                # Internal compatibility only: legacy strategy code reads the primary execution series through this key.
                 candles[LEGACY_ENGINE_INTERVAL] = execution_candles
-                signal = self.engine.compute_signal(symbol, candles)
-                signal[f"candle_quality_{execution_interval}"] = quality_exec
-                signal["execution_timeframe"] = execution_interval
-                signal["signal_interval"] = execution_interval
-                if "rsi_main_timeframe" in signal:
-                    signal["rsi_main_timeframe"] = execution_interval
-                if execution_interval != LEGACY_ENGINE_INTERVAL and signal.get("confirm_source") == "5m_bos":
-                    signal["confirm_source"] = f"{execution_interval}_bos"
+                raw_signal = self.engine.compute_signal(symbol, candles)
+                raw_signal[f"candle_quality_{execution_interval}"] = quality_exec
+                raw_signal["execution_timeframe"] = execution_interval
+                raw_signal["signal_interval"] = execution_interval
+                raw_signal["rsi_main_timeframe"] = execution_interval
+                legacy_trigger = raw_signal.get("execution_trigger_5m")
+                if legacy_trigger:
+                    raw_signal["execution_trigger"] = {**legacy_trigger, "timeframe": execution_interval}
+                if raw_signal.get("confirm_source") == "5m_bos":
+                    raw_signal["confirm_source"] = "15m_bos"
 
-                assessment = self.planner.assess_signal(signal)
-                signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
-                signal['planner_candidate_reason'] = assessment['reason']
-                signal['planner_candidate_rr'] = assessment.get('rr_ratio')
+                assessment = self.planner.assess_signal(raw_signal)
+                raw_signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
+                raw_signal['planner_candidate_reason'] = self._clean_public_text(assessment['reason'])
+                raw_signal['planner_candidate_rr'] = assessment.get('rr_ratio')
+                signal = self._public_signal(raw_signal)
                 self.asset_states.upsert_from_signal(signal)
                 candidate = assessment['candidate']
                 if candidate:
+                    candidate['payload'] = signal
+                    candidate['notes'] = self._clean_public_text(candidate.get('notes'))
                     self.trade_candidates.upsert_open_candidate(**candidate)
                     candidates += 1
 
@@ -174,7 +198,7 @@ class PipelineService:
                     if pipeline.get(stage):
                         pipeline_counts[stage] += 1
 
-                planner_reason_counts[assessment.get('reason', 'unknown')] += 1
+                planner_reason_counts[signal.get('planner_candidate_reason', 'unknown')] += 1
                 state_counts[signal.get('state', 'unknown')] += 1
                 bias_counts[signal.get('bias', 'unknown')] += 1
                 trigger_counts[signal.get('trigger', 'unknown')] += 1

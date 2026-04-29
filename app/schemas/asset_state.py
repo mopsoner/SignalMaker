@@ -10,7 +10,7 @@ class AssetStateBase(BaseModel):
     score: float = 0.0
     price: float | None = None
     rsi_1h: float | None = None
-    rsi_5m: float | None = None
+    rsi_15m: float | None = None
     liquidity_context: dict | None = None
     execution_target: dict | None = None
     planner_notes: str | None = None

@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     @field_validator("signal_execution_interval", mode="before")
     @classmethod
     def validate_execution_interval(cls, v: str) -> str:
-        value = str(v or "15m").strip().lower()
-        return value if value in {"5m", "15m"} else "15m"
+        return "15m"
 
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
@@ -101,7 +100,7 @@ class Settings(BaseSettings):
 
     def signal_config(self) -> dict:
         return {
-            "execution_interval": self.signal_execution_interval,
+            "execution_interval": "15m",
             "rsi_period": self.signal_rsi_period,
             "swing_window": self.signal_swing_window,
             "equal_level_tolerance_pct": self.signal_equal_level_tolerance_pct,

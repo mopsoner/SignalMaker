@@ -21,7 +21,7 @@ class AssetStateCurrent(Base):
     score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
     rsi_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rsi_5m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rsi_15m: Mapped[float | None] = mapped_column(Float, nullable=True)
     liquidity_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     execution_target: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     planner_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
