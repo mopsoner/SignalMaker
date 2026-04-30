@@ -73,9 +73,26 @@ class AssetStateService:
         payload["execution_timeframe"] = "15m"
         return payload
 
+    def _stage_from_signal(self, signal: dict) -> str:
+        # The hierarchical gate owns the user-facing stage. Fall back to the old
+        # pipeline-derived stage only for legacy payloads that do not expose it.
+        explicit_stage = signal.get("stage") or (signal.get("hierarchy_gate") or {}).get("stage")
+        if explicit_stage:
+            return explicit_stage
+        pipeline = signal.get("pipeline", {}) or {}
+        if pipeline.get("trade"):
+            return "trade"
+        if pipeline.get("confirm"):
+            return "confirm"
+        if pipeline.get("zone"):
+            return "zone"
+        if pipeline.get("liquidity"):
+            return "liquidity"
+        return "collect"
+
     def upsert_from_signal(self, signal: dict) -> AssetStateCurrent:
         payload = AssetStateUpsert(
-            stage=("trade" if signal.get("pipeline", {}).get("trade") else "confirm" if signal.get("pipeline", {}).get("confirm") else "zone" if signal.get("pipeline", {}).get("zone") else "liquidity" if signal.get("pipeline", {}).get("liquidity") else "collect"),
+            stage=self._stage_from_signal(signal),
             bias=signal.get("bias"),
             session=signal.get("session"),
             score=float(signal.get("score", 0.0)),
