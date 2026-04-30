@@ -4,7 +4,7 @@ This module intentionally sits above the legacy engine. The legacy engine can st
 collect context and detect local structure, but it cannot promote a signal to
 `confirm` unless the higher-timeframe gates agree:
 
-4H  -> macro campaign context
+4H  -> macro campaign context / cycle location
 1H  -> liquidity / Wyckoff-SMC setup zone
 15M -> execution confirmation only
 """
@@ -45,6 +45,12 @@ def _clean_trigger_source(source):
     if source == "5m_bos":
         return "15m_bos"
     return source
+
+
+def _near(price: float, level, pct: float) -> bool:
+    if price <= 0 or level is None:
+        return False
+    return abs(price - float(level)) / price <= pct
 
 
 def _side_structure_seen(signal: dict, side: str) -> bool:
@@ -90,12 +96,79 @@ def _block(stage: str, reason: str, source_stage: str) -> dict:
     }
 
 
+def _cycle_position_4h(signal: dict) -> dict:
+    """Classify whether a local 15M trigger is early, mid, or late in the 4H cycle.
+
+    This separates move detection from entry quality. A BOS/MSS into the opposite
+    4H side is not a new entry; it is a mature move / TP area.
+    """
+    side = _bias_side(signal)
+    macro = signal.get("macro_window_4h") or {}
+    price = float(signal.get("price") or 0.0)
+    pos = macro.get("range_position")
+    target = (signal.get("execution_target") or {}).get("level") or (signal.get("projected_target") or {}).get("level")
+    near_target = _near(price, target, 0.006)
+    near_support = bool(macro.get("near_support_4h"))
+    near_resistance = bool(macro.get("near_resistance_4h"))
+
+    if pos is None:
+        zone = "unknown"
+    elif pos >= 0.65:
+        zone = "premium"
+    elif pos <= 0.35:
+        zone = "discount"
+    else:
+        zone = "mid_range"
+
+    late_bear = bool(side == "bear" and (near_target or near_support or (pos is not None and pos <= 0.40)))
+    late_bull = bool(side == "bull" and (near_target or near_resistance or (pos is not None and pos >= 0.60)))
+    favorable_bear = bool(side == "bear" and (near_resistance or (pos is not None and pos >= 0.60)))
+    favorable_bull = bool(side == "bull" and (near_support or (pos is not None and pos <= 0.40)))
+
+    if late_bear:
+        stage = "late_bear_cycle"
+        tradability = "no_new_short"
+        reason = "late_bear_cycle_near_support_or_target"
+    elif late_bull:
+        stage = "late_bull_cycle"
+        tradability = "no_new_long"
+        reason = "late_bull_cycle_near_resistance_or_target"
+    elif favorable_bear or favorable_bull:
+        stage = "entry_window"
+        tradability = "entry_allowed_if_1h_15m_confirm"
+        reason = f"{side}_entry_window_{zone}"
+    else:
+        stage = "mid_cycle"
+        tradability = "wait_for_edge"
+        reason = f"{side}_mid_cycle_no_clear_edge"
+
+    return {
+        "side": side,
+        "zone": zone,
+        "range_position": pos,
+        "near_support_4h": near_support,
+        "near_resistance_4h": near_resistance,
+        "near_execution_target": near_target,
+        "execution_target": target,
+        "stage": stage,
+        "tradability": tradability,
+        "is_late_cycle": late_bear or late_bull,
+        "is_entry_window": favorable_bear or favorable_bull,
+        "reason": reason,
+    }
+
+
 def _resolve_gate(signal: dict) -> dict:
     side = _bias_side(signal)
     macro = signal.get("macro_window_4h") or {}
     refinement = signal.get("refinement_context_1h") or {}
     wyckoff = signal.get("wyckoff_requirement") or {}
     zone_validity = signal.get("zone_validity") or {}
+    cycle = signal.get("cycle_position_4h") or _cycle_position_4h(signal)
+
+    # Late cycle has priority: the move can be real, but the entry is too late.
+    if cycle.get("is_late_cycle"):
+        return _block(cycle["stage"], cycle["reason"], "cycle_4h")
 
     macro_ok = bool(macro.get("valid") and side != "neutral" and macro.get("side") == side)
     liquidity_ok = bool(
@@ -124,6 +197,8 @@ def _resolve_gate(signal: dict) -> dict:
     if side == "neutral":
         return _block("macro_watch", "neutral_bias", "macro_4h")
     if not macro_ok:
+        if cycle.get("stage") == "mid_cycle":
+            return _block("mid_cycle_watch", cycle.get("reason") or "mid_cycle_no_clear_4h_edge", "cycle_4h")
         return _block("macro_watch", f"missing_4h_{side}_window:{macro.get('reason') or 'no_clear_4h_trade_window'}", "macro_4h")
     if not liquidity_ok:
         return _block("liquidity_watch", "missing_liquidity_context", "liquidity_1h")
@@ -157,7 +232,7 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
         wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
         wyckoff["status"] = f"blocked_by_{gate['blocked_at']}"
         wyckoff["confirmed"] = False
-        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h"}:
+        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h", "cycle_4h"}:
             wyckoff["setup_ready"] = False
         wyckoff["reason"] = gate.get("reason") or wyckoff.get("reason")
         signal["wyckoff_requirement"] = wyckoff
@@ -166,28 +241,25 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
     if isinstance(zone, dict):
         zone.setdefault("legacy_valid", zone.get("valid"))
         zone.setdefault("legacy_reason", zone.get("reason"))
-        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h", "wyckoff_1h"}:
+        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h", "wyckoff_1h", "cycle_4h"}:
             zone["valid"] = False
             zone["reason"] = gate.get("reason") or zone.get("reason")
         signal["zone_validity"] = zone
 
-    # The final score was computed before the strict gate in the legacy pass.
-    # Keep it, but expose a gated score so the UI/debug can distinguish quality
-    # from tradability.
-    signal["gated_score"] = 0 if gate.get("blocked_at") == "macro_4h" else signal.get("final_score", signal.get("score"))
+    if gate.get("blocked_at") in {"macro_4h", "cycle_4h"}:
+        signal["gated_score"] = 0
+    else:
+        signal["gated_score"] = signal.get("final_score", signal.get("score"))
 
 
 def apply_hierarchical_stage_gates(signal: dict) -> dict:
-    """Mutate and return a signal using strict HTF -> execution gates.
-
-    The important distinction is:
-    - execution trigger seen: local 15M structure was detected
-    - execution trigger accepted: 4H + 1H + Wyckoff gates authorize it
-    """
+    """Mutate and return a signal using strict HTF -> execution gates."""
     if not isinstance(signal, dict):
         return signal
 
     pipeline = dict(signal.get("pipeline") or {})
+    cycle = _cycle_position_4h(signal)
+    signal["cycle_position_4h"] = cycle
     gate = _resolve_gate(signal)
     accepted = not gate["blocked"]
     side = _bias_side(signal)
@@ -200,7 +272,6 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
 
     _normalize_blocked_debug(signal, gate)
 
-    # Preserve local structure diagnostics, but separate detected vs authorized.
     execution_trigger = dict(signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or signal.get("execution_trigger") or {})
     execution_trigger.update({
         "seen": execution_seen,
@@ -218,15 +289,16 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_macro__1h_zone__execution_confirm",
+        "model": "4h_cycle__4h_macro__1h_zone__execution_confirm",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
         "blocked_at": gate["blocked_at"],
         "block_reason": None if accepted else gate["reason"],
-        "macro_4h_ok": gate["stage"] not in {"macro_watch"} and side != "neutral",
-        "liquidity_ok": gate["stage"] not in {"macro_watch", "liquidity_watch"},
-        "zone_1h_ok": gate["stage"] not in {"macro_watch", "liquidity_watch", "zone_watch"},
+        "macro_4h_ok": gate["stage"] not in {"macro_watch", "mid_cycle_watch", "late_bear_cycle", "late_bull_cycle"} and side != "neutral",
+        "cycle_4h_ok": not cycle.get("is_late_cycle") and cycle.get("stage") != "mid_cycle",
+        "liquidity_ok": gate["stage"] not in {"macro_watch", "mid_cycle_watch", "late_bear_cycle", "late_bull_cycle", "liquidity_watch"},
+        "zone_1h_ok": gate["stage"] not in {"macro_watch", "mid_cycle_watch", "late_bear_cycle", "late_bull_cycle", "liquidity_watch", "zone_watch"},
         "confirm_15m_seen": execution_seen,
         "confirm_15m_accepted": accepted,
     }
@@ -235,8 +307,8 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["hierarchy_block_reason"] = None if accepted else gate["reason"]
 
     pipeline["collect"] = True
-    pipeline["liquidity"] = gate["stage"] not in {"macro_watch"}
-    pipeline["zone"] = gate["stage"] not in {"macro_watch", "liquidity_watch", "zone_watch", "wyckoff_watch"}
+    pipeline["liquidity"] = gate["stage"] not in {"macro_watch", "mid_cycle_watch", "late_bear_cycle", "late_bull_cycle"}
+    pipeline["zone"] = gate["stage"] not in {"macro_watch", "mid_cycle_watch", "late_bear_cycle", "late_bull_cycle", "liquidity_watch", "zone_watch", "wyckoff_watch"}
     pipeline["confirm"] = accepted
     pipeline["trade"] = bool(pipeline.get("trade") and accepted)
     signal["pipeline"] = pipeline
