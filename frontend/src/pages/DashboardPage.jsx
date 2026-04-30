@@ -20,6 +20,8 @@ const executionReady = (row) => stage(row) === 'trade' || stage(row) === 'confir
 const swept = (row) => ['swept_waiting_rejection', 'swept_waiting_reclaim', 'rejected_waiting_15m_confirm', 'reclaimed_waiting_15m_confirm', 'execution_ready'].includes(wyckoffStatus(row))
 const waitingSweep = (row) => wyckoffStatus(row) === 'waiting_sweep'
 const blocked = (row) => Boolean(get(row, 'confirm_blocked_by_hierarchy')) || wyckoffStatus(row) === 'blocked' || String(reason(row)).includes('blocked')
+const macroBlocked = (row) => stage(row) === 'macro_watch' || String(reason(row)).includes('missing_4h_') || get(row, 'hierarchy_gate')?.blocked_at === 'macro_4h'
+const actionableWatch = (row) => ['trade', 'confirm', 'confirm_watch', 'wyckoff_watch', 'zone_watch'].includes(stage(row)) && !macroBlocked(row)
 const hasTarget = (row) => Boolean(row.execution_target?.level || get(row, 'projected_target')?.level)
 const strongZone = (row) => Boolean(get(row, 'zone_validity')?.valid)
 const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear'))
@@ -48,12 +50,14 @@ function MobileAssetCards({ rows }) {
 }
 
 export default function DashboardPage() {
-  const [marketFilter, setMarketFilter] = useState('all')
+  const [marketFilter, setMarketFilter] = useState('actionable')
   const { data: adminSettings } = usePollingQuery(useCallback(() => api.adminSettings(), []), 30000)
   const assetLimit = Number(adminSettings?.binance?.binance_max_symbols || 50)
   const { data: assets = [], loading, error } = usePollingQuery(useCallback(() => api.assets(`?limit=${assetLimit}&sort_by=updated_at`), [assetLimit]), 15000)
 
   const counts = useMemo(() => ({
+    actionable: assets.filter(actionableWatch).length,
+    macroBlocked: assets.filter(macroBlocked).length,
     trade: assets.filter(stageIs('trade')).length,
     confirm: assets.filter(stageIs('confirm')).length,
     confirmWatch: assets.filter(stageIs('confirm_watch')).length,
@@ -78,6 +82,8 @@ export default function DashboardPage() {
   const avgScore = assets.length ? (assets.reduce((sum, row) => sum + score(row), 0) / assets.length).toFixed(2) : '0.00'
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => score(b) - score(a)).slice(0, 6), [assets])
   const filteredAssets = useMemo(() => {
+    if (marketFilter === 'actionable') return assets.filter(actionableWatch)
+    if (marketFilter === 'macro_blocked') return assets.filter(macroBlocked)
     if (marketFilter === 'execution_ready') return assets.filter(executionReady)
     if (marketFilter === 'trade') return assets.filter(stageIs('trade'))
     if (marketFilter === 'confirm') return assets.filter(stageIs('confirm'))
@@ -118,7 +124,9 @@ export default function DashboardPage() {
     { key: 'updated_at', title: 'Updated', render: (row) => fmtDate(row.updated_at), sortValue: (row) => row.updated_at },
   ]
   const filters = [
+    ['actionable', `Actionable watch (${counts.actionable})`],
     ['all', `All (${assets.length})`],
+    ['macro_blocked', `Macro blocked (${counts.macroBlocked})`],
     ['execution_ready', `Execution ready (${counts.ready})`],
     ['trade', `Trade (${counts.trade})`],
     ['confirm', `Confirm (${counts.confirm})`],
@@ -141,5 +149,5 @@ export default function DashboardPage() {
     ['blocked', `Blocked (${counts.blocked})`],
   ]
 
-  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade stage" value={counts.trade} /><StatCard label="Confirm stage" value={counts.confirm} /><StatCard label="Confirm watch" value={counts.confirmWatch} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Macro watch" value={counts.macroWatch} /><StatCard label="Bull / Bear" value={`${counts.bull} / ${counts.bear}`} /><StatCard label="Execution ready" value={counts.ready} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 8)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={[...filteredAssets].sort((a, b) => score(b) - score(a))} /></details></div>
+  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Actionable watch" value={counts.actionable} /><StatCard label="Confirm watch" value={counts.confirmWatch} /><StatCard label="Macro blocked" value={counts.macroBlocked} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Macro watch" value={counts.macroWatch} /><StatCard label="Bull / Bear" value={`${counts.bull} / ${counts.bear}`} /><StatCard label="Execution ready" value={counts.ready} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 8)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={[...filteredAssets].sort((a, b) => score(b) - score(a))} /></details></div>
 }
