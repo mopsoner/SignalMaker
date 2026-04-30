@@ -11,6 +11,7 @@ from app.services.collector_service import CollectorService
 from app.services.live_run_service import LiveRunService
 from app.services.market_data_service import MarketDataService
 from app.services.planner_service import PlannerService
+from app.services.signal_context_service import apply_context_driven_progression
 from app.services.signal_engine_service import SignalEngineService
 from app.services.trade_candidate_service import TradeCandidateService
 
@@ -186,6 +187,7 @@ class PipelineService:
                 # Internal compatibility only: legacy strategy code reads the primary execution series through this key.
                 candles[LEGACY_ENGINE_INTERVAL] = execution_candles
                 raw_signal = self.engine.compute_signal(symbol, candles)
+                raw_signal = apply_context_driven_progression(raw_signal)
                 raw_signal[f"candle_quality_{execution_interval}"] = quality_exec
                 raw_signal["execution_timeframe"] = execution_interval
                 raw_signal["signal_interval"] = execution_interval
