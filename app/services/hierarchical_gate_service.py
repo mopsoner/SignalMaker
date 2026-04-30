@@ -56,12 +56,7 @@ def _side_structure_seen(signal: dict, side: str) -> bool:
 
 
 def _execution_seen(signal: dict) -> bool:
-    """True only when a real local execution event was detected.
-
-    Do not rely on legacy `pipeline.confirm` alone. Some legacy/context passes can
-    leave that flag true even when there is no MSS/BOS, no break trigger and no
-    usable confirm source. That caused `seen=true` on pure zone watches.
-    """
+    """True only when a real local execution event was detected."""
     side = _bias_side(signal)
     legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
     public_trigger = signal.get("execution_trigger") or {}
@@ -151,6 +146,37 @@ def _resolve_gate(signal: dict) -> dict:
     }
 
 
+def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
+    """Avoid contradictory debug when a lower layer saw execution but HTF gates reject it."""
+    if not gate.get("blocked"):
+        return
+
+    wyckoff = signal.get("wyckoff_requirement")
+    if isinstance(wyckoff, dict):
+        wyckoff.setdefault("legacy_status", wyckoff.get("status"))
+        wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
+        wyckoff["status"] = f"blocked_by_{gate['blocked_at']}"
+        wyckoff["confirmed"] = False
+        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h"}:
+            wyckoff["setup_ready"] = False
+        wyckoff["reason"] = gate.get("reason") or wyckoff.get("reason")
+        signal["wyckoff_requirement"] = wyckoff
+
+    zone = signal.get("zone_validity")
+    if isinstance(zone, dict):
+        zone.setdefault("legacy_valid", zone.get("valid"))
+        zone.setdefault("legacy_reason", zone.get("reason"))
+        if gate.get("blocked_at") in {"macro_4h", "liquidity_1h", "zone_1h", "wyckoff_1h"}:
+            zone["valid"] = False
+            zone["reason"] = gate.get("reason") or zone.get("reason")
+        signal["zone_validity"] = zone
+
+    # The final score was computed before the strict gate in the legacy pass.
+    # Keep it, but expose a gated score so the UI/debug can distinguish quality
+    # from tradability.
+    signal["gated_score"] = 0 if gate.get("blocked_at") == "macro_4h" else signal.get("final_score", signal.get("score"))
+
+
 def apply_hierarchical_stage_gates(signal: dict) -> dict:
     """Mutate and return a signal using strict HTF -> execution gates.
 
@@ -171,6 +197,8 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     original_trade = signal.get("trade") or {}
     original_trigger = signal.get("trigger")
     original_confirm_source = _clean_trigger_source(signal.get("confirm_source"))
+
+    _normalize_blocked_debug(signal, gate)
 
     # Preserve local structure diagnostics, but separate detected vs authorized.
     execution_trigger = dict(signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or signal.get("execution_trigger") or {})
