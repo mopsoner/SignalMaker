@@ -20,8 +20,9 @@ const executionReady = (row) => stage(row) === 'trade' || stage(row) === 'confir
 const swept = (row) => ['swept_waiting_rejection', 'swept_waiting_reclaim', 'rejected_waiting_15m_confirm', 'reclaimed_waiting_15m_confirm', 'execution_ready'].includes(wyckoffStatus(row))
 const waitingSweep = (row) => wyckoffStatus(row) === 'waiting_sweep'
 const blocked = (row) => Boolean(get(row, 'confirm_blocked_by_hierarchy')) || wyckoffStatus(row) === 'blocked' || String(reason(row)).includes('blocked')
+const lateCycle = (row) => ['late_bear_cycle', 'late_bull_cycle'].includes(stage(row)) || get(row, 'cycle_position_4h')?.is_late_cycle
 const macroBlocked = (row) => stage(row) === 'macro_watch' || String(reason(row)).includes('missing_4h_') || get(row, 'hierarchy_gate')?.blocked_at === 'macro_4h'
-const actionableWatch = (row) => ['trade', 'confirm', 'confirm_watch', 'wyckoff_watch', 'zone_watch'].includes(stage(row)) && !macroBlocked(row)
+const actionableWatch = (row) => ['trade', 'confirm', 'confirm_watch', 'wyckoff_watch', 'zone_watch'].includes(stage(row)) && !macroBlocked(row) && !lateCycle(row)
 const hasTarget = (row) => Boolean(row.execution_target?.level || get(row, 'projected_target')?.level)
 const strongZone = (row) => Boolean(get(row, 'zone_validity')?.valid)
 const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear'))
@@ -35,13 +36,14 @@ function CycleView({ row }) {
   const zoneDone = Boolean(pipeline.zone) || ['zone', 'zone_watch', 'wyckoff_watch', 'confirm_watch', 'confirm', 'trade'].includes(currentStage)
   const confirmDone = Boolean(pipeline.confirm) || ['confirm', 'trade'].includes(currentStage) || executionReady(row)
   const tradeDone = Boolean(pipeline.trade) || currentStage === 'trade' || Boolean(trade.status && trade.status !== 'watch' && trade.side && trade.side !== 'none')
+  const cycle = get(row, 'cycle_position_4h')
   const steps = [
     ['Liquidity', liquidityDone],
     ['Zone', zoneDone],
     ['Confirm', confirmDone],
     ['Trade', tradeDone],
   ]
-  return <div style={{ display: 'grid', gap: 4, minWidth: 250 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 58, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{wyckoffStatus(row)} · {strongZone(row) ? 'zone ok' : 'zone weak'}</div></div>
+  return <div style={{ display: 'grid', gap: 4, minWidth: 250 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 58, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{cycle?.stage || wyckoffStatus(row)} · {strongZone(row) ? 'zone ok' : 'zone weak'}</div></div>
 }
 
 function MobileAssetCards({ rows }) {
@@ -57,6 +59,10 @@ export default function DashboardPage() {
 
   const counts = useMemo(() => ({
     actionable: assets.filter(actionableWatch).length,
+    lateCycle: assets.filter(lateCycle).length,
+    lateBear: assets.filter(stageIs('late_bear_cycle')).length,
+    lateBull: assets.filter(stageIs('late_bull_cycle')).length,
+    midCycle: assets.filter(stageIs('mid_cycle_watch')).length,
     macroBlocked: assets.filter(macroBlocked).length,
     trade: assets.filter(stageIs('trade')).length,
     confirm: assets.filter(stageIs('confirm')).length,
@@ -83,6 +89,10 @@ export default function DashboardPage() {
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => score(b) - score(a)).slice(0, 6), [assets])
   const filteredAssets = useMemo(() => {
     if (marketFilter === 'actionable') return assets.filter(actionableWatch)
+    if (marketFilter === 'late_cycle') return assets.filter(lateCycle)
+    if (marketFilter === 'late_bear') return assets.filter(stageIs('late_bear_cycle'))
+    if (marketFilter === 'late_bull') return assets.filter(stageIs('late_bull_cycle'))
+    if (marketFilter === 'mid_cycle') return assets.filter(stageIs('mid_cycle_watch'))
     if (marketFilter === 'macro_blocked') return assets.filter(macroBlocked)
     if (marketFilter === 'execution_ready') return assets.filter(executionReady)
     if (marketFilter === 'trade') return assets.filter(stageIs('trade'))
@@ -110,7 +120,7 @@ export default function DashboardPage() {
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(stage(row))}>{stage(row)}</span>, sortValue: stage },
-    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: stage },
+    { key: 'cycle', title: 'Cycle', render: (row) => <CycleView row={row} />, sortValue: (row) => get(row, 'cycle_position_4h')?.stage || stage(row) },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
@@ -126,6 +136,10 @@ export default function DashboardPage() {
   const filters = [
     ['actionable', `Actionable watch (${counts.actionable})`],
     ['all', `All (${assets.length})`],
+    ['late_cycle', `Late cycle (${counts.lateCycle})`],
+    ['late_bear', `Late bear (${counts.lateBear})`],
+    ['late_bull', `Late bull (${counts.lateBull})`],
+    ['mid_cycle', `Mid cycle (${counts.midCycle})`],
     ['macro_blocked', `Macro blocked (${counts.macroBlocked})`],
     ['execution_ready', `Execution ready (${counts.ready})`],
     ['trade', `Trade (${counts.trade})`],
@@ -149,5 +163,5 @@ export default function DashboardPage() {
     ['blocked', `Blocked (${counts.blocked})`],
   ]
 
-  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Actionable watch" value={counts.actionable} /><StatCard label="Confirm watch" value={counts.confirmWatch} /><StatCard label="Macro blocked" value={counts.macroBlocked} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Macro watch" value={counts.macroWatch} /><StatCard label="Bull / Bear" value={`${counts.bull} / ${counts.bear}`} /><StatCard label="Execution ready" value={counts.ready} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 8)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={[...filteredAssets].sort((a, b) => score(b) - score(a))} /></details></div>
+  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Actionable watch" value={counts.actionable} /><StatCard label="Late cycle" value={counts.lateCycle} /><StatCard label="Confirm watch" value={counts.confirmWatch} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Mid cycle" value={counts.midCycle} /><StatCard label="Bull / Bear" value={`${counts.bull} / ${counts.bear}`} /><StatCard label="Execution ready" value={counts.ready} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 8)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={[...filteredAssets].sort((a, b) => score(b) - score(a))} /></details></div>
 }
