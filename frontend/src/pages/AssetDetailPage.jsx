@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
@@ -18,6 +18,44 @@ function DebugRow({ label, value }) {
     <div className="debug-row">
       <div className="debug-label">{label}</div>
       <div className="debug-value">{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '—')}</div>
+    </div>
+  )
+}
+
+function CopyablePayload({ payload }) {
+  const [copied, setCopied] = useState(false)
+  const text = useMemo(() => JSON.stringify(payload || {}, null, 2), [payload])
+
+  const copyPayload = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch (error) {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }
+  }, [text])
+
+  return (
+    <div className="debug-row">
+      <div className="debug-label">Payload</div>
+      <div className="debug-value" style={{ display: 'grid', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+          <span style={{ opacity: 0.75 }}>Raw JSON payload</span>
+          <button type="button" className="button" onClick={copyPayload}>{copied ? 'Copied ✓' : 'Copy payload'}</button>
+        </div>
+        <pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto', maxHeight: 620, margin: 0 }}>{text}</pre>
+      </div>
     </div>
   )
 }
@@ -100,7 +138,7 @@ export default function AssetDetailPage() {
             </div>
             <div>
               <h2>Raw state payload</h2>
-              <DebugRow label="Payload" value={payload} />
+              <CopyablePayload payload={payload} />
             </div>
           </section>
         </>
