@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.services.asset_state_service import AssetStateService
 from app.services.collector_service import CollectorService
+from app.services.hierarchical_gate_service import apply_hierarchical_stage_gates
 from app.services.live_run_service import LiveRunService
 from app.services.market_data_service import MarketDataService
 from app.services.planner_service import PlannerService
@@ -198,10 +199,24 @@ class PipelineService:
                 if raw_signal.get("confirm_source") == "5m_bos":
                     raw_signal["confirm_source"] = "15m_bos"
 
-                assessment = self.planner.assess_signal(raw_signal)
-                raw_signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
-                raw_signal['planner_candidate_reason'] = self._clean_public_text(assessment['reason'])
-                raw_signal['planner_candidate_rr'] = assessment.get('rr_ratio')
+                # Strict Wyckoff + SMC hierarchy:
+                # 4H macro -> 1H zone/liquidity -> 15M confirmation -> planner.
+                # A local 15M BOS/MSS may be recorded as seen, but it cannot reach planner
+                # unless the higher-timeframe gates authorize it.
+                raw_signal = apply_hierarchical_stage_gates(raw_signal)
+
+                if raw_signal.get("confirm_blocked_by_hierarchy"):
+                    assessment = {
+                        "accepted": False,
+                        "reason": raw_signal.get("planner_candidate_reason") or raw_signal.get("confirm_block_reason") or "blocked_before_planner",
+                        "rr_ratio": None,
+                        "candidate": None,
+                    }
+                else:
+                    assessment = self.planner.assess_signal(raw_signal)
+                    raw_signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
+                    raw_signal['planner_candidate_reason'] = self._clean_public_text(assessment['reason'])
+                    raw_signal['planner_candidate_rr'] = assessment.get('rr_ratio')
                 signal = self._public_signal(raw_signal)
                 self.asset_states.upsert_from_signal(signal)
                 candidate = assessment['candidate']
@@ -235,6 +250,8 @@ class PipelineService:
                     structure_counts['bos_bear'] += 1
                 if signal.get('confirm_blocked_by_session'):
                     structure_counts['confirm_blocked_by_session'] += 1
+                if signal.get('confirm_blocked_by_hierarchy'):
+                    structure_counts['confirm_blocked_by_hierarchy'] += 1
                 if signal.get('tp_zone'):
                     structure_counts['tp_zone'] += 1
 
