@@ -23,13 +23,9 @@ class PlannerService:
         state = signal.get('state') or 'watch'
         execution_target = (signal.get('execution_target') or {}).get('level')
         entry_context = signal.get('entry_liquidity_context') or {}
-        macro_window = signal.get('macro_window_4h') or {}
         refinement = signal.get('refinement_context_1h') or {}
         exec_trigger = signal.get('execution_trigger_5m') or {}
         if trade.get('entry') is None:
-            if not macro_window.get('valid', True):
-                side = macro_window.get('side') or 'neutral'
-                return f"watch_outside_4h_window:{side}"
             if not refinement.get('valid', True):
                 return f"watch_missing_1h_setup:{refinement.get('reason', state)}"
             if not exec_trigger.get('valid', True):
