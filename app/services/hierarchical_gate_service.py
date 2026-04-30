@@ -40,21 +40,39 @@ def _has_level(value) -> bool:
 
 
 def _clean_trigger_source(source):
+    if source in {None, "", "none"}:
+        return None
     if source == "5m_bos":
         return "15m_bos"
     return source
 
 
+def _side_structure_seen(signal: dict, side: str) -> bool:
+    if side == "bull":
+        return bool(signal.get("mss_bull") or signal.get("bos_bull"))
+    if side == "bear":
+        return bool(signal.get("mss_bear") or signal.get("bos_bear"))
+    return bool(signal.get("mss_bull") or signal.get("bos_bull") or signal.get("mss_bear") or signal.get("bos_bear"))
+
+
 def _execution_seen(signal: dict) -> bool:
-    pipeline = signal.get("pipeline") or {}
+    """True only when a real local execution event was detected.
+
+    Do not rely on legacy `pipeline.confirm` alone. Some legacy/context passes can
+    leave that flag true even when there is no MSS/BOS, no break trigger and no
+    usable confirm source. That caused `seen=true` on pure zone watches.
+    """
+    side = _bias_side(signal)
     legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
     public_trigger = signal.get("execution_trigger") or {}
+    source = _execution_source(signal)
+    trigger = signal.get("trigger")
     return bool(
-        pipeline.get("confirm")
-        or legacy_trigger.get("valid")
-        or public_trigger.get("valid")
-        or signal.get("confirm_source")
-        or signal.get("trigger") in {"break_down_confirm", "break_up_confirm"}
+        source
+        or trigger in {"break_down_confirm", "break_up_confirm"}
+        or legacy_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
+        or public_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
+        or _side_structure_seen(signal, side)
     )
 
 
@@ -172,7 +190,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_macro__1h_zone__15m_confirm",
+        "model": "4h_macro__1h_zone__execution_confirm",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
