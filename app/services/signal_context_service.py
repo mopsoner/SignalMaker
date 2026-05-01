@@ -236,6 +236,56 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
     signal["planner_candidate_status"] = "candidate_watch"
     signal["planner_candidate_reason"] = None
     signal["planner_candidate_rr"] = reward / risk
+
+    wyckoff = signal.get("wyckoff_requirement")
+    if isinstance(wyckoff, dict):
+        wyckoff.setdefault("legacy_status", wyckoff.get("status"))
+        wyckoff.setdefault("legacy_reason", wyckoff.get("reason"))
+        wyckoff["status"] = "execution_ready" if confirm_ok else "1h_confirmed_15m_optional"
+        wyckoff["confirmed"] = True
+        wyckoff["setup_ready"] = True
+        wyckoff["reason"] = confirmation.get("source") or "1h_wyckoff_smc_confirmed"
+        signal["wyckoff_requirement"] = wyckoff
+
+    zone = signal.get("zone_validity")
+    if isinstance(zone, dict):
+        zone.setdefault("legacy_valid", zone.get("valid"))
+        zone.setdefault("legacy_reason", zone.get("reason"))
+        zone["valid"] = True
+        zone["wyckoff_ok"] = True
+        zone["target_ok"] = True
+        zone["reason"] = "valid_1h_wyckoff_candidate"
+        signal["zone_validity"] = zone
+
+    gate = signal.setdefault("hierarchy_gate", {})
+    gate.update({
+        "accepted": True,
+        "stage": signal["stage"],
+        "blocked_at": None,
+        "block_reason": None,
+        "zone_1h_ok": True,
+        "confirm_15m_seen": confirm_ok,
+        "confirmation_path": "1h_plus_15m" if confirm_ok else "1h_primary_15m_optional",
+    })
+
+    execution_trigger = signal.get("execution_trigger")
+    if isinstance(execution_trigger, dict):
+        execution_trigger["blocked"] = False
+        execution_trigger["blocked_by"] = None
+        execution_trigger["block_reason"] = None
+        execution_trigger["accepted"] = True
+        execution_trigger["valid"] = bool(confirm_ok)
+        signal["execution_trigger"] = execution_trigger
+
+    legacy_trigger = signal.get("execution_trigger_5m")
+    if isinstance(legacy_trigger, dict):
+        legacy_trigger["blocked"] = False
+        legacy_trigger["blocked_by"] = None
+        legacy_trigger["block_reason"] = None
+        legacy_trigger["accepted"] = True
+        legacy_trigger["valid"] = bool(confirm_ok)
+        signal["execution_trigger_5m"] = legacy_trigger
+
     signal["trade"] = {
         "status": "candidate",
         "side": "sell" if side == "bear" else "buy",
