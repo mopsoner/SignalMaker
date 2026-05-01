@@ -1,12 +1,13 @@
 """Hierarchical SignalMaker gates for Wyckoff + SMC progression.
 
 4H  -> macro context / target selection only
-1H  -> liquidity / Wyckoff-SMC setup zone
-15M -> execution confirmation only
+1H  -> decision timeframe: Spring / UTAD / MSS / BOS / reclaim / rejection
+15M -> optional execution-quality confirmation
 
-Important: the 4H cycle is not allowed to hard-block the engine anymore.
-A valid 1H Wyckoff/SMC event can progress to execution confirmation even when
-price is extended, post-sweep, or in the middle of the 4H range.
+The old zone_1h gate is intentionally removed. 1H validation is handled by the
+Wyckoff/SMC event model upstream, then this service only decides whether the
+setup should wait for a real 1H event, wait for optional 15m timing, or allow the
+planner to create a candidate.
 """
 
 EXECUTION_TIMEFRAME = "15m"
@@ -17,6 +18,7 @@ CONTEXT_TOO_FAR_PCT = 0.18
 
 WYCKOFF_EXECUTION_READY_STATUSES = {
     "execution_ready",
+    "1h_confirmed_15m_optional",
     "rejected_waiting_5m_confirm",
     "reclaimed_waiting_5m_confirm",
     "rejected_waiting_15m_confirm",
@@ -35,7 +37,7 @@ PRE_LIQUIDITY_STAGES = {
     "target_watch",
 }
 PRE_ZONE_STAGES = PRE_LIQUIDITY_STAGES | {"liquidity_watch"}
-PRE_CONFIRM_STAGES = PRE_ZONE_STAGES | {"zone_watch", "wyckoff_watch"}
+PRE_CONFIRM_STAGES = PRE_ZONE_STAGES | {"waiting_1h_event", "confirm_watch"}
 
 
 def _bias_side(signal: dict) -> str:
@@ -249,7 +251,7 @@ def _apply_ranked_context_selection(signal: dict) -> None:
         "context_candidates": context_candidates[:8],
         "selected_target": selected_target,
         "target_candidates": target_candidates[:8],
-        "selection_model": "ranked_4h_context_then_opposite_target_v2_no_cycle_block",
+        "selection_model": "ranked_4h_context_then_opposite_target_v4_no_zone_gate",
     }
 
     if selected_context:
@@ -321,16 +323,14 @@ def _validate_macro_context(signal: dict, side: str) -> dict:
 
     if distance_pct > CONTEXT_TOO_FAR_PCT:
         return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "macro_context_too_far_from_price"}
-    if side == "bear" and price > level:
-        if not swept:
-            return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bear_context_below_price_without_sweep"}
-        if not reclaimed_or_rejected:
-            return {"valid": False, "stage": "entry_context_watch", "blocked_at": "wyckoff_1h", "reason": "waiting_bear_rejection_below_macro_context"}
-    if side == "bull" and price < level:
-        if not swept:
-            return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bull_context_above_price_without_sweep"}
-        if not reclaimed_or_rejected:
-            return {"valid": False, "stage": "entry_context_watch", "blocked_at": "wyckoff_1h", "reason": "waiting_bull_reclaim_above_macro_context"}
+    if side == "bear" and price > level and not swept:
+        return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bear_context_below_price_without_sweep"}
+    if side == "bull" and price < level and not swept:
+        return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bull_context_above_price_without_sweep"}
+    if side == "bear" and price > level and swept and not reclaimed_or_rejected:
+        return {"valid": True, "stage": "waiting_1h_event", "blocked_at": "decision_1h", "reason": "waiting_bear_rejection_below_macro_context"}
+    if side == "bull" and price < level and swept and not reclaimed_or_rejected:
+        return {"valid": True, "stage": "waiting_1h_event", "blocked_at": "decision_1h", "reason": "waiting_bull_reclaim_above_macro_context"}
     return {"valid": True, "stage": None, "blocked_at": None, "reason": "macro_context_valid"}
 
 
@@ -360,7 +360,6 @@ def _validate_execution_target(signal: dict, side: str) -> dict:
 
 
 def _cycle_position_4h(signal: dict) -> dict:
-    """Diagnostic-only 4H location. It never blocks progression."""
     side = _bias_side(signal)
     macro = signal.get("macro_window_4h") or {}
     price = _price(signal)
@@ -383,9 +382,6 @@ def _cycle_position_4h(signal: dict) -> dict:
     favorable_bear = bool(side == "bear" and (near_resistance or (pos is not None and pos >= 0.60)))
     favorable_bull = bool(side == "bull" and (near_support or (pos is not None and pos <= 0.40)))
     stage = "entry_window" if favorable_bear or favorable_bull else "context_window"
-    tradability = "entry_allowed_if_1h_15m_confirm"
-    reason = f"{side}_4h_context_diagnostic_{zone}" if side != "neutral" else "neutral_context_diagnostic"
-
     return {
         "side": side,
         "zone": zone,
@@ -396,27 +392,37 @@ def _cycle_position_4h(signal: dict) -> dict:
         "execution_target": target,
         "context_level": context_level,
         "stage": stage,
-        "tradability": tradability,
+        "tradability": "entry_allowed_if_1h_event",
         "is_entry_window": True,
-        "reason": reason,
+        "reason": f"{side}_4h_context_diagnostic_{zone}" if side != "neutral" else "neutral_context_diagnostic",
     }
+
+
+def _one_hour_decision_ready(signal: dict, side: str) -> bool:
+    refinement = signal.get("refinement_context_1h") or {}
+    wyckoff = signal.get("wyckoff_requirement") or {}
+    model = signal.get("confirmation_model") or {}
+    one_hour = signal.get("one_hour_confirmation_debug") or {}
+    status = wyckoff.get("status")
+    return bool(
+        one_hour.get("valid")
+        or model.get("confirmed_by_1h")
+        or (refinement.get("valid") and refinement.get("side") == side and (wyckoff.get("setup_ready") or wyckoff.get("confirmed")))
+        or (status in WYCKOFF_SETUP_READY_STATUSES)
+        or wyckoff.get("setup_ready")
+        or wyckoff.get("confirmed")
+    )
 
 
 def _resolve_gate(signal: dict) -> dict:
     side = _bias_side(signal)
-    refinement = signal.get("refinement_context_1h") or {}
     wyckoff = signal.get("wyckoff_requirement") or {}
     zone_validity = signal.get("zone_validity") or {}
     macro_context = _validate_macro_context(signal, side)
 
     macro_ok = bool(side != "neutral" and macro_context.get("valid"))
     liquidity_ok = bool(_has_level(signal.get("macro_liquidity_context")) or _has_level(signal.get("entry_liquidity_context")) or _has_level(signal.get("liquidity_context")))
-    zone_1h_ok = bool(refinement.get("valid") and refinement.get("side") == side)
-
-    wyckoff_needed = bool(wyckoff.get("needed"))
-    wyckoff_status = wyckoff.get("status")
-    wyckoff_setup_ok = bool(not wyckoff_needed or wyckoff.get("setup_ready") or wyckoff.get("confirmed") or wyckoff_status in WYCKOFF_SETUP_READY_STATUSES)
-    wyckoff_execution_ok = bool(not wyckoff_needed or wyckoff.get("confirmed") or wyckoff_status in WYCKOFF_EXECUTION_READY_STATUSES)
+    one_hour_ready = _one_hour_decision_ready(signal, side)
     target_ok = bool(zone_validity.get("target_ok") or _target_level(signal) is not None)
     target_validation = _validate_execution_target(signal, side)
     execution_seen = _execution_seen(signal)
@@ -425,24 +431,26 @@ def _resolve_gate(signal: dict) -> dict:
         return _block("macro_watch", "neutral_bias", "macro_4h")
     if not macro_ok:
         return _block(macro_context["stage"], macro_context["reason"], macro_context["blocked_at"])
+    if macro_context.get("blocked_at") == "decision_1h":
+        return _block("waiting_1h_event", macro_context["reason"], "decision_1h")
     if _context_target_overlap(signal):
         return _block("context_target_overlap", "context_target_overlap", "target")
     if not liquidity_ok:
         return _block("liquidity_watch", "missing_liquidity_context", "liquidity_1h")
-    if not zone_1h_ok:
-        return _block("zone_watch", refinement.get("reason") or f"no_1h_{side}_setup", "zone_1h")
-    if not wyckoff_setup_ok:
-        return _block("wyckoff_watch", wyckoff.get("reason") or "wyckoff_setup_not_ready", "wyckoff_1h")
     if not target_ok:
-        return _block("zone_watch", "missing_execution_target", "zone_1h")
+        return _block("target_watch", "missing_execution_target", "target")
     if not target_validation.get("valid"):
         return _block("target_watch", target_validation["reason"], "target")
-    if not execution_seen:
-        return _block("confirm_watch", f"waiting_{EXECUTION_TIMEFRAME}_confirm", "confirm_15m")
-    if not wyckoff_execution_ok:
-        return _block("confirm_watch", wyckoff.get("reason") or "wyckoff_waiting_rejection_or_reclaim", "confirm_15m")
+    if not one_hour_ready:
+        return _block("waiting_1h_event", wyckoff.get("reason") or "waiting_1h_wyckoff_smc_event", "decision_1h")
 
-    return {"stage": "confirm", "blocked": False, "blocked_at": None, "reason": "hierarchy_confirmed"}
+    # 1H is decision. 15m confirmation is kept as a quality/timing layer, not a hard gate.
+    return {
+        "stage": "confirm" if execution_seen else "trade_candidate",
+        "blocked": False,
+        "blocked_at": None,
+        "reason": "hierarchy_confirmed_1h_primary" if not execution_seen else "hierarchy_confirmed_1h_plus_15m",
+    }
 
 
 def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
@@ -453,9 +461,12 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
     if isinstance(wyckoff, dict):
         wyckoff.setdefault("legacy_status", wyckoff.get("status"))
         wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
-        wyckoff["status"] = f"blocked_by_{gate['blocked_at']}"
+        if gate.get("blocked_at") == "decision_1h":
+            wyckoff["status"] = "waiting_1h_event"
+        else:
+            wyckoff["status"] = f"blocked_by_{gate['blocked_at']}"
         wyckoff["confirmed"] = False
-        if gate.get("blocked_at") in {"macro_4h", "context_4h", "liquidity_1h", "zone_1h", "target"}:
+        if gate.get("blocked_at") in {"macro_4h", "context_4h", "liquidity_1h", "target"}:
             wyckoff["setup_ready"] = False
         wyckoff["reason"] = gate.get("reason") or wyckoff.get("reason")
         signal["wyckoff_requirement"] = wyckoff
@@ -464,7 +475,7 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
     if isinstance(zone, dict):
         zone.setdefault("legacy_valid", zone.get("valid"))
         zone.setdefault("legacy_reason", zone.get("reason"))
-        if gate.get("blocked_at") in {"macro_4h", "context_4h", "liquidity_1h", "zone_1h", "wyckoff_1h", "target"}:
+        if gate.get("blocked_at") in {"macro_4h", "context_4h", "liquidity_1h", "target"}:
             zone["valid"] = False
             zone["reason"] = gate.get("reason") or zone.get("reason")
         signal["zone_validity"] = zone
@@ -498,7 +509,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     execution_trigger = dict(signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or signal.get("execution_trigger") or {})
     execution_trigger.update({
         "seen": execution_seen,
-        "valid": accepted,
+        "valid": bool(accepted and execution_seen),
         "accepted": accepted,
         "timeframe": EXECUTION_TIMEFRAME,
         "trigger": original_trigger,
@@ -512,7 +523,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_context__ranked_context__1h_zone__execution_confirm_v3_no_cycle_block",
+        "model": "4h_context__ranked_context__1h_decision__15m_optional_v4",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
@@ -521,9 +532,11 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
         "macro_4h_ok": side != "neutral" and gate["blocked_at"] not in {"macro_4h", "context_4h"},
         "cycle_4h_ok": True,
         "liquidity_ok": gate["stage"] not in PRE_ZONE_STAGES,
-        "zone_1h_ok": gate["stage"] not in PRE_CONFIRM_STAGES,
+        "one_hour_decision_ok": accepted or gate["blocked_at"] not in {"decision_1h"},
+        "zone_1h_ok": None,
         "confirm_15m_seen": execution_seen,
-        "confirm_15m_accepted": accepted,
+        "confirm_15m_accepted": bool(accepted and execution_seen),
+        "confirmation_path": "1h_plus_15m" if accepted and execution_seen else "1h_primary_15m_optional" if accepted else "waiting_1h_event",
     }
     signal["confirm_blocked_by_hierarchy"] = not accepted
     signal["confirm_block_reason"] = None if accepted else gate["reason"]
@@ -531,14 +544,17 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
 
     pipeline["collect"] = True
     pipeline["liquidity"] = gate["stage"] not in PRE_LIQUIDITY_STAGES
-    pipeline["zone"] = gate["stage"] not in PRE_CONFIRM_STAGES
+    pipeline["zone"] = gate["stage"] not in PRE_ZONE_STAGES
     pipeline["confirm"] = accepted
     pipeline["trade"] = bool(pipeline.get("trade") and accepted)
     signal["pipeline"] = pipeline
 
     if accepted:
-        signal["confirm_source"] = execution_source or original_confirm_source
-        signal["trigger"] = original_trigger
+        signal["confirm_source"] = execution_source or original_confirm_source or signal.get("confirm_source")
+        signal["trigger"] = original_trigger if execution_seen else "1h_confirm_15m_optional"
+        if gate["stage"] == "trade_candidate":
+            signal["planner_candidate_status"] = signal.get("planner_candidate_status") or "candidate_watch"
+            signal["planner_candidate_reason"] = None
         if original_trade:
             signal["trade"] = original_trade
     else:
@@ -547,7 +563,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
         signal["bias"] = "bear_watch" if side == "bear" else "bull_watch" if side == "bull" else "neutral"
         signal["trade"] = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
         signal["planner_candidate_status"] = "not_created"
-        signal["planner_candidate_reason"] = f"blocked_before_planner:{gate['reason']}"
+        signal["planner_candidate_reason"] = f"waiting:{gate['reason']}" if gate["blocked_at"] == "decision_1h" else f"blocked_before_planner:{gate['reason']}"
         signal["planner_candidate_rr"] = None
 
     return signal
