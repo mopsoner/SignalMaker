@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+
+def closes(candles: list[dict[str, Any]]) -> list[float]:
+    return [c["close"] for c in candles]
+
+
+def highs(candles: list[dict[str, Any]]) -> list[float]:
+    return [c["high"] for c in candles]
+
+
+def lows(candles: list[dict[str, Any]]) -> list[float]:
+    return [c["low"] for c in candles]
+
+
+def _trade_count(candle: dict[str, Any]) -> int:
+    return int(candle.get("number_of_trades") or candle.get("trades") or 0)
+
+
+def _trade_count_ok(candles: list[dict[str, Any]], index: int) -> bool:
+    """Reject volume confirmation on candles with too few actual trades.
+
+    Binance quote volume can occasionally look usable on thin books while the
+    candle was built from only a few executions. We accept either an absolute
+    minimum of trades or a relative spike versus the recent local average.
+    """
+    if not candles:
+        return False
+    candle = candles[index]
+    trade_count = _trade_count(candle)
+    if trade_count >= 30:
+        return True
+
+    start = max(0, index - 19)
+    window = candles[start:index + 1]
+    trade_counts = [_trade_count(c) for c in window]
+    avg_trades = sum(trade_counts) / len(trade_counts) if trade_counts else 0.0
+    if avg_trades <= 0:
+        # Backward compatibility: old stored candles have no trade count yet.
+        # Do not block them forever; new Binance candles will populate this.
+        return True
+    return (trade_count / avg_trades) >= 1.2
+
+
+def volumes(candles: list[dict[str, Any]]) -> list[float]:
+    """Return the execution-quality volume series used by confirmations.
+
+    Prefer Binance quote asset volume because it is normalized in the quote
+    currency, usually USDT, and is more comparable across altcoins than base
+    asset volume. Apply the number_of_trades quality gate to the latest candle
+    so a reclaim/MSS/BOS confirmation is not boosted by a very thin candle.
+    """
+    out: list[float] = []
+    for idx, candle in enumerate(candles):
+        value = float(candle.get("quote_volume") or candle.get("quoteVolume") or candle.get("volume", 0.0) or 0.0)
+        if idx == len(candles) - 1 and not _trade_count_ok(candles, idx):
+            value = 0.0
+        out.append(value)
+    return out
+
+
+def rsi(values: list[float], period: int = 14) -> float | None:
+    if len(values) < period + 1:
+        return None
+    diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
+    gains = [max(diff, 0.0) for diff in diffs]
+    losses = [max(-diff, 0.0) for diff in diffs]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def recent_extremes(candles: list[dict[str, Any]], window: int) -> tuple[float, float]:
+    subset = candles[-window:]
+    return max(c["high"] for c in subset), min(c["low"] for c in subset)
+
+
+def _local_dt(ts_ms: int | None, offset_hours: int) -> datetime:
+    if not ts_ms:
+        return datetime.now(timezone.utc) + timedelta(hours=offset_hours)
+    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) + timedelta(hours=offset_hours)
+
+
+def _session_from_hour(hour: int) -> str:
+    if 2 <= hour < 4:
+        return "asia"
+    if 4 <= hour < 6:
+        return "london_open"
+    if 6 <= hour < 9:
+        return "london"
+    if 9 <= hour < 12:
+        return "new_york"
+    return "off_session"
+
+
+def _session_phase_from_hour(hour: int) -> str:
+    if 0 <= hour < 2:
+        return "asia_build"
+    if 2 <= hour < 4:
+        return "asia_core"
+    if 4 <= hour < 6:
+        return "london_raid"
+    if 6 <= hour < 9:
+        return "london_core"
+    if 9 <= hour < 11:
+        return "new_york_expansion"
+    if 11 <= hour < 12:
+        return "overlap_fade"
+    return "off_session"
+
+
+def current_session(offset_hours: int) -> str:
+    now = datetime.now(timezone.utc) + timedelta(hours=offset_hours)
+    return _session_from_hour(now.hour)
+
+
+def session_from_timestamp(ts_ms: int | None, offset_hours: int) -> str:
+    return _session_from_hour(_local_dt(ts_ms, offset_hours).hour)
+
+
+def session_phase_from_timestamp(ts_ms: int | None, offset_hours: int) -> str:
+    return _session_phase_from_hour(_local_dt(ts_ms, offset_hours).hour)
+
+
+def infer_interval_label(candles: list[dict[str, Any]]) -> str:
+    if len(candles) < 2:
+        return "unknown"
+    delta_ms = candles[-1]["open_time"] - candles[-2]["open_time"]
+    minutes = int(round(delta_ms / 60000))
+    mapping = {1: "1m", 3: "3m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h", 240: "4h", 360: "6h", 480: "8h", 720: "12h", 1440: "1d"}
+    return mapping.get(minutes, f"{minutes}m")
+
+
+def near_level(price: float, level: float, pct: float) -> bool:
+    if level == 0:
+        return False
+    return abs(price - level) / level <= pct
+
+
+def session_extremes(candles: list[dict[str, Any]], offset_hours: int, session_name: str) -> tuple[float | None, float | None]:
+    selected = [c for c in candles if session_from_timestamp(c["open_time"], offset_hours) == session_name]
+    if not selected:
+        return None, None
+    return max(c["high"] for c in selected), min(c["low"] for c in selected)
+
+
+def today_session_extremes(candles: list[dict[str, Any]], offset_hours: int, session_name: str) -> tuple[float | None, float | None]:
+    if not candles:
+        return None, None
+    latest_date = _local_dt(candles[-1].get("open_time"), offset_hours).date()
+    selected = [
+        c for c in candles
+        if _local_dt(c.get("open_time"), offset_hours).date() == latest_date
+        and session_from_timestamp(c.get("open_time"), offset_hours) == session_name
+    ]
+    if not selected:
+        return None, None
+    return max(c["high"] for c in selected), min(c["low"] for c in selected)
+
+
+def equal_highs_lows(candles: list[dict[str, Any]], tolerance_pct: float, lookback: int = 20, min_touches: int = 3, min_separation: int = 2) -> dict[str, bool]:
+    subset = candles[-lookback:]
+    hs = highs(subset)
+    ls = lows(subset)
+    eqh = False
+    eql = False
+    if len(hs) >= min_touches:
+        top = max(hs)
+        near_idx = [i for i, h in enumerate(hs) if abs(h - top) / max(abs(top), 1e-9) <= tolerance_pct]
+        eqh = len(near_idx) >= min_touches and (near_idx[-1] - near_idx[0]) >= min_separation
+    if len(ls) >= min_touches:
+        bot = min(ls)
+        near_idx = [i for i, l in enumerate(ls) if abs(l - bot) / max(abs(bot), 1e-9) <= tolerance_pct]
+        eql = len(near_idx) >= min_touches and (near_idx[-1] - near_idx[0]) >= min_separation
+    return {"equal_highs": eqh, "equal_lows": eql}
+
+
+def previous_day_extremes(candles: list[dict[str, Any]], offset_hours: int) -> tuple[float | None, float | None]:
+    if not candles:
+        return None, None
+    latest = _local_dt(candles[-1].get("open_time"), offset_hours).date()
+    previous = latest - timedelta(days=1)
+    selected = [c for c in candles if _local_dt(c.get("open_time"), offset_hours).date() == previous]
+    if not selected:
+        return None, None
+    return max(c["high"] for c in selected), min(c["low"] for c in selected)
+
+
+def previous_week_extremes(candles: list[dict[str, Any]], offset_hours: int) -> tuple[float | None, float | None]:
+    if not candles:
+        return None, None
+    latest_dt = _local_dt(candles[-1].get("open_time"), offset_hours)
+    current_week_start = (latest_dt - timedelta(days=latest_dt.weekday())).date()
+    previous_week_start = current_week_start - timedelta(days=7)
+    previous_week_end = current_week_start
+    selected = []
+    for c in candles:
+        d = _local_dt(c.get("open_time"), offset_hours).date()
+        if previous_week_start <= d < previous_week_end:
+            selected.append(c)
+    if not selected:
+        return None, None
+    return max(c["high"] for c in selected), min(c["low"] for c in selected)

@@ -1,0 +1,71 @@
+modules = ["python-3.12", "web", "nodejs-20", "bash", "postgresql-16"]
+[agent]
+expertMode = true
+integrations = ["python_database:1.0.0"]
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "SignalMaker API"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev --prefix frontend"
+
+[[workflows.workflow]]
+name = "SignalMaker API"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash SignalMaker/run.sh api"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[deployment]
+deploymentTarget = "vm"
+run = ["python", "main.py"]
+build = ["bash", "-c", "pip install -r requirements.txt && cd frontend && npm install && npm run build"]
+
+[userenv]
+
+[userenv.shared]
+BINANCE_REST_BASE = "https://api.binance.us"
+BINANCE_COLLECT_MAX_WORKERS = "4"
+BINANCE_INCREMENTAL_FETCH_ENABLED = "true"
+BINANCE_INCREMENTAL_MIN_1M = "3"
+BINANCE_INCREMENTAL_MIN_5M = "3"
+BINANCE_INCREMENTAL_MIN_1H = "2"
+BINANCE_INCREMENTAL_MIN_4H = "2"
+
+[userenv.production]

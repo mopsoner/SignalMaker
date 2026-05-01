@@ -1,0 +1,12 @@
+{
+  "running": false,
+  "regions": [
+    "guadeloupe",
+    "paris"
+  ],
+  "max_workers": 6,
+  "request_timeout": 45,
+  "started_at": null,
+  "finished_at": "2026-04-10T01:27:56.790654",
+  "last_error": null
+}

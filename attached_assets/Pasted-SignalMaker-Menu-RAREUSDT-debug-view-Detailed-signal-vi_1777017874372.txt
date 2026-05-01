@@ -1,0 +1,320 @@
+SignalMaker
+Menu
+RAREUSDT debug view
+Detailed signal view with score, liquidity, target and session diagnostics.
+
+Back to dashboard
+Stage
+zone
+Bias
+bull_watch
+Score
+7.25
+Updated 24/04/2026 03:57:51
+Session
+asia_core
+Filter OFF
+Signal summary
+Price
+0.018200
+RSI 5M
+0.96
+RSI 1H
+60.69
+RSI 4H
+64.86
+Zone quality
+medium
+Confirm blocked by session
+false
+Confirm source
+none
+Contexts and target
+Macro liquidity
+old_support_shelf @ 0.0171
+Entry liquidity
+recent_low_1h @ 0.0171
+Execution target
+old_resistance_shelf @ 0.0189
+Projected target
+old_resistance_shelf @ 0.0189
+Trade
+{
+  "status": "watch",
+  "side": "none",
+  "entry": null,
+  "stop": null,
+  "target": null
+}
+Score breakdown
+Liquidity
+3
+Structure
+2
+Confirmation
+0
+Session
+1
+Quality
+1
+Volume
+0
+HTF alignment
+2
+Market quality
+0
+Target quality
+0
+MSS / BOS structure
+MSS bull / bear
+false / false
+BOS bull / bear
+false / false
+Internal bear pivot high
+—
+Internal bull pivot low
+—
+External swing high
+—
+External swing low
+—
+HTF debug
+Previous day high / low
+0.0189 / 0.0171
+Previous week high / low
+0.0189 / 0.0157
+EQH / EQL 1H
+true / true
+EQH / EQL 4H
+false / true
+Volume debug
+{
+  "last": 0,
+  "average": 0,
+  "ratio": 0,
+  "confirm_soft_ok": false,
+  "confirm_strong_bonus": false
+}
+Market quality debug
+{
+  "avg_range_pct": 0
+}
+Raw state payload
+Payload
+{
+  "symbol": "RAREUSDT",
+  "session": "asia",
+  "session_phase": "asia_core",
+  "signal_time": 1777016999999,
+  "signal_interval": "5m",
+  "price": 0.0182,
+  "rsi_main": 0.9573743458851851,
+  "rsi_main_timeframe": "5m",
+  "rsi_htf": 60.68572671978308,
+  "rsi_htf_timeframe": "1h",
+  "rsi_macro": 64.85562255162118,
+  "rsi_macro_timeframe": "4h",
+  "state": "support_retest_watch",
+  "trigger": "wait",
+  "bias": "bull_watch",
+  "tp_zone": true,
+  "score": 7.25,
+  "score_breakdown": {
+    "liquidity": 3,
+    "structure": 2,
+    "confirmation": 0,
+    "session": 1,
+    "quality": 1,
+    "volume": 0,
+    "htf_alignment": 2,
+    "market_quality": 0,
+    "target_quality": 0
+  },
+  "zone_quality": "medium",
+  "confirm_source": "none",
+  "confirm_blocked_by_session": false,
+  "session_confirm_filter_enabled": false,
+  "pipeline": {
+    "collect": true,
+    "liquidity": true,
+    "zone": true,
+    "confirm": false,
+    "trade": false
+  },
+  "trade": {
+    "status": "watch",
+    "side": "none",
+    "entry": null,
+    "stop": null,
+    "target": null
+  },
+  "liquidity_context": {
+    "type": "old_support_shelf",
+    "level": 0.0171,
+    "reason": "4h support shelf used as macro buy-side context",
+    "timeframe": "4h",
+    "scope": "macro"
+  },
+  "macro_liquidity_context": {
+    "type": "old_support_shelf",
+    "level": 0.0171,
+    "reason": "4h support shelf used as macro buy-side context",
+    "timeframe": "4h",
+    "scope": "macro"
+  },
+  "entry_liquidity_context": {
+    "type": "recent_low_1h",
+    "level": 0.0171,
+    "reason": "nearest 1h support used as primary buy entry context",
+    "timeframe": "1h",
+    "scope": "entry"
+  },
+  "execution_target": {
+    "type": "old_resistance_shelf",
+    "level": 0.0189,
+    "reason": "nearest historical resistance shelf used as projected execution target",
+    "timeframe": "4h"
+  },
+  "projected_target": {
+    "type": "old_resistance_shelf",
+    "level": 0.0189,
+    "reason": "nearest historical resistance shelf used as projected execution target",
+    "timeframe": "4h",
+    "projected": true
+  },
+  "previous_day_high": 0.0189,
+  "previous_day_low": 0.0171,
+  "previous_week_high": 0.0189,
+  "previous_week_low": 0.0157,
+  "equal_highs_1h": true,
+  "equal_lows_1h": true,
+  "equal_highs_4h": false,
+  "equal_lows_4h": true,
+  "range_high_1h": 0.0189,
+  "range_low_1h": 0.0171,
+  "range_high_4h": 0.0189,
+  "range_low_4h": 0.0149,
+  "major_swing_high_4h": 0.0189,
+  "major_swing_low_4h": 0.0149,
+  "old_resistance_shelf": {
+    "type": "old_resistance_shelf",
+    "level": 0.0189,
+    "reason": "historical resistance shelf with repeated reactions on 4h",
+    "timeframe": "4h",
+    "touches": 5
+  },
+  "old_support_shelf": {
+    "type": "old_support_shelf",
+    "level": 0.0171,
+    "reason": "historical support shelf with repeated reactions on 4h",
+    "timeframe": "4h",
+    "touches": 30
+  },
+  "htf_watch_bias": "neutral",
+  "htf_watch_scores": {
+    "bull": 4,
+    "bear": 5
+  },
+  "mss_bull": false,
+  "mss_bear": false,
+  "bos_bull": false,
+  "bos_bear": false,
+  "internal_bear_pivot_high": null,
+  "internal_bull_pivot_low": null,
+  "external_swing_high": null,
+  "external_swing_low": null,
+  "volume_debug": {
+    "last": 0,
+    "average": 0,
+    "ratio": 0,
+    "confirm_soft_ok": false,
+    "confirm_strong_bonus": false
+  },
+  "market_quality_debug": {
+    "avg_range_pct": 0
+  },
+  "macro_window_4h": {
+    "valid": true,
+    "side": "bear",
+    "reason": "price_in_premium_4h",
+    "range_position": 0.8250000000000002,
+    "range_high_4h": 0.0189,
+    "range_low_4h": 0.0149,
+    "near_resistance_4h": false,
+    "near_support_4h": false
+  },
+  "refinement_context_1h": {
+    "valid": false,
+    "side": "bull",
+    "reason": "no_1h_bull_setup",
+    "utad_watch_1h": false,
+    "spring_watch_1h": false,
+    "near_range_high_1h": false,
+    "near_range_low_1h": false,
+    "equal_highs_1h": true,
+    "equal_lows_1h": true
+  },
+  "execution_trigger_5m": {
+    "valid": false,
+    "trigger": "wait",
+    "confirm_source": "none",
+    "mss_bull": false,
+    "mss_bear": false,
+    "bos_bull": false,
+    "bos_bear": false
+  },
+  "engine_name": "legacy_wyckoff_v231_hierarchical",
+  "wyckoff_requirement": {
+    "needed": true,
+    "expected": "spring",
+    "status": "waiting",
+    "confirmed": false,
+    "setup_ready": false,
+    "timeframe": "1h",
+    "entry_level": 0.0171,
+    "distance_pct": 0.060439560439560454,
+    "reason": "bull window valid but no 1h Spring/sweep/reclaim yet"
+  },
+  "zone_validity": {
+    "valid": false,
+    "score": 4,
+    "target_ok": true,
+    "wyckoff_ok": false,
+    "reason": "weak_zone_filters"
+  },
+  "hierarchy_block_reason": "blocked_no_4h_bull_window",
+  "legacy_score": 9,
+  "legacy_score_breakdown": {
+    "liquidity": 3,
+    "structure": 2,
+    "confirmation": 0,
+    "session": 1,
+    "quality": 1,
+    "volume": 0,
+    "htf_alignment": 2,
+    "market_quality": 0,
+    "target_quality": 0
+  },
+  "final_score": 7.25,
+  "final_score_breakdown": {
+    "macro_window": 2,
+    "refinement": -1,
+    "wyckoff": -0.5,
+    "zone_validity": -1,
+    "confirm": 0,
+    "trade": 0,
+    "state_fit": 0.25,
+    "block_penalty": -1.5
+  },
+  "candle_quality_5m": {
+    "valid": true,
+    "issues": [],
+    "duplicate_count": 0,
+    "gap_count": 0,
+    "ohlc_error_count": 0,
+    "count": 180
+  },
+  "planner_candidate_status": "rejected",
+  "planner_candidate_reason": "blocked_no_4h_bull_window",
+  "planner_candidate_rr": null
+}

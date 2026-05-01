@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard · EventCrawler V2{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <div class="eyebrow">Private dashboard V2</div>
+    <h1>Radar d’événements intelligent</h1>
+    <p class="hero-copy">Détection, priorisation, historique et suivi manuel des événements et produits intéressants.</p>
+  </div>
+  <div class="hero-status-card">
+    <div class="mini-label">Crawl status</div>
+    <div class="status-line">
+      {% if crawl_status.running %}<span class="badge badge-info">Running</span><span>{{ crawl_status.regions|join(', ') }}</span>{% else %}<span class="badge">Idle</span>{% endif %}
+    </div>
+    {% if request.args.get('started') == '1' %}<div class="flash success">Crawl started.</div>{% endif %}
+    {% if request.args.get('error') == 'no_region' %}<div class="flash error">Sélectionne au moins une région active.</div>{% endif %}
+  </div>
+</section>
+<section class="stats-grid">
+  <article class="stat-card"><div class="stat-label">Events</div><div class="stat-value">{{ stats.events }}</div></article>
+  <article class="stat-card"><div class="stat-label">Free products</div><div class="stat-value">{{ stats.free_products }}</div></article>
+  <article class="stat-card"><div class="stat-label">Watchlist</div><div class="stat-value">{{ stats.watchlist }}</div></article>
+  <article class="stat-card"><div class="stat-label">Organizers</div><div class="stat-value">{{ stats.organizers }}</div></article>
+</section>
+<section class="panel panel-form">
+  <div class="panel-header"><div><h2>Run crawl now</h2><p>Déclenche un crawl immédiat par région.</p></div></div>
+  <form method="post" action="/crawl">
+    <div class="checkbox-grid">{% for name, region in config.regions.items() %}{% if region.enabled %}<label class="check-card"><input type="checkbox" name="regions" value="{{ name }}" checked><span>{{ name|capitalize }}</span></label>{% endif %}{% endfor %}</div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Start crawl</button></div>
+  </form>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><h2>Watchlist</h2><p>Événements épinglés manuellement.</p></div><a href="/watchlist" class="text-link">Voir tout</a></div>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Event</th><th>Date</th><th>Ajouté</th><th>Status</th><th>Score</th></tr></thead><tbody>{% for e in watchlist_events %}<tr><td><a href="/event/{{ e.id }}">{{ e.name }}</a></td><td>{{ e.event_date or '—' }}</td><td>{{ e.added_ago }}</td><td>{{ e.manual_status or '—' }}</td><td><span class="badge badge-info">{{ e.score }}</span></td></tr>{% endfor %}</tbody></table></div>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><h2>Recent product activity</h2><p>Derniers changements détectés sur les produits.</p></div><a href="/activity" class="text-link">Voir tout</a></div>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Event</th><th>Product</th><th>Change</th><th>When</th></tr></thead><tbody>{% for r in recent_activity %}<tr><td><a href="/event/{{ r.event_id }}">{{ r.event_name or '—' }}</a></td><td>{{ r.product_name }}</td><td>{{ r.change_type }}</td><td>{{ r.observed_ago }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+<section class="panel">
+  <div class="panel-header"><div><h2>Recent crawl runs</h2><p>Exécutions récentes et leur résultat.</p></div><a href="/activity" class="text-link">Voir les runs</a></div>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Started</th><th>Regions</th><th>Status</th><th>Queued</th><th>Processed</th><th>Errors</th></tr></thead><tbody>{% for r in recent_runs %}<tr><td>{{ r.started_ago }}</td><td>{{ r.regions or '—' }}</td><td>{{ r.status or '—' }}</td><td>{{ r.events_queued }}</td><td>{{ r.events_processed }}</td><td>{{ r.errors_count }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}
