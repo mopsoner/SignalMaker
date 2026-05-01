@@ -16,6 +16,7 @@ const trigger = (row) => get(row, 'execution_trigger') || null
 const wyckoffStatus = (row) => get(row, 'wyckoff_requirement')?.status || 'waiting'
 const confirmationModel = (row) => get(row, 'confirmation_model') || {}
 const oneHourConfirmation = (row) => get(row, 'one_hour_confirmation_debug') || {}
+const rsiOneHour = (row) => row.rsi_1h ?? get(row, 'rsi_1h') ?? get(row, 'rsi_htf') ?? null
 const confirmationLabel = (row) => {
   const model = confirmationModel(row)
   if (model.entry_mode === '15m_confirmed') return `15m confirmed${model.confirmed_by_1h ? ' + 1H' : ''}`
@@ -64,7 +65,7 @@ function CycleView({ row }) {
 
 function MobileAssetCards({ rows }) {
   if (!rows.length) return <div className="empty-cell">No asset state available</div>
-  return <div className="mobile-card-grid market-mobile-cards">{rows.map((row) => <article className="mobile-asset-card" key={row.id || row.symbol}><div className="mobile-asset-top"><div><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><div className="mobile-asset-meta">{get(row, 'state') || '—'} · {row.bias || '—'}</div></div><span className={stageBadgeClass(stage(row))}>{stage(row)}</span></div><CycleView row={row} /><div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI</span><strong>{fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2)}</strong></div><div><span>Confirm</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div><div className="mobile-reason"><span>Reason</span><strong>{reason(row)}</strong></div><div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div></article>)}</div>
+  return <div className="mobile-card-grid market-mobile-cards">{rows.map((row) => <article className="mobile-asset-card" key={row.id || row.symbol}><div className="mobile-asset-top"><div><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><div className="mobile-asset-meta">{get(row, 'state') || '—'} · {row.bias || '—'}</div></div><span className={stageBadgeClass(stage(row))}>{stage(row)}</span></div><CycleView row={row} /><div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI 1H</span><strong>{fmtNumber(rsiOneHour(row), 2)}</strong></div><div><span>Confirm</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div><div className="mobile-reason"><span>Reason</span><strong>{reason(row)}</strong></div><div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div></article>)}</div>
 }
 
 export default function DashboardPage() {
@@ -147,7 +148,7 @@ export default function DashboardPage() {
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
     { key: 'confirm_model', title: 'Confirm model', render: confirmationLabel, sortValue: confirmationLabel },
-    { key: 'rsi', title: 'RSI', render: (row) => fmtNumber(row.rsi_15m ?? get(row, 'rsi_15m') ?? get(row, 'rsi_main'), 2), sortValue: (row) => Number(row.rsi_15m ?? get(row, 'rsi_main') ?? -1) },
+    { key: 'rsi', title: 'RSI 1H', render: (row) => fmtNumber(rsiOneHour(row), 2), sortValue: (row) => Number(rsiOneHour(row) ?? -1) },
     { key: 'reason', title: 'Planner reason', render: reason, sortValue: reason },
     { key: 'trigger', title: 'Execution trigger', render: (row) => trigger(row)?.trigger || confirmationModel(row)?.confirmation_source || '—', sortValue: (row) => trigger(row)?.trigger || confirmationModel(row)?.confirmation_source || '' },
     { key: 'wyckoff', title: 'Wyckoff wait', render: wyckoffStatus, sortValue: wyckoffStatus },
