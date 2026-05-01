@@ -53,14 +53,14 @@ function CycleView({ row }) {
   const zoneDone = Boolean(pipeline.zone) || ['zone', 'zone_watch', 'wyckoff_watch', 'confirm_watch', 'confirm', 'trade_candidate', 'trade_ready', 'trade'].includes(currentStage)
   const confirmDone = Boolean(pipeline.confirm) || ['confirm', 'trade_candidate', 'trade_ready', 'trade'].includes(currentStage) || executionReady(row)
   const tradeDone = Boolean(pipeline.trade) || currentStage === 'trade' || currentStage === 'trade_ready' || Boolean(trade.status && trade.status !== 'watch' && trade.side && trade.side !== 'none')
-  const cycle = get(row, 'cycle_position_4h')
+  const cycle = get(row, 'cycle_position_1h') || get(row, 'cycle_position_4h')
   const steps = [
     ['Liquidity', liquidityDone],
     ['Zone', zoneDone],
     ['Confirm', confirmDone],
     ['Trade', tradeDone],
   ]
-  return <div style={{ display: 'grid', gap: 4, minWidth: 250 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 58, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{cycle?.stage || wyckoffStatus(row)} · {confirmationLabel(row)} · {strongZone(row) ? 'zone ok' : 'zone weak'}</div></div>
+  return <div style={{ display: 'grid', gap: 4, minWidth: 250 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 58, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div><div style={{ fontSize: 11, opacity: 0.85 }}>{cycle?.stage || currentStage || wyckoffStatus(row)} · {confirmationLabel(row)} · {strongZone(row) ? 'zone ok' : 'zone weak'}</div></div>
 }
 
 function MobileAssetCards({ rows }) {
@@ -143,7 +143,7 @@ export default function DashboardPage() {
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(stage(row))}>{stage(row)}</span>, sortValue: stage },
-    { key: 'cycle', title: '4H context', render: (row) => <CycleView row={row} />, sortValue: (row) => get(row, 'cycle_position_4h')?.stage || stage(row) },
+    { key: 'cycle', title: 'Cycle status', render: (row) => <CycleView row={row} />, sortValue: (row) => get(row, 'cycle_position_1h')?.stage || get(row, 'cycle_position_4h')?.stage || stage(row) },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
