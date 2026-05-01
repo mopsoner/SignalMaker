@@ -7,12 +7,13 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
 
-const get = (row, key) => row?.state_payload?.[key] || null
-const score = (row) => Number(get(row, 'final_score') ?? row.score ?? 0)
+const get = (row, key) => row?.state_payload?.[key] ?? null
+const score = (row) => Number(get(row, 'score') ?? row.score ?? get(row, 'final_score') ?? 0)
 const reason = (row) => row?.state_payload?.planner_candidate_reason || row?.planner_candidate_reason || row?.state_payload?.hierarchy_block_reason || '—'
 const starts = (value, prefix) => String(value || '').startsWith(prefix)
 const context = (value) => !value || typeof value !== 'object' ? '—' : `${value.type || '—'} @ ${value.level !== null && value.level !== undefined ? fmtNumber(value.level, 4) : '—'}`
 const trigger = (row) => get(row, 'execution_trigger') || null
+const blockedAt = (row) => get(row, 'hierarchy_gate')?.blocked_at || trigger(row)?.blocked_by || ''
 const wyckoffStatus = (row) => get(row, 'wyckoff_requirement')?.status || 'waiting'
 const confirmationModel = (row) => get(row, 'confirmation_model') || {}
 const oneHourConfirmation = (row) => get(row, 'one_hour_confirmation_debug') || {}
@@ -35,15 +36,18 @@ const fifteenMinConfirmed = (row) => Boolean(confirmationModel(row)?.confirmed_b
 const oneHourBear = (row) => oneHourConfirmed(row) && oneHourConfirmation(row)?.side === 'bear'
 const oneHourBull = (row) => oneHourConfirmed(row) && oneHourConfirmation(row)?.side === 'bull'
 const executionReady = (row) => tradeReady(row) || tradeCandidate(row) || stage(row) === 'confirm' || wyckoffStatus(row) === 'execution_ready' || Boolean(trigger(row)?.valid)
-const swept = (row) => ['swept_waiting_rejection', 'swept_waiting_reclaim', 'rejected_waiting_15m_confirm', 'reclaimed_waiting_15m_confirm', 'execution_ready'].includes(wyckoffStatus(row))
+const swept = (row) => ['swept_waiting_rejection', 'swept_waiting_reclaim', 'rejected_waiting_15m_confirm', 'reclaimed_waiting_15m_confirm', 'rejected_waiting_5m_confirm', 'reclaimed_waiting_5m_confirm', 'execution_ready'].includes(wyckoffStatus(row))
 const waitingSweep = (row) => wyckoffStatus(row) === 'waiting_sweep'
-const blocked = (row) => Boolean(get(row, 'confirm_blocked_by_hierarchy')) || wyckoffStatus(row) === 'blocked' || String(reason(row)).includes('blocked')
-const macroBlocked = (row) => stage(row) === 'macro_watch' || String(reason(row)).includes('missing_4h_') || get(row, 'hierarchy_gate')?.blocked_at === 'macro_4h'
-const actionableWatch = (row) => (tradeCandidate(row) || tradeReady(row) || ['trade', 'confirm', 'confirm_watch', 'wyckoff_watch', 'zone_watch'].includes(stage(row)) || oneHourConfirmed(row)) && !macroBlocked(row)
+const macroBlocked = (row) => !tradeCandidate(row) && !tradeReady(row) && (stage(row) === 'macro_watch' || String(reason(row)).includes('missing_4h_') || blockedAt(row) === 'macro_4h')
+const wyckoffBlocked = (row) => !tradeCandidate(row) && !tradeReady(row) && (blockedAt(row) === 'wyckoff_1h' || String(reason(row)).includes('wyckoff') || String(reason(row)).includes('waiting for sweep'))
+const zoneBlocked = (row) => !tradeCandidate(row) && !tradeReady(row) && (blockedAt(row) === 'zone_1h' || String(reason(row)).includes('no_1h_') || String(reason(row)).includes('missing_1h_zone'))
+const blocked = (row) => !tradeCandidate(row) && !tradeReady(row) && (Boolean(get(row, 'confirm_blocked_by_hierarchy')) || wyckoffStatus(row) === 'blocked' || String(reason(row)).includes('blocked'))
+const waitingOneHourEvent = (row) => !oneHourConfirmed(row) && ['wyckoff_watch', 'zone_watch', 'confirm_watch'].includes(stage(row))
+const actionableWatch = (row) => tradeCandidate(row) || tradeReady(row) || oneHourConfirmed(row) || (['confirm', 'confirm_watch', 'wyckoff_watch', 'zone_watch'].includes(stage(row)) && !macroBlocked(row))
 const hasTarget = (row) => Boolean(row.execution_target?.level || get(row, 'projected_target')?.level)
 const strongZone = (row) => Boolean(get(row, 'zone_validity')?.valid)
-const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear'))
-const bos = (row) => Boolean(get(row, 'bos_bull') || get(row, 'bos_bear'))
+const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear') || oneHourConfirmation(row)?.mss_seen)
+const bos = (row) => Boolean(get(row, 'bos_bull') || get(row, 'bos_bear') || oneHourConfirmation(row)?.bos_seen)
 
 function CycleView({ row }) {
   const pipeline = row?.state_payload?.pipeline || {}
@@ -84,6 +88,9 @@ export default function DashboardPage() {
     oneHourBear: assets.filter(oneHourBear).length,
     oneHourBull: assets.filter(oneHourBull).length,
     macroBlocked: assets.filter(macroBlocked).length,
+    wyckoffBlocked: assets.filter(wyckoffBlocked).length,
+    zoneBlocked: assets.filter(zoneBlocked).length,
+    waitingOneHourEvent: assets.filter(waitingOneHourEvent).length,
     trade: assets.filter(stageIs('trade')).length,
     confirm: assets.filter(stageIs('confirm')).length,
     confirmWatch: assets.filter(stageIs('confirm_watch')).length,
@@ -116,7 +123,10 @@ export default function DashboardPage() {
     if (marketFilter === 'fifteen_min_confirmed') return assets.filter(fifteenMinConfirmed)
     if (marketFilter === 'one_hour_bear') return assets.filter(oneHourBear)
     if (marketFilter === 'one_hour_bull') return assets.filter(oneHourBull)
+    if (marketFilter === 'waiting_1h_event') return assets.filter(waitingOneHourEvent)
     if (marketFilter === 'macro_blocked') return assets.filter(macroBlocked)
+    if (marketFilter === 'wyckoff_blocked') return assets.filter(wyckoffBlocked)
+    if (marketFilter === 'zone_blocked') return assets.filter(zoneBlocked)
     if (marketFilter === 'execution_ready') return assets.filter(executionReady)
     if (marketFilter === 'trade') return assets.filter(stageIs('trade'))
     if (marketFilter === 'confirm') return assets.filter(stageIs('confirm'))
@@ -139,11 +149,12 @@ export default function DashboardPage() {
     if (marketFilter === 'bos') return assets.filter(bos)
     return assets
   }, [assets, marketFilter])
+  const sortedFilteredAssets = useMemo(() => [...filteredAssets].sort((a, b) => score(b) - score(a)), [filteredAssets])
 
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(stage(row))}>{stage(row)}</span>, sortValue: stage },
-    { key: 'cycle', title: 'Cycle status', render: (row) => <CycleView row={row} />, sortValue: (row) => get(row, 'cycle_position_1h')?.stage || get(row, 'cycle_position_4h')?.stage || stage(row) },
+    { key: 'cycle', title: '1H decision path', render: (row) => <CycleView row={row} />, sortValue: (row) => confirmationLabel(row) },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
@@ -166,19 +177,16 @@ export default function DashboardPage() {
     ['fifteen_min_confirmed', `15m confirmed (${counts.fifteenMinConfirmed})`],
     ['one_hour_bear', `1H bear UTAD/MSS (${counts.oneHourBear})`],
     ['one_hour_bull', `1H bull Spring/MSS (${counts.oneHourBull})`],
+    ['waiting_1h_event', `Waiting 1H event (${counts.waitingOneHourEvent})`],
     ['all', `All (${assets.length})`],
     ['macro_blocked', `Macro blocked (${counts.macroBlocked})`],
+    ['wyckoff_blocked', `Wyckoff waiting (${counts.wyckoffBlocked})`],
+    ['zone_blocked', `Zone waiting (${counts.zoneBlocked})`],
     ['execution_ready', `Execution ready (${counts.ready})`],
-    ['trade', `Trade legacy (${counts.trade})`],
-    ['confirm', `Confirm legacy (${counts.confirm})`],
     ['confirm_watch', `Confirm watch (${counts.confirmWatch})`],
     ['wyckoff_watch', `Wyckoff watch (${counts.wyckoffWatch})`],
     ['zone_watch', `Zone watch (${counts.zoneWatch})`],
     ['macro_watch', `Macro watch (${counts.macroWatch})`],
-    ['zone', `Zone legacy (${counts.zone})`],
-    ['liquidity', `Liquidity legacy (${counts.liquidity})`],
-    ['liquidity_watch', `Liquidity watch (${counts.liquidityWatch})`],
-    ['collect', `Collect (${counts.collect})`],
     ['bull', `Bull (${counts.bull})`],
     ['bear', `Bear (${counts.bear})`],
     ['swept', `Swept (${counts.swept})`],
@@ -187,8 +195,14 @@ export default function DashboardPage() {
     ['with_target', `With target (${counts.withTarget})`],
     ['mss', `MSS (${counts.mss})`],
     ['bos', `BOS (${counts.bos})`],
-    ['blocked', `Blocked (${counts.blocked})`],
+    ['blocked', `Blocked legacy (${counts.blocked})`],
+    ['trade', `Trade legacy (${counts.trade})`],
+    ['confirm', `Confirm legacy (${counts.confirm})`],
+    ['zone', `Zone legacy (${counts.zone})`],
+    ['liquidity', `Liquidity legacy (${counts.liquidity})`],
+    ['liquidity_watch', `Liquidity watch (${counts.liquidityWatch})`],
+    ['collect', `Collect (${counts.collect})`],
   ]
 
-  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with debug links, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade candidate" value={counts.tradeCandidate} /><StatCard label="1H confirmed" value={counts.oneHourConfirmed} /><StatCard label="15m confirmed" value={counts.fifteenMinConfirmed} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Actionable watch" value={counts.actionable} /><StatCard label="Bull / Bear 1H" value={`${counts.oneHourBull} / ${counts.oneHourBear}`} /><StatCard label="Execution ready" value={counts.ready} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {filteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={filteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={[...filteredAssets].sort((a, b) => score(b) - score(a))} /></details></div>
+  return <div className="page-stack"><PageHeader title="Dashboard 360" subtitle="Market overview with 1H decision filters, projected targets, and asset drill-down." /><div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade candidate 1H" value={counts.tradeCandidate} /><StatCard label="1H confirmed" value={counts.oneHourConfirmed} /><StatCard label="15m confirmed" value={counts.fifteenMinConfirmed} /></div><div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Actionable watch" value={counts.actionable} /><StatCard label="Bull / Bear 1H" value={`${counts.oneHourBull} / ${counts.oneHourBear}`} /><StatCard label="Wyckoff / Zone waiting" value={`${counts.wyckoffBlocked} / ${counts.zoneBlocked}`} /></div>{loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}<FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /><details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {sortedFilteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={sortedFilteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={sortedFilteredAssets} /></details></div>
 }
