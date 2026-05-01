@@ -1,9 +1,5 @@
 """Hierarchical SignalMaker gates for Wyckoff + SMC progression.
 
-This module intentionally sits above the legacy engine. The legacy engine can still
-collect context and detect local structure, but it cannot promote a signal to
-`confirm` unless the higher-timeframe gates agree:
-
 4H  -> macro campaign context / cycle location
 1H  -> liquidity / Wyckoff-SMC setup zone
 15M -> execution confirmation only
@@ -13,6 +9,8 @@ EXECUTION_TIMEFRAME = "15m"
 LEGACY_EXECUTION_TRIGGER_KEY = "execution_trigger_5m"
 MIN_TARGET_DISTANCE_PCT = 0.008
 CONTEXT_TARGET_OVERLAP_PCT = 0.003
+CONTEXT_TOO_FAR_PCT = 0.18
+POST_SWEEP_EXTENSION = 0.05
 
 WYCKOFF_EXECUTION_READY_STATUSES = {
     "execution_ready",
@@ -21,7 +19,6 @@ WYCKOFF_EXECUTION_READY_STATUSES = {
     "rejected_waiting_15m_confirm",
     "reclaimed_waiting_15m_confirm",
 }
-
 WYCKOFF_SETUP_READY_STATUSES = WYCKOFF_EXECUTION_READY_STATUSES | {
     "swept_waiting_rejection",
     "swept_waiting_reclaim",
@@ -32,12 +29,12 @@ PRE_LIQUIDITY_STAGES = {
     "mid_cycle_watch",
     "late_bear_cycle",
     "late_bull_cycle",
+    "post_sweep_watch",
     "context_invalid",
     "context_target_overlap",
     "entry_context_watch",
     "target_watch",
 }
-
 PRE_ZONE_STAGES = PRE_LIQUIDITY_STAGES | {"liquidity_watch"}
 PRE_CONFIRM_STAGES = PRE_ZONE_STAGES | {"zone_watch", "wyckoff_watch"}
 
@@ -56,9 +53,10 @@ def _has_level(value) -> bool:
 
 
 def _level(value):
-    if not isinstance(value, dict):
-        return None
-    raw = value.get("level")
+    if isinstance(value, dict):
+        raw = value.get("level")
+    else:
+        raw = value
     if raw is None:
         return None
     try:
@@ -96,22 +94,6 @@ def _side_structure_seen(signal: dict, side: str) -> bool:
     return bool(signal.get("mss_bull") or signal.get("bos_bull") or signal.get("mss_bear") or signal.get("bos_bear"))
 
 
-def _execution_seen(signal: dict) -> bool:
-    """True only when a real local execution event was detected."""
-    side = _bias_side(signal)
-    legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
-    public_trigger = signal.get("execution_trigger") or {}
-    source = _execution_source(signal)
-    trigger = signal.get("trigger")
-    return bool(
-        source
-        or trigger in {"break_down_confirm", "break_up_confirm"}
-        or legacy_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
-        or public_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
-        or _side_structure_seen(signal, side)
-    )
-
-
 def _execution_source(signal: dict):
     legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
     public_trigger = signal.get("execution_trigger") or {}
@@ -122,16 +104,202 @@ def _execution_source(signal: dict):
     )
 
 
+def _execution_seen(signal: dict) -> bool:
+    side = _bias_side(signal)
+    legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
+    public_trigger = signal.get("execution_trigger") or {}
+    trigger = signal.get("trigger")
+    return bool(
+        _execution_source(signal)
+        or trigger in {"break_down_confirm", "break_up_confirm"}
+        or legacy_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
+        or public_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
+        or _side_structure_seen(signal, side)
+    )
+
+
 def _block(stage: str, reason: str, source_stage: str) -> dict:
-    return {
-        "stage": stage,
-        "blocked": True,
-        "blocked_at": source_stage,
-        "reason": reason,
+    return {"stage": stage, "blocked": True, "blocked_at": source_stage, "reason": reason}
+
+
+def _context_dict(type_: str, level, reason: str, timeframe: str = "4h", touches=None, source="ranked_context"):
+    lvl = _level(level)
+    if lvl is None:
+        return None
+    out = {"type": type_, "level": lvl, "reason": reason, "timeframe": timeframe, "scope": "macro", "source": source}
+    if touches is not None:
+        out["touches"] = touches
+    return out
+
+
+def _candidate_from_value(signal: dict, field: str, type_: str, side: str, quality: int, timeframe="4h"):
+    level = _level(signal.get(field))
+    if level is None:
+        return None
+    return _context_dict(type_, level, f"{field} ranked as {side} macro context", timeframe, source=field) | {"base_quality": quality}
+
+
+def _candidate_from_shelf(signal: dict, field: str, side: str, quality: int):
+    shelf = signal.get(field) or {}
+    level = _level(shelf)
+    if level is None:
+        return None
+    touches = shelf.get("touches")
+    q = quality + min(int(touches or 0), 12)
+    return _context_dict(shelf.get("type") or field, level, shelf.get("reason") or f"{field} ranked as macro context", shelf.get("timeframe") or "4h", touches, field) | {"base_quality": q}
+
+
+def _rank_context_candidate(signal: dict, candidate: dict, side: str) -> dict:
+    price = _price(signal)
+    level = _level(candidate)
+    distance_pct = abs(price - level) / price if price > 0 and level is not None else 999.0
+    score = float(candidate.get("base_quality") or 0)
+    score += max(0.0, 30.0 - distance_pct * 300.0)
+    if distance_pct > CONTEXT_TOO_FAR_PCT:
+        score -= 45.0
+    if side == "bull":
+        if level <= price:
+            score += 15.0
+        else:
+            score -= 25.0
+    elif side == "bear":
+        if level >= price:
+            score += 15.0
+        else:
+            # This can be a swept resistance, but it must wait for rejection.
+            score -= 12.0
+    selected = dict(candidate)
+    selected["distance_pct"] = distance_pct
+    selected["score"] = round(score, 4)
+    selected["actionable"] = bool((side == "bull" and level <= price) or (side == "bear" and level >= price))
+    return selected
+
+
+def _rank_target_candidate(signal: dict, candidate: dict, side: str, selected_context_level) -> dict:
+    price = _price(signal)
+    level = _level(candidate)
+    distance_pct = abs(price - level) / price if price > 0 and level is not None else 999.0
+    overlap = bool(price > 0 and selected_context_level is not None and abs(level - selected_context_level) / price <= CONTEXT_TARGET_OVERLAP_PCT)
+    directional = bool((side == "bull" and level > price) or (side == "bear" and level < price))
+    score = float(candidate.get("base_quality") or 0)
+    if directional:
+        score += 30.0
+    else:
+        score -= 100.0
+    if overlap:
+        score -= 80.0
+    if distance_pct < MIN_TARGET_DISTANCE_PCT:
+        score -= 50.0
+    score += max(0.0, 25.0 - distance_pct * 120.0)
+    selected = dict(candidate)
+    selected["distance_pct"] = distance_pct
+    selected["score"] = round(score, 4)
+    selected["directional"] = directional
+    selected["overlaps_context"] = overlap
+    return selected
+
+
+def _macro_context_candidates(signal: dict, side: str) -> list:
+    if side == "bull":
+        raw = [
+            _candidate_from_value(signal, "range_low_4h", "range_low_4h", side, 84),
+            _candidate_from_shelf(signal, "old_support_shelf", side, 76),
+            _candidate_from_value(signal, "previous_day_low", "previous_day_low", side, 62),
+            _candidate_from_value(signal, "previous_week_low", "previous_week_low", side, 54),
+            _candidate_from_value(signal, "major_swing_low_4h", "major_swing_low_4h", side, 48),
+        ]
+    elif side == "bear":
+        raw = [
+            _candidate_from_value(signal, "range_high_4h", "range_high_4h", side, 84),
+            _candidate_from_shelf(signal, "old_resistance_shelf", side, 76),
+            _candidate_from_value(signal, "previous_day_high", "previous_day_high", side, 62),
+            _candidate_from_value(signal, "previous_week_high", "previous_week_high", side, 54),
+            _candidate_from_value(signal, "major_swing_high_4h", "major_swing_high_4h", side, 48),
+        ]
+    else:
+        raw = []
+    ranked = [_rank_context_candidate(signal, c, side) for c in raw if c]
+    return sorted(ranked, key=lambda c: c.get("score", -999), reverse=True)
+
+
+def _target_candidates(signal: dict, side: str, selected_context_level) -> list:
+    if side == "bull":
+        raw = [
+            _candidate_from_shelf(signal, "old_resistance_shelf", side, 78),
+            _candidate_from_value(signal, "range_high_4h", "range_high", side, 68),
+            _candidate_from_value(signal, "previous_day_high", "previous_day_high", side, 58),
+            _candidate_from_value(signal, "previous_week_high", "previous_week_high", side, 52),
+            _candidate_from_value(signal, "major_swing_high_4h", "major_swing_high_4h", side, 45),
+        ]
+    elif side == "bear":
+        raw = [
+            _candidate_from_shelf(signal, "old_support_shelf", side, 78),
+            _candidate_from_value(signal, "range_low_4h", "range_low", side, 68),
+            _candidate_from_value(signal, "previous_day_low", "previous_day_low", side, 58),
+            _candidate_from_value(signal, "previous_week_low", "previous_week_low", side, 52),
+            _candidate_from_value(signal, "major_swing_low_4h", "major_swing_low_4h", side, 45),
+        ]
+    else:
+        raw = []
+    ranked = [_rank_target_candidate(signal, c, side, selected_context_level) for c in raw if c]
+    return sorted(ranked, key=lambda c: c.get("score", -999), reverse=True)
+
+
+def _apply_ranked_context_selection(signal: dict) -> None:
+    side = _bias_side(signal)
+    context_candidates = _macro_context_candidates(signal, side)
+    selected_context = context_candidates[0] if context_candidates else None
+    selected_context_level = _level(selected_context)
+    target_candidates = _target_candidates(signal, side, selected_context_level)
+    valid_targets = [c for c in target_candidates if c.get("directional") and not c.get("overlaps_context") and c.get("distance_pct", 999) >= MIN_TARGET_DISTANCE_PCT]
+    selected_target = valid_targets[0] if valid_targets else (target_candidates[0] if target_candidates else None)
+
+    signal["context_selection_debug"] = {
+        "side": side,
+        "selected_macro_context": selected_context,
+        "context_candidates": context_candidates[:8],
+        "selected_target": selected_target,
+        "target_candidates": target_candidates[:8],
+        "selection_model": "ranked_4h_context_then_opposite_target_v1",
     }
+
+    if selected_context:
+        clean_context = {k: v for k, v in selected_context.items() if k not in {"base_quality", "score", "actionable"}}
+        clean_context["reason"] = f"ranked 4h macro context: {clean_context.get('reason')}"
+        signal["macro_liquidity_context"] = clean_context
+        signal["liquidity_context"] = clean_context
+        event = signal.get("wyckoff_event_level")
+        if isinstance(event, dict) and event.get("valid", True):
+            event.update({
+                "type": clean_context.get("type"),
+                "level": clean_context.get("level"),
+                "timeframe": clean_context.get("timeframe", "4h"),
+                "side": side,
+                "source": "ranked_macro_context",
+                "distance_pct": clean_context.get("distance_pct"),
+                "reason": "ranked structural Wyckoff event level selected before local entry context",
+            })
+            signal["wyckoff_event_level"] = event
+        req = signal.get("wyckoff_requirement")
+        if isinstance(req, dict):
+            req["event_level"] = signal.get("wyckoff_event_level") or clean_context
+            req["entry_level"] = clean_context.get("level")
+            req["distance_pct"] = clean_context.get("distance_pct")
+            signal["wyckoff_requirement"] = req
+
+    if selected_target:
+        clean_target = {k: v for k, v in selected_target.items() if k not in {"base_quality", "score", "directional", "overlaps_context"}}
+        clean_target["timeframe"] = clean_target.get("timeframe") or "4h"
+        clean_target["projected"] = True
+        clean_target["reason"] = f"ranked projected execution target: {clean_target.get('reason')}"
+        signal["execution_target"] = dict(clean_target)
+        signal["projected_target"] = dict(clean_target)
 
 
 def _macro_context(signal: dict) -> dict:
+    selected = (signal.get("context_selection_debug") or {}).get("selected_macro_context")
+    if _has_level(selected):
+        return selected
     ctx = signal.get("macro_liquidity_context")
     if _has_level(ctx):
         return ctx
@@ -142,19 +310,13 @@ def _macro_context(signal: dict) -> dict:
 
 
 def _target_level(signal: dict):
-    return _level(signal.get("execution_target")) or _level(signal.get("projected_target"))
+    selected = (signal.get("context_selection_debug") or {}).get("selected_target")
+    return _level(selected) or _level(signal.get("execution_target")) or _level(signal.get("projected_target"))
 
 
 def _validate_macro_context(signal: dict, side: str) -> dict:
-    """Validate that the selected 4H context is still actionable.
-
-    This does not try to re-rank all candidates. It only prevents the selected
-    HTF level from promoting the signal when price is already beyond it and the
-    expected Wyckoff rejection/reclaim has not happened yet.
-    """
     if side == "neutral":
         return {"valid": False, "stage": "macro_watch", "blocked_at": "macro_4h", "reason": "neutral_bias"}
-
     price = _price(signal)
     ctx = _macro_context(signal)
     level = _level(ctx)
@@ -166,19 +328,20 @@ def _validate_macro_context(signal: dict, side: str) -> dict:
     swept = bool(wyckoff.get("swept") or event.get("swept"))
     confirmed = bool(wyckoff.get("confirmed"))
     reclaimed_or_rejected = bool(event.get("reclaimed") or confirmed)
+    distance_pct = abs(price - level) / price if price > 0 else 999.0
 
+    if distance_pct > CONTEXT_TOO_FAR_PCT:
+        return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "macro_context_too_far_from_price"}
     if side == "bear" and price > level:
         if not swept:
             return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bear_context_below_price_without_sweep"}
         if not reclaimed_or_rejected:
             return {"valid": False, "stage": "entry_context_watch", "blocked_at": "wyckoff_1h", "reason": "waiting_bear_rejection_below_macro_context"}
-
     if side == "bull" and price < level:
         if not swept:
             return {"valid": False, "stage": "context_invalid", "blocked_at": "context_4h", "reason": "bull_context_above_price_without_sweep"}
         if not reclaimed_or_rejected:
             return {"valid": False, "stage": "entry_context_watch", "blocked_at": "wyckoff_1h", "reason": "waiting_bull_reclaim_above_macro_context"}
-
     return {"valid": True, "stage": None, "blocked_at": None, "reason": "macro_context_valid"}
 
 
@@ -208,19 +371,18 @@ def _validate_execution_target(signal: dict, side: str) -> dict:
 
 
 def _cycle_position_4h(signal: dict) -> dict:
-    """Classify whether a local 15M trigger is early, mid, or late in the 4H cycle.
-
-    This separates move detection from entry quality. A BOS/MSS into the opposite
-    4H side is not a new entry; it is a mature move / TP area.
-    """
     side = _bias_side(signal)
     macro = signal.get("macro_window_4h") or {}
-    price = float(signal.get("price") or 0.0)
+    price = _price(signal)
     pos = macro.get("range_position")
-    target = (signal.get("execution_target") or {}).get("level") or (signal.get("projected_target") or {}).get("level")
+    target = _target_level(signal)
     near_target = _near(price, target, 0.006)
     near_support = bool(macro.get("near_support_4h"))
     near_resistance = bool(macro.get("near_resistance_4h"))
+    context = _macro_context(signal)
+    context_level = _level(context)
+    beyond_bear_context = bool(side == "bear" and context_level is not None and price > context_level)
+    beyond_bull_context = bool(side == "bull" and context_level is not None and price < context_level)
 
     if pos is None:
         zone = "unknown"
@@ -231,12 +393,20 @@ def _cycle_position_4h(signal: dict) -> dict:
     else:
         zone = "mid_range"
 
-    late_bear = bool(side == "bear" and (near_target or near_support or (pos is not None and pos <= 0.40)))
-    late_bull = bool(side == "bull" and (near_target or near_resistance or (pos is not None and pos >= 0.60)))
-    favorable_bear = bool(side == "bear" and (near_resistance or (pos is not None and pos >= 0.60)))
-    favorable_bull = bool(side == "bull" and (near_support or (pos is not None and pos <= 0.40)))
+    post_sweep = bool(
+        (side == "bear" and (beyond_bear_context or (pos is not None and pos > 1 + POST_SWEEP_EXTENSION)))
+        or (side == "bull" and (beyond_bull_context or (pos is not None and pos < -POST_SWEEP_EXTENSION)))
+    )
+    late_bear = bool(side == "bear" and not post_sweep and (near_target or near_support or (pos is not None and pos <= 0.40)))
+    late_bull = bool(side == "bull" and not post_sweep and (near_target or near_resistance or (pos is not None and pos >= 0.60)))
+    favorable_bear = bool(side == "bear" and not post_sweep and (near_resistance or (pos is not None and pos >= 0.60)))
+    favorable_bull = bool(side == "bull" and not post_sweep and (near_support or (pos is not None and pos <= 0.40)))
 
-    if late_bear:
+    if post_sweep:
+        stage = "post_sweep_watch"
+        tradability = "wait_for_rejection_or_reclaim"
+        reason = f"{side}_post_sweep_wait_rejection_or_reclaim"
+    elif late_bear:
         stage = "late_bear_cycle"
         tradability = "no_new_short"
         reason = "late_bear_cycle_near_support_or_target"
@@ -261,6 +431,8 @@ def _cycle_position_4h(signal: dict) -> dict:
         "near_resistance_4h": near_resistance,
         "near_execution_target": near_target,
         "execution_target": target,
+        "context_level": context_level,
+        "post_sweep": post_sweep,
         "stage": stage,
         "tradability": tradability,
         "is_late_cycle": late_bear or late_bull,
@@ -278,32 +450,20 @@ def _resolve_gate(signal: dict) -> dict:
     cycle = signal.get("cycle_position_4h") or _cycle_position_4h(signal)
     macro_context = _validate_macro_context(signal, side)
 
-    # Late cycle has priority: the move can be real, but the entry is too late.
+    if cycle.get("post_sweep"):
+        return _block(cycle["stage"], cycle["reason"], "cycle_4h")
     if cycle.get("is_late_cycle"):
         return _block(cycle["stage"], cycle["reason"], "cycle_4h")
 
     macro_ok = bool(macro.get("valid") and side != "neutral" and macro.get("side") == side)
-    liquidity_ok = bool(
-        _has_level(signal.get("macro_liquidity_context"))
-        or _has_level(signal.get("entry_liquidity_context"))
-        or _has_level(signal.get("liquidity_context"))
-    )
+    liquidity_ok = bool(_has_level(signal.get("macro_liquidity_context")) or _has_level(signal.get("entry_liquidity_context")) or _has_level(signal.get("liquidity_context")))
     zone_1h_ok = bool(refinement.get("valid") and refinement.get("side") == side)
 
     wyckoff_needed = bool(wyckoff.get("needed"))
     wyckoff_status = wyckoff.get("status")
-    wyckoff_setup_ok = bool(
-        not wyckoff_needed
-        or wyckoff.get("setup_ready")
-        or wyckoff.get("confirmed")
-        or wyckoff_status in WYCKOFF_SETUP_READY_STATUSES
-    )
-    wyckoff_execution_ok = bool(
-        not wyckoff_needed
-        or wyckoff.get("confirmed")
-        or wyckoff_status in WYCKOFF_EXECUTION_READY_STATUSES
-    )
-    target_ok = bool(zone_validity.get("target_ok") or (signal.get("execution_target") or {}).get("level") is not None or (signal.get("projected_target") or {}).get("level") is not None)
+    wyckoff_setup_ok = bool(not wyckoff_needed or wyckoff.get("setup_ready") or wyckoff.get("confirmed") or wyckoff_status in WYCKOFF_SETUP_READY_STATUSES)
+    wyckoff_execution_ok = bool(not wyckoff_needed or wyckoff.get("confirmed") or wyckoff_status in WYCKOFF_EXECUTION_READY_STATUSES)
+    target_ok = bool(zone_validity.get("target_ok") or _target_level(signal) is not None)
     target_validation = _validate_execution_target(signal, side)
     execution_seen = _execution_seen(signal)
 
@@ -332,19 +492,12 @@ def _resolve_gate(signal: dict) -> dict:
     if not wyckoff_execution_ok:
         return _block("confirm_watch", wyckoff.get("reason") or "wyckoff_waiting_rejection_or_reclaim", "confirm_15m")
 
-    return {
-        "stage": "confirm",
-        "blocked": False,
-        "blocked_at": None,
-        "reason": "hierarchy_confirmed",
-    }
+    return {"stage": "confirm", "blocked": False, "blocked_at": None, "reason": "hierarchy_confirmed"}
 
 
 def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
-    """Avoid contradictory debug when a lower layer saw execution but HTF gates reject it."""
     if not gate.get("blocked"):
         return
-
     wyckoff = signal.get("wyckoff_requirement")
     if isinstance(wyckoff, dict):
         wyckoff.setdefault("legacy_status", wyckoff.get("status"))
@@ -372,10 +525,10 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
 
 
 def apply_hierarchical_stage_gates(signal: dict) -> dict:
-    """Mutate and return a signal using strict HTF -> execution gates."""
     if not isinstance(signal, dict):
         return signal
 
+    _apply_ranked_context_selection(signal)
     pipeline = dict(signal.get("pipeline") or {})
     cycle = _cycle_position_4h(signal)
     signal["cycle_position_4h"] = cycle
@@ -408,14 +561,14 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_cycle__4h_macro__1h_zone__execution_confirm",
+        "model": "4h_cycle__ranked_context__1h_zone__execution_confirm_v2",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
         "blocked_at": gate["blocked_at"],
         "block_reason": None if accepted else gate["reason"],
         "macro_4h_ok": gate["stage"] not in PRE_LIQUIDITY_STAGES and side != "neutral",
-        "cycle_4h_ok": not cycle.get("is_late_cycle") and cycle.get("stage") != "mid_cycle",
+        "cycle_4h_ok": not cycle.get("is_late_cycle") and not cycle.get("post_sweep") and cycle.get("stage") != "mid_cycle",
         "liquidity_ok": gate["stage"] not in PRE_ZONE_STAGES,
         "zone_1h_ok": gate["stage"] not in PRE_CONFIRM_STAGES,
         "confirm_15m_seen": execution_seen,
@@ -440,19 +593,8 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     else:
         signal["confirm_source"] = None
         signal["trigger"] = "wait"
-        if side == "bear":
-            signal["bias"] = "bear_watch"
-        elif side == "bull":
-            signal["bias"] = "bull_watch"
-        else:
-            signal["bias"] = "neutral"
-        signal["trade"] = {
-            "status": "watch",
-            "side": "none",
-            "entry": None,
-            "stop": None,
-            "target": None,
-        }
+        signal["bias"] = "bear_watch" if side == "bear" else "bull_watch" if side == "bull" else "neutral"
+        signal["trade"] = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
         signal["planner_candidate_status"] = "not_created"
         signal["planner_candidate_reason"] = f"blocked_before_planner:{gate['reason']}"
         signal["planner_candidate_rr"] = None
