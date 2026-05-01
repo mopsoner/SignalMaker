@@ -14,8 +14,10 @@ export function fmtDate(value) {
 
 export function stageBadgeClass(stage) {
   const normalized = String(stage || '').toLowerCase()
-  if (normalized === 'trade') return 'badge green'
-  if (normalized === 'confirm') return 'badge blue'
-  if (normalized === 'zone') return 'badge orange'
+  if (['trade', 'trade_ready', 'trade_candidate'].includes(normalized)) return 'badge green'
+  if (['confirm', 'confirm_watch'].includes(normalized)) return 'badge blue'
+  if (['waiting_1h_event', 'wyckoff_watch'].includes(normalized)) return 'badge orange'
+  if (['zone', 'zone_watch'].includes(normalized)) return 'badge orange'
+  if (['macro_watch', 'context_invalid', 'context_target_overlap', 'target_watch'].includes(normalized)) return 'badge gray'
   return 'badge gray'
 }
