@@ -27,12 +27,6 @@ def _price(signal: dict) -> float:
     return float(signal.get("price") or 0.0)
 
 
-def _is_late_cycle(signal: dict) -> bool:
-    cycle = signal.get("cycle_position_4h") or {}
-    stage = signal.get("stage") or signal.get("state") or ""
-    return bool(cycle.get("is_late_cycle") or stage in {"late_bull_cycle", "late_bear_cycle"})
-
-
 def _level_distance_pct(price: float, level: float | None) -> float | None:
     if price <= 0 or level is None:
         return None
@@ -141,13 +135,13 @@ def _candidate_stop(signal: dict, side: str) -> dict:
 def _one_hour_confirmation(signal: dict) -> dict:
     """Validate a true 1H Wyckoff/SMC event, not a simple retest.
 
-    Existing payloads already expose 1H refinement and Wyckoff state. If future
-    engine versions add explicit 1H MSS/BOS fields, this helper will consume them
-    without changing the schema again.
+    1H is now the decision timeframe. 4H keeps the directional context and the
+    target selection, while mid/late-cycle labels are diagnostic only. A confirmed
+    1H Spring/UTAD/MSS/BOS should therefore be allowed to create a candidate even
+    when the old cycle label would have been mid_cycle or late_cycle.
     """
     side = "bear" if str(signal.get("bias") or "").startswith("bear") else "bull" if str(signal.get("bias") or "").startswith("bull") else "neutral"
     macro = signal.get("macro_window_4h") or {}
-    cycle = signal.get("cycle_position_4h") or {}
     refinement = signal.get("refinement_context_1h") or {}
     wyckoff = signal.get("wyckoff_requirement") or {}
     event_level = signal.get("wyckoff_event_level") or {}
@@ -155,15 +149,13 @@ def _one_hour_confirmation(signal: dict) -> dict:
     reason = str(wyckoff.get("reason") or "")
 
     macro_ok = bool(macro.get("valid") and macro.get("side") == side)
-    cycle_ok = bool(cycle.get("stage") != "late_bull_cycle" and cycle.get("stage") != "late_bear_cycle" and not cycle.get("is_late_cycle", False))
-    zone_ok = bool((signal.get("zone_validity") or {}).get("valid") or wyckoff.get("setup_ready") or wyckoff.get("confirmed"))
     swept = bool(wyckoff.get("swept") or event_level.get("swept"))
 
     if side == "bear":
         mss_1h = bool(signal.get("mss_bear_1h") or refinement.get("mss_bear_1h"))
         bos_1h = bool(signal.get("bos_bear_1h") or refinement.get("bos_bear_1h"))
         utad = bool(refinement.get("utad_watch_1h"))
-        rejection = bool("rejected" in status or "rejection" in reason or "waiting_rejection" not in status and event_level.get("reclaimed"))
+        rejection = bool("rejected" in status or "rejection" in reason or event_level.get("reclaimed"))
         valid_event = bool(utad or mss_1h or bos_1h or (swept and rejection))
         source = "1h_utad" if utad else "1h_mss_bear" if mss_1h else "1h_bos_bear" if bos_1h else "1h_sweep_rejection" if valid_event else None
     elif side == "bull":
@@ -179,14 +171,12 @@ def _one_hour_confirmation(signal: dict) -> dict:
         valid_event = False
         source = None
 
-    valid = bool(side in {"bull", "bear"} and macro_ok and cycle_ok and zone_ok and valid_event)
+    valid = bool(side in {"bull", "bear"} and macro_ok and valid_event)
     debug_reason = "1h_wyckoff_smc_confirmed" if valid else "waiting_1h_wyckoff_smc_event"
-    if not macro_ok:
+    if side not in {"bull", "bear"}:
+        debug_reason = "neutral_bias"
+    elif not macro_ok:
         debug_reason = "missing_4h_macro_side"
-    elif not cycle_ok:
-        debug_reason = "blocked_by_late_4h_cycle"
-    elif not zone_ok:
-        debug_reason = "missing_1h_zone"
     elif not valid_event:
         debug_reason = "waiting_1h_sweep_reclaim_rejection_or_mss"
 
@@ -200,13 +190,12 @@ def _one_hour_confirmation(signal: dict) -> dict:
         "mss_seen": bool(mss_1h),
         "bos_seen": bool(bos_1h),
         "source": source,
+        "cycle_filter_bypassed": True,
     }
 
 
 def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool) -> None:
     if not confirmation.get("valid"):
-        return
-    if _is_late_cycle(signal):
         return
 
     side = confirmation.get("side")
@@ -307,7 +296,7 @@ def apply_context_driven_progression(signal: dict) -> dict:
         if signal.get("planner_candidate_reason") == block_reason:
             signal["planner_candidate_reason"] = None
         if isinstance(wyckoff, dict) and wyckoff.get("status") == "blocked":
-            wyckoff["status"] = "execution_ready" if confirm_ok else "context_ready"
+            wyckoff["status"] = "context_ready"
             wyckoff["reason"] = "context identified; 4h window kept as diagnostic only"
 
     signal.setdefault("hierarchy_gate", {})["confirmation_path"] = (
