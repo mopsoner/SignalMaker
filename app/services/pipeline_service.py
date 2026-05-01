@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from uuid import uuid4
 import re
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.asset_state import AssetStateCurrent
 from app.services.asset_state_service import AssetStateService
 from app.services.collector_service import CollectorService
 from app.services.hierarchical_gate_service import apply_hierarchical_stage_gates
@@ -108,6 +110,33 @@ class PipelineService:
                     errors.append({"symbol": symbol, "phase": f"collect_{interval}", "error": str(exc)})
         return fetched, errors
 
+    def _order_symbols_for_analysis(self, symbols: list[str]) -> list[str]:
+        """Analyze the strongest existing assets first.
+
+        The pipeline must collect candles for the whole universe, but the analyze/planner
+        pass should prioritize assets already closest to confirmation. We use the latest
+        persisted 360/table score as the pre-run priority signal, then fall back to
+        alphabetical order for new symbols that have no stored row yet.
+        """
+        normalized_symbols = sorted({symbol.upper() for symbol in symbols})
+        if not normalized_symbols:
+            return []
+
+        rows = self.db.execute(
+            select(AssetStateCurrent.symbol, AssetStateCurrent.score, AssetStateCurrent.updated_at)
+            .where(AssetStateCurrent.symbol.in_(normalized_symbols))
+        ).all()
+        priority: dict[str, tuple[float, float]] = {}
+        for symbol, score, updated_at in rows:
+            updated_ts = updated_at.timestamp() if updated_at else 0.0
+            priority[symbol.upper()] = (float(score or 0.0), updated_ts)
+
+        def sort_key(symbol: str) -> tuple[float, float, str]:
+            score, updated_ts = priority.get(symbol, (-1.0, 0.0))
+            return (-score, -updated_ts, symbol)
+
+        return sorted(normalized_symbols, key=sort_key)
+
     def run_once(self, limit: int | None = None) -> dict:
         execution_interval = self._execution_interval()
         symbols = self.collector.discover_symbols(limit=limit)
@@ -166,7 +195,7 @@ class PipelineService:
                     errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
         limits = self._bundle_limits(execution_interval)
-        analyzed_symbols = sorted(set(symbols))
+        analyzed_symbols = self._order_symbols_for_analysis(symbols)
         for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
@@ -283,6 +312,8 @@ class PipelineService:
             "symbols_scanned": scanned,
             "collect_workers": worker_count,
             "execution_interval": execution_interval,
+            "analysis_ordering": "score_desc_existing_asset_state",
+            "analysis_top_symbols": analyzed_symbols[:10],
             "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
@@ -306,6 +337,8 @@ class PipelineService:
             "candidates_created": candidates,
             "collect_workers": worker_count,
             "execution_interval": execution_interval,
+            "analysis_ordering": "score_desc_existing_asset_state",
+            "analysis_top_symbols": analyzed_symbols[:10],
             "errors": errors,
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
