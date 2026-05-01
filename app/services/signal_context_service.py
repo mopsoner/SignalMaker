@@ -109,27 +109,63 @@ def _candidate_target(signal: dict, side: str) -> dict:
     }
 
 
+def _first_stop_source(signal: dict, refinement: dict, side: str) -> tuple[float | None, str, str]:
+    """Return the first available raw stop level with a clear source label."""
+    event_level = (signal.get("wyckoff_event_level") or {}).get("level")
+    if side == "bear":
+        candidates = [
+            (refinement.get("last_high_1h"), "last_high_1h", "1H last high above UTAD/rejection"),
+            (signal.get("range_high_1h"), "range_high_1h", "1H range high"),
+            (event_level, "wyckoff_event_level", "4H Wyckoff event level"),
+        ]
+    elif side == "bull":
+        candidates = [
+            (refinement.get("last_low_1h"), "last_low_1h", "1H last low below Spring/reclaim"),
+            (signal.get("range_low_1h"), "range_low_1h", "1H range low"),
+            (event_level, "wyckoff_event_level", "4H Wyckoff event level"),
+        ]
+    else:
+        return None, "none", "neutral side"
+
+    for level, source, reason in candidates:
+        if level is not None:
+            return float(level), source, reason
+    return None, "none", "missing stop source level"
+
+
 def _candidate_stop(signal: dict, side: str) -> dict:
     price = _price(signal)
     refinement = signal.get("refinement_context_1h") or {}
-    event_level = (signal.get("wyckoff_event_level") or {}).get("level")
+    raw_stop, source, source_reason = _first_stop_source(signal, refinement, side)
     if side == "bear":
-        raw_stop = refinement.get("last_high_1h") or signal.get("range_high_1h") or event_level
         if raw_stop is None:
-            return {"valid": False, "reason": "missing_bear_stop_level"}
-        stop = float(raw_stop) * (1.0 + STOP_BUFFER_PCT)
+            return {"valid": False, "reason": "missing_bear_stop_level", "source": source}
+        stop = raw_stop * (1.0 + STOP_BUFFER_PCT)
+        method = "above_source_plus_buffer"
         if stop <= price:
             stop = price * (1.0 + STOP_BUFFER_PCT)
+            method = "above_entry_fallback_plus_buffer"
     elif side == "bull":
-        raw_stop = refinement.get("last_low_1h") or signal.get("range_low_1h") or event_level
         if raw_stop is None:
-            return {"valid": False, "reason": "missing_bull_stop_level"}
-        stop = float(raw_stop) * (1.0 - STOP_BUFFER_PCT)
+            return {"valid": False, "reason": "missing_bull_stop_level", "source": source}
+        stop = raw_stop * (1.0 - STOP_BUFFER_PCT)
+        method = "below_source_minus_buffer"
         if stop >= price:
             stop = price * (1.0 - STOP_BUFFER_PCT)
+            method = "below_entry_fallback_minus_buffer"
     else:
-        return {"valid": False, "reason": "neutral_side"}
-    return {"valid": True, "level": stop, "source_level": raw_stop}
+        return {"valid": False, "reason": "neutral_side", "source": source}
+
+    return {
+        "valid": True,
+        "level": stop,
+        "source_level": raw_stop,
+        "source": source,
+        "source_reason": source_reason,
+        "buffer_pct": STOP_BUFFER_PCT,
+        "method": method,
+        "reason": f"stop from {source}: {source_reason}",
+    }
 
 
 def _one_hour_confirmation(signal: dict) -> dict:
@@ -236,6 +272,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
     signal["planner_candidate_status"] = "candidate_watch"
     signal["planner_candidate_reason"] = None
     signal["planner_candidate_rr"] = reward / risk
+    signal["stop_source"] = stop_result
 
     wyckoff = signal.get("wyckoff_requirement")
     if isinstance(wyckoff, dict):
@@ -291,6 +328,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
         "side": "sell" if side == "bear" else "buy",
         "entry": price,
         "stop": stop,
+        "stop_source": stop_result,
         "target": target["level"],
     }
 
