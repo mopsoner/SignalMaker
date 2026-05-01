@@ -5,9 +5,25 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
 
+function safeText(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'object') {
+    const type = value.type || value.source || value.name || value.reason
+    const level = value.level !== null && value.level !== undefined ? ` @ ${fmtNumber(value.level, 4)}` : ''
+    if (type) return `${type}${level}`
+    try {
+      return JSON.stringify(value)
+    } catch (_) {
+      return 'object'
+    }
+  }
+  return String(value)
+}
+
 function summarizeContext(value) {
   if (!value || typeof value !== 'object') return '—'
-  const type = value.type || '—'
+  const type = value.type || value.source || '—'
   const level = value.level !== null && value.level !== undefined ? fmtNumber(value.level, 4) : '—'
   return `${type} @ ${level}`
 }
@@ -16,10 +32,26 @@ function setupState(row) {
   const state = row?.payload?.state
   if (state === 'spring_watch') return 'spring_watch'
   if (state === 'utad_watch') return 'utad_watch'
-  return row?.payload?.bias || '—'
+  return safeText(row?.payload?.bias)
 }
-function confirmLabel(row) { return row?.payload?.trigger || row?.notes || '—' }
-function stopSource(row) { return row?.payload?.trade?.stop_source || '—' }
+function confirmLabel(row) { return safeText(row?.payload?.trigger || row?.notes) }
+function stopSource(row) {
+  return safeText(
+    row?.payload?.trade?.stop_source
+      || row?.payload?.trade?.stop
+      || row?.payload?.stop_source
+      || row?.payload?.planner?.stop_source
+      || row?.payload?.planner_candidate?.stop_source
+  )
+}
+function targetSource(row) {
+  return safeText(
+    row?.payload?.trade?.target_source
+      || row?.payload?.target_source
+      || row?.payload?.projected_target
+      || row?.execution_target
+  )
+}
 
 export default function CandidatesPage() {
   const [busy, setBusy] = useState(false)
@@ -39,13 +71,14 @@ export default function CandidatesPage() {
   const columns = [
     { key: 'symbol', title: 'Symbol' },
     { key: 'side', title: 'Side' },
-    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{row.stage}</span> },
+    { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{safeText(row.stage)}</span> },
     { key: 'status', title: 'Status' },
     { key: 'setup', title: 'Setup', render: setupState, sortValue: setupState },
     { key: 'confirm', title: 'Confirm', render: confirmLabel, sortValue: confirmLabel },
     { key: 'macro', title: 'Macro', render: (row) => summarizeContext(row?.payload?.macro_liquidity_context || row?.liquidity_context), sortValue: (row) => (row?.payload?.macro_liquidity_context || row?.liquidity_context)?.level ?? -1 },
     { key: 'entry', title: 'Entry context', render: (row) => summarizeContext(row?.payload?.entry_liquidity_context), sortValue: (row) => row?.payload?.entry_liquidity_context?.level ?? -1 },
     { key: 'stop_source', title: 'Stop source', render: stopSource, sortValue: stopSource },
+    { key: 'target_source', title: 'Target source', render: targetSource, sortValue: targetSource },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
     { key: 'entry_price', title: 'Entry', render: (row) => fmtNumber(row.entry_price, 4) },
     { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
