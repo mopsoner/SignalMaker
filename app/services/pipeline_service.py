@@ -228,11 +228,11 @@ class PipelineService:
                 if raw_signal.get("confirm_source") == "5m_bos":
                     raw_signal["confirm_source"] = "15m_bos"
 
-                # Strict Wyckoff + SMC hierarchy:
-                # 4H macro -> 1H zone/liquidity -> 15M confirmation -> planner.
-                # A local 15M BOS/MSS may be recorded as seen, but it cannot reach planner
-                # unless the higher-timeframe gates authorize it.
+                # 4H context/target are finalized here. Re-apply the 1H candidate
+                # progression immediately after so the planner receives a complete
+                # trade object even when the first pass lacked the ranked 4H target.
                 raw_signal = apply_hierarchical_stage_gates(raw_signal)
+                raw_signal = apply_context_driven_progression(raw_signal)
 
                 if raw_signal.get("confirm_blocked_by_hierarchy"):
                     assessment = {
