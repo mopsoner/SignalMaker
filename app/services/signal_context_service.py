@@ -40,7 +40,14 @@ def _target_overlaps_context(target_level: float | None, context_level: float | 
 
 
 def _candidate_target(signal: dict, side: str) -> dict:
-    """Pick a directional 4H target and avoid overlap with the event/context level."""
+    """Pick the next directional hierarchical target after a 1H event.
+
+    The 1H event confirms the setup, but TP1 should not jump directly to the far
+    4H extreme when nearer structural targets exist. The target hierarchy is:
+    nearest opposite shelf -> previous day -> previous week -> 4H range extreme
+    -> major 4H swing. This keeps BMT-like bull setups targeting the next
+    resistance shelf instead of the full 4H range high.
+    """
     price = _price(signal)
     event_level = ((signal.get("wyckoff_event_level") or {}).get("level")
                    or (signal.get("macro_liquidity_context") or {}).get("level"))
@@ -49,20 +56,20 @@ def _candidate_target(signal: dict, side: str) -> dict:
 
     if side == "bear":
         raw = [
-            ("range_low", signal.get("range_low_4h"), "range_low_4h", 90),
-            ("major_swing_low_4h", signal.get("major_swing_low_4h"), "major_swing_low_4h", 80),
-            (old_support.get("type", "old_support_shelf"), old_support.get("level"), "old_support_shelf", 75),
-            ("previous_day_low", signal.get("previous_day_low"), "previous_day_low", 60),
-            ("previous_week_low", signal.get("previous_week_low"), "previous_week_low", 55),
+            (old_support.get("type", "old_support_shelf"), old_support.get("level"), "old_support_shelf", 90, 10),
+            ("previous_day_low", signal.get("previous_day_low"), "previous_day_low", 80, 20),
+            ("previous_week_low", signal.get("previous_week_low"), "previous_week_low", 72, 30),
+            ("range_low", signal.get("range_low_4h"), "range_low_4h", 68, 40),
+            ("major_swing_low_4h", signal.get("major_swing_low_4h"), "major_swing_low_4h", 55, 50),
         ]
         directional = lambda level: level is not None and float(level) < price
     elif side == "bull":
         raw = [
-            ("range_high", signal.get("range_high_4h"), "range_high_4h", 90),
-            ("major_swing_high_4h", signal.get("major_swing_high_4h"), "major_swing_high_4h", 80),
-            (old_resistance.get("type", "old_resistance_shelf"), old_resistance.get("level"), "old_resistance_shelf", 75),
-            ("previous_day_high", signal.get("previous_day_high"), "previous_day_high", 60),
-            ("previous_week_high", signal.get("previous_week_high"), "previous_week_high", 55),
+            (old_resistance.get("type", "old_resistance_shelf"), old_resistance.get("level"), "old_resistance_shelf", 90, 10),
+            ("previous_day_high", signal.get("previous_day_high"), "previous_day_high", 80, 20),
+            ("previous_week_high", signal.get("previous_week_high"), "previous_week_high", 72, 30),
+            ("range_high", signal.get("range_high_4h"), "range_high_4h", 68, 40),
+            ("major_swing_high_4h", signal.get("major_swing_high_4h"), "major_swing_high_4h", 55, 50),
         ]
         directional = lambda level: level is not None and float(level) > price
     else:
@@ -70,7 +77,7 @@ def _candidate_target(signal: dict, side: str) -> dict:
         directional = lambda level: False
 
     candidates = []
-    for level_type, level, source, base_quality in raw:
+    for level_type, level, source, base_quality, hierarchy_rank in raw:
         if not directional(level):
             continue
         level = float(level)
@@ -78,11 +85,11 @@ def _candidate_target(signal: dict, side: str) -> dict:
         if distance_pct is None or distance_pct < MIN_TARGET_DISTANCE_PCT:
             continue
         overlaps = _target_overlaps_context(level, event_level, price)
-        score = base_quality + min(distance_pct * 100.0, 25.0) - (100.0 if overlaps else 0.0)
+        score = base_quality + max(0.0, 25.0 - min(distance_pct * 100.0, 25.0)) - (100.0 if overlaps else 0.0)
         candidates.append({
             "type": level_type,
             "level": level,
-            "reason": f"1h-confirmed {side} setup targets {source}",
+            "reason": f"1h-confirmed {side} setup targets nearest hierarchical {source}",
             "timeframe": "4h",
             "scope": "macro",
             "source": source,
@@ -90,6 +97,7 @@ def _candidate_target(signal: dict, side: str) -> dict:
             "directional": True,
             "overlaps_context": overlaps,
             "score": score,
+            "hierarchy_rank": hierarchy_rank,
             "projected": True,
         })
 
@@ -101,11 +109,11 @@ def _candidate_target(signal: dict, side: str) -> dict:
             "target_candidates": candidates,
         }
 
-    selected = sorted(valid, key=lambda item: item["score"], reverse=True)[0]
+    selected = sorted(valid, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))[0]
     return {
         "valid": True,
         "selected": selected,
-        "target_candidates": candidates,
+        "target_candidates": sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"])),
     }
 
 
@@ -259,6 +267,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
     pipeline["liquidity"] = True
     pipeline["zone"] = True
     pipeline["confirm"] = True
+    pipeline["trade"] = True
 
     signal["execution_target"] = target
     signal["projected_target"] = target
@@ -330,6 +339,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
         "stop": stop,
         "stop_source": stop_result,
         "target": target["level"],
+        "target_source": target,
     }
 
 
