@@ -12,7 +12,7 @@ planner to create a candidate.
 
 EXECUTION_TIMEFRAME = "15m"
 LEGACY_EXECUTION_TRIGGER_KEY = "execution_trigger_5m"
-MIN_TARGET_DISTANCE_PCT = 0.008
+MIN_TARGET_DISTANCE_PCT = 0.05
 CONTEXT_TARGET_OVERLAP_PCT = 0.003
 CONTEXT_TOO_FAR_PCT = 0.18
 
@@ -175,15 +175,18 @@ def _rank_target_candidate(signal: dict, candidate: dict, side: str, selected_co
     distance_pct = abs(price - level) / price if price > 0 and level is not None else 999.0
     overlap = bool(price > 0 and selected_context_level is not None and abs(level - selected_context_level) / price <= CONTEXT_TARGET_OVERLAP_PCT)
     directional = bool((side == "bull" and level > price) or (side == "bear" and level < price))
+    meets_min_distance = bool(distance_pct >= MIN_TARGET_DISTANCE_PCT)
     score = float(candidate.get("base_quality") or 0)
     score += 30.0 if directional else -100.0
     if overlap:
         score -= 80.0
-    if distance_pct < MIN_TARGET_DISTANCE_PCT:
+    if not meets_min_distance:
         score -= 50.0
     score += max(0.0, 25.0 - distance_pct * 120.0)
     selected = dict(candidate)
     selected["distance_pct"] = distance_pct
+    selected["min_distance_pct"] = MIN_TARGET_DISTANCE_PCT
+    selected["meets_min_distance"] = meets_min_distance
     selected["score"] = round(score, 4)
     selected["directional"] = directional
     selected["overlaps_context"] = overlap
@@ -242,8 +245,13 @@ def _apply_ranked_context_selection(signal: dict) -> None:
     selected_context = context_candidates[0] if context_candidates else None
     selected_context_level = _level(selected_context)
     target_candidates = _target_candidates(signal, side, selected_context_level)
-    valid_targets = [c for c in target_candidates if c.get("directional") and not c.get("overlaps_context") and c.get("distance_pct", 999) >= MIN_TARGET_DISTANCE_PCT]
-    selected_target = valid_targets[0] if valid_targets else (target_candidates[0] if target_candidates else None)
+    valid_targets = [
+        c for c in target_candidates
+        if c.get("directional")
+        and not c.get("overlaps_context")
+        and c.get("distance_pct", 999) >= MIN_TARGET_DISTANCE_PCT
+    ]
+    selected_target = valid_targets[0] if valid_targets else None
 
     signal["context_selection_debug"] = {
         "side": side,
@@ -251,7 +259,11 @@ def _apply_ranked_context_selection(signal: dict) -> None:
         "context_candidates": context_candidates[:8],
         "selected_target": selected_target,
         "target_candidates": target_candidates[:8],
-        "selection_model": "ranked_4h_context_then_opposite_target_v4_no_zone_gate",
+        "target_candidates_after_min_distance": valid_targets[:8],
+        "target_min_distance_pct": MIN_TARGET_DISTANCE_PCT,
+        "target_selection_policy": "ranked_hierarchy_min_5pct",
+        "target_rejected_reason": None if selected_target else "no_hierarchical_target_above_min_5pct",
+        "selection_model": "ranked_4h_context_then_opposite_target_v5_min_5pct",
     }
 
     if selected_context:
@@ -279,12 +291,15 @@ def _apply_ranked_context_selection(signal: dict) -> None:
             signal["wyckoff_requirement"] = req
 
     if selected_target:
-        clean_target = {k: v for k, v in selected_target.items() if k not in {"base_quality", "score", "directional", "overlaps_context"}}
+        clean_target = {k: v for k, v in selected_target.items() if k not in {"base_quality", "score", "directional", "overlaps_context", "meets_min_distance", "min_distance_pct"}}
         clean_target["timeframe"] = clean_target.get("timeframe") or "4h"
         clean_target["projected"] = True
         clean_target["reason"] = f"ranked projected execution target: {clean_target.get('reason')}"
         signal["execution_target"] = dict(clean_target)
         signal["projected_target"] = dict(clean_target)
+    else:
+        signal["execution_target"] = {"type": "none", "level": None, "reason": "no hierarchical target above minimum 5% distance", "timeframe": None, "projected": False}
+        signal["projected_target"] = {"type": "none", "level": None, "reason": "no hierarchical target above minimum 5% distance", "timeframe": None, "projected": False}
 
 
 def _macro_context(signal: dict) -> dict:
@@ -349,13 +364,13 @@ def _validate_execution_target(signal: dict, side: str) -> dict:
     price = _price(signal)
     target = _target_level(signal)
     if price <= 0 or target is None:
-        return {"valid": False, "reason": "missing_execution_target"}
+        return {"valid": False, "reason": "no_hierarchical_target_above_min_5pct"}
     if side == "bull" and target <= price:
         return {"valid": False, "reason": "bull_target_not_above_price"}
     if side == "bear" and target >= price:
         return {"valid": False, "reason": "bear_target_not_below_price"}
     if abs(target - price) / price < MIN_TARGET_DISTANCE_PCT:
-        return {"valid": False, "reason": "target_distance_too_small"}
+        return {"valid": False, "reason": "target_below_min_5pct"}
     return {"valid": True, "reason": "target_valid"}
 
 
@@ -523,7 +538,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_context__ranked_context__1h_decision__15m_optional_v4",
+        "model": "4h_context__ranked_context__1h_decision__15m_optional_v5_min_5pct_target",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
