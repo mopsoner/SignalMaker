@@ -8,6 +8,30 @@ from app.models.asset_state import AssetStateCurrent
 from app.models.position import Position
 
 
+SHORT_SIDES = {"short", "sell", "bear", "bear_watch"}
+LONG_SIDES = {"long", "buy", "bull", "bull_watch"}
+
+
+def _normalized_side(side: str | None) -> str:
+    value = (side or "").lower()
+    if value in SHORT_SIDES:
+        return "short"
+    if value in LONG_SIDES:
+        return "long"
+    return value
+
+
+def _position_pnl(*, side: str | None, entry_price: float | None, mark_price: float | None, quantity: float | None) -> float | None:
+    if entry_price is None or mark_price is None or quantity is None:
+        return None
+    entry = float(entry_price)
+    mark = float(mark_price)
+    qty = float(quantity)
+    if _normalized_side(side) == "short":
+        return (entry - mark) * qty
+    return (mark - entry) * qty
+
+
 class PositionService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -25,11 +49,12 @@ class PositionService:
             if not asset or asset.price is None:
                 continue
             row.mark_price = float(asset.price)
-            if row.entry_price is not None and row.quantity is not None:
-                if row.side == "short":
-                    row.unrealized_pnl = (float(row.entry_price) - float(row.mark_price)) * float(row.quantity)
-                else:
-                    row.unrealized_pnl = (float(row.mark_price) - float(row.entry_price)) * float(row.quantity)
+            row.unrealized_pnl = _position_pnl(
+                side=row.side,
+                entry_price=row.entry_price,
+                mark_price=row.mark_price,
+                quantity=row.quantity,
+            )
             changed = True
         if changed:
             self.db.commit()
@@ -78,12 +103,30 @@ class PositionService:
             existing.mark_price = mark_price if mark_price is not None else existing.mark_price
             existing.stop_price = stop_price if stop_price is not None else existing.stop_price
             existing.target_price = target_price if target_price is not None else existing.target_price
+            existing.unrealized_pnl = _position_pnl(
+                side=existing.side,
+                entry_price=existing.entry_price,
+                mark_price=existing.mark_price,
+                quantity=existing.quantity,
+            )
             existing.meta = {**(existing.meta or {}), **meta, "dedupe_refresh": True}
             self.db.commit()
             self.db.refresh(existing)
             return existing
 
-        row = Position(position_id=f"pos_{uuid4().hex[:16]}", symbol=symbol.upper(), side=side, quantity=quantity, entry_price=entry_price, mark_price=mark_price, stop_price=stop_price, target_price=target_price, status="open", meta=meta)
+        row = Position(
+            position_id=f"pos_{uuid4().hex[:16]}",
+            symbol=symbol.upper(),
+            side=side,
+            quantity=quantity,
+            entry_price=entry_price,
+            mark_price=mark_price,
+            stop_price=stop_price,
+            target_price=target_price,
+            unrealized_pnl=_position_pnl(side=side, entry_price=entry_price, mark_price=mark_price, quantity=quantity),
+            status="open",
+            meta=meta,
+        )
         self.db.add(row)
         self.db.commit()
         self.db.refresh(row)
@@ -95,7 +138,12 @@ class PositionService:
             return None
         row.status = "closed"
         row.mark_price = mark_price
-        row.unrealized_pnl = unrealized_pnl
+        row.unrealized_pnl = unrealized_pnl if unrealized_pnl is not None else _position_pnl(
+            side=row.side,
+            entry_price=row.entry_price,
+            mark_price=mark_price,
+            quantity=row.quantity,
+        )
         row.closed_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(row)
