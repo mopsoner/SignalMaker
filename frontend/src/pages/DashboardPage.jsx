@@ -19,21 +19,21 @@ const plannerReason = (row) => row?.state_payload?.planner_candidate_reason || r
 const wyckoff = (row) => get(row, 'wyckoff_requirement') || {}
 const wyckoffStatus = (row) => wyckoff(row)?.status || 'waiting'
 const confirmationModel = (row) => get(row, 'confirmation_model') || {}
-const oneHourDebug = (row) => get(row, 'one_hour_confirmation_debug') || {}
+const oneHourDecision = (row) => get(row, 'one_hour_decision') || {}
 const rsiOneHour = (row) => row.rsi_1h ?? get(row, 'rsi_1h') ?? get(row, 'rsi_htf') ?? null
 const context = (value) => !value || typeof value !== 'object' ? '—' : `${value.type || '—'} @ ${value.level !== null && value.level !== undefined ? fmtNumber(value.level, 4) : '—'}`
 
 const confirmationLabel = (row) => {
   const model = confirmationModel(row)
   if (model.entry_mode === '15m_confirmed') return `15m confirmed${model.confirmed_by_1h ? ' + 1H' : ''}`
-  if (model.entry_mode === '1h_confirm_15m_optional') return '1H confirmed · 15m optional'
-  if (model.confirmed_by_1h) return '1H confirmed'
+  if (model.entry_mode === '1h_confirm_15m_optional') return '1H decision valid · 15m optional'
+  if (model.confirmed_by_1h || oneHourDecision(row)?.valid) return '1H decision valid'
   if (model.confirmed_by_15m || trigger(row)?.valid) return '15m confirmed'
-  if (stage(row) === 'waiting_1h_event' || blockedAt(row) === 'decision_1h') return 'waiting 1H event'
+  if (stage(row) === 'waiting_1h_event' || blockedAt(row) === 'decision_1h') return 'waiting 1H decision'
   return model.entry_mode || 'wait'
 }
 
-const oneHourConfirmed = (row) => Boolean(confirmationModel(row)?.confirmed_by_1h || oneHourDebug(row)?.valid || wyckoffStatus(row) === '1h_confirmed_15m_optional')
+const oneHourConfirmed = (row) => Boolean(confirmationModel(row)?.confirmed_by_1h || oneHourDecision(row)?.valid || wyckoffStatus(row) === '1h_confirmed_15m_optional')
 const fifteenMinConfirmed = (row) => Boolean(confirmationModel(row)?.confirmed_by_15m || trigger(row)?.valid)
 const tradeCandidate = (row) => stage(row) === 'trade_candidate' || get(row, 'planner_candidate_status') === 'candidate_watch' || get(row, 'trade')?.status === 'candidate'
 const tradeReady = (row) => ['trade_ready', 'trade'].includes(stage(row)) || get(row, 'trade')?.status === 'ready'
@@ -42,13 +42,13 @@ const macroBlocked = (row) => !tradeCandidate(row) && !tradeReady(row) && ['macr
 const targetBlocked = (row) => !tradeCandidate(row) && !tradeReady(row) && ['target'].includes(blockedAt(row))
 const liquidityWaiting = (row) => !tradeCandidate(row) && !tradeReady(row) && blockedAt(row) === 'liquidity_1h'
 const executionReady = (row) => tradeReady(row) || tradeCandidate(row) || stage(row) === 'confirm' || wyckoffStatus(row) === 'execution_ready' || oneHourConfirmed(row)
-const oneHourBear = (row) => oneHourConfirmed(row) && (oneHourDebug(row)?.side === 'bear' || starts(row.bias, 'bear'))
-const oneHourBull = (row) => oneHourConfirmed(row) && (oneHourDebug(row)?.side === 'bull' || starts(row.bias, 'bull'))
+const oneHourBear = (row) => oneHourConfirmed(row) && (oneHourDecision(row)?.side === 'bear' || starts(row.bias, 'bear'))
+const oneHourBull = (row) => oneHourConfirmed(row) && (oneHourDecision(row)?.side === 'bull' || starts(row.bias, 'bull'))
 const actionableWatch = (row) => tradeCandidate(row) || tradeReady(row) || oneHourConfirmed(row) || ['confirm', 'confirm_watch'].includes(stage(row))
 const hasTarget = (row) => Boolean(row.execution_target?.level || get(row, 'projected_target')?.level)
 const strongZone = (row) => Boolean(get(row, 'zone_validity')?.valid)
-const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear') || oneHourDebug(row)?.mss_seen)
-const bos = (row) => Boolean(get(row, 'bos_bull') || get(row, 'bos_bear') || oneHourDebug(row)?.bos_seen)
+const mss = (row) => Boolean(get(row, 'mss_bull') || get(row, 'mss_bear') || oneHourDecision(row)?.mss_seen)
+const bos = (row) => Boolean(get(row, 'bos_bull') || get(row, 'bos_bear') || oneHourDecision(row)?.bos_seen)
 const swept = (row) => Boolean(wyckoff(row)?.swept || get(row, 'wyckoff_event_level')?.swept)
 
 function DecisionPath({ row }) {
@@ -62,13 +62,13 @@ function DecisionPath({ row }) {
   const steps = [
     ['Context', liquidityDone],
     ['Target', targetDone],
-    ['1H event', oneHourOk],
+    ['1H decision', oneHourOk],
     ['15m opt.', confirmOk],
     ['Trade', tradeOk],
   ]
-  const detail = oneHourDebug(row)?.source || confirmationLabel(row)
+  const detail = oneHourDecision(row)?.source || oneHourDecision(row)?.reason || confirmationLabel(row)
   return <div style={{ display: 'grid', gap: 4, minWidth: 280 }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 62, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>{steps.map(([key, done], index) => <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span title={key} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 74, height: 22, padding: '0 8px', borderRadius: 999, background: done ? '#166534' : '#374151', color: 'white', fontSize: 10, fontWeight: 700 }}>{done ? '✓ ' : '· '}{key}</span>{index < steps.length - 1 ? <span style={{ opacity: 0.45 }}>›</span> : null}</span>)}</div>
     <div style={{ fontSize: 11, opacity: 0.85 }}>{currentStage} · {detail || 'wait'} · {strongZone(row) ? 'zone ok' : 'diagnostic zone'}</div>
   </div>
 }
@@ -117,11 +117,11 @@ export default function DashboardPage() {
     ['actionable', `Actionable (${counts.actionable})`],
     ['trade_candidate', `Trade candidate 1H (${counts.tradeCandidate})`],
     ['trade_ready', `Trade ready (${counts.tradeReady})`],
-    ['one_hour_confirmed', `1H confirmed (${counts.oneHourConfirmed})`],
+    ['one_hour_confirmed', `1H decision valid (${counts.oneHourConfirmed})`],
     ['fifteen_min_confirmed', `15m confirmed (${counts.fifteenMinConfirmed})`],
     ['one_hour_bear', `1H bear UTAD/MSS (${counts.oneHourBear})`],
     ['one_hour_bull', `1H bull Spring/MSS (${counts.oneHourBull})`],
-    ['waiting_1h_event', `Waiting 1H event (${counts.waitingOneHourEvent})`],
+    ['waiting_1h_event', `Waiting 1H decision (${counts.waitingOneHourEvent})`],
     ['macro_blocked', `4H context blocked (${counts.macroBlocked})`],
     ['target_blocked', `Target blocked (${counts.targetBlocked})`],
     ['liquidity_waiting', `Liquidity waiting (${counts.liquidityWaiting})`],
@@ -167,7 +167,7 @@ export default function DashboardPage() {
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
-    { key: 'confirm_model', title: 'Confirm model', render: confirmationLabel, sortValue: confirmationLabel },
+    { key: 'confirm_model', title: 'Decision model', render: confirmationLabel, sortValue: confirmationLabel },
     { key: 'rsi', title: 'RSI 1H', render: (row) => fmtNumber(rsiOneHour(row), 2), sortValue: (row) => Number(rsiOneHour(row) ?? -1) },
     { key: 'reason', title: 'Reason', render: plannerReason, sortValue: plannerReason },
     { key: 'block', title: 'Gate', render: (row) => blockedAt(row) || '—', sortValue: blockedAt },
@@ -180,7 +180,7 @@ export default function DashboardPage() {
 
   return <div className="page-stack">
     <PageHeader title="Dashboard 360" subtitle="Market overview: 4H context/target, 1H Wyckoff-SMC decision, optional 15m timing." />
-    <div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade candidate 1H" value={counts.tradeCandidate} /><StatCard label="1H confirmed" value={counts.oneHourConfirmed} /><StatCard label="Waiting 1H event" value={counts.waitingOneHourEvent} /></div>
+    <div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade candidate 1H" value={counts.tradeCandidate} /><StatCard label="1H decision valid" value={counts.oneHourConfirmed} /><StatCard label="Waiting 1H decision" value={counts.waitingOneHourEvent} /></div>
     <div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Actionable" value={counts.actionable} /><StatCard label="Bull / Bear 1H" value={`${counts.oneHourBull} / ${counts.oneHourBear}`} /><StatCard label="4H / Target blocked" value={`${counts.macroBlocked} / ${counts.targetBlocked}`} /></div>
     {loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}
     <FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" />
