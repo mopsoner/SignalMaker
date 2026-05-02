@@ -201,14 +201,8 @@ def _candidate_stop(signal: dict, side: str) -> dict:
     return selected
 
 
-def _one_hour_confirmation(signal: dict) -> dict:
-    """Validate a true 1H Wyckoff/SMC event, not a simple retest.
-
-    1H is now the decision timeframe. 4H keeps the directional context and the
-    target selection, while mid/late-cycle labels are diagnostic only. A confirmed
-    1H Spring/UTAD/MSS/BOS should therefore be allowed to create a candidate even
-    when the old cycle label would have been mid_cycle or late_cycle.
-    """
+def _one_hour_decision(signal: dict) -> dict:
+    """Validate a true 1H Wyckoff/SMC decision, not a simple retest."""
     side = "bear" if str(signal.get("bias") or "").startswith("bear") else "bull" if str(signal.get("bias") or "").startswith("bull") else "neutral"
     macro = signal.get("macro_window_4h") or {}
     refinement = signal.get("refinement_context_1h") or {}
@@ -241,18 +235,18 @@ def _one_hour_confirmation(signal: dict) -> dict:
         source = None
 
     valid = bool(side in {"bull", "bear"} and macro_ok and valid_event)
-    debug_reason = "1h_wyckoff_smc_confirmed" if valid else "waiting_1h_wyckoff_smc_event"
+    decision_reason = "1h_wyckoff_smc_confirmed" if valid else "waiting_1h_wyckoff_smc_event"
     if side not in {"bull", "bear"}:
-        debug_reason = "neutral_bias"
+        decision_reason = "neutral_bias"
     elif not macro_ok:
-        debug_reason = "missing_4h_macro_side"
+        decision_reason = "missing_4h_macro_side"
     elif not valid_event:
-        debug_reason = "waiting_1h_sweep_reclaim_rejection_or_mss"
+        decision_reason = "waiting_1h_sweep_reclaim_rejection_or_mss"
 
     return {
         "side": side,
         "valid": valid,
-        "reason": debug_reason,
+        "reason": decision_reason,
         "sweep_seen": swept,
         "rejection_seen": bool(side == "bear" and valid_event),
         "reclaim_seen": bool(side == "bull" and valid_event),
@@ -389,27 +383,27 @@ def apply_context_driven_progression(signal: dict) -> dict:
     context_ok = _has_context(macro_ctx) and _has_context(entry_ctx) and _has_context(target)
     setup_ready = bool(wyckoff.get("setup_ready") or wyckoff.get("confirmed"))
     confirm_ok = bool(exec_trigger.get("valid"))
-    one_hour_confirmation = _one_hour_confirmation(signal)
+    one_hour_decision = _one_hour_decision(signal)
 
-    signal["one_hour_confirmation_debug"] = one_hour_confirmation
+    signal["one_hour_decision"] = one_hour_decision
     signal["confirmation_model"] = {
         "primary_tf": "1h",
         "execution_tf": signal.get("execution_timeframe") or "15m",
-        "confirmed_by_1h": bool(one_hour_confirmation.get("valid")),
+        "confirmed_by_1h": bool(one_hour_decision.get("valid")),
         "confirmed_by_15m": confirm_ok,
-        "confirmation_source": exec_trigger.get("confirm_source") or one_hour_confirmation.get("source"),
-        "entry_mode": "15m_confirmed" if confirm_ok else "1h_confirm_15m_optional" if one_hour_confirmation.get("valid") else "wait",
+        "confirmation_source": exec_trigger.get("confirm_source") or one_hour_decision.get("source"),
+        "entry_mode": "15m_confirmed" if confirm_ok else "1h_confirm_15m_optional" if one_hour_decision.get("valid") else "wait",
     }
 
     if context_ok:
         pipeline["collect"] = True
         pipeline["liquidity"] = True
         pipeline["zone"] = True
-        if setup_ready or confirm_ok or one_hour_confirmation.get("valid"):
+        if setup_ready or confirm_ok or one_hour_decision.get("valid"):
             zone_validity = signal.setdefault("zone_validity", {})
             zone_validity["valid"] = True
             zone_validity["target_ok"] = True
-            zone_validity["wyckoff_ok"] = bool(setup_ready or one_hour_confirmation.get("valid") or zone_validity.get("wyckoff_ok"))
+            zone_validity["wyckoff_ok"] = bool(setup_ready or one_hour_decision.get("valid") or zone_validity.get("wyckoff_ok"))
             zone_validity["reason"] = "valid_context_zone"
             if signal.get("zone_quality") == "weak":
                 signal["zone_quality"] = "medium"
@@ -427,14 +421,14 @@ def apply_context_driven_progression(signal: dict) -> dict:
             wyckoff["reason"] = "context identified; 4h window kept as diagnostic only"
 
     signal.setdefault("hierarchy_gate", {})["confirmation_path"] = (
-        "1h_primary_15m_optional" if one_hour_confirmation.get("valid") and not confirm_ok
-        else "1h_plus_15m" if one_hour_confirmation.get("valid") and confirm_ok
+        "1h_primary_15m_optional" if one_hour_decision.get("valid") and not confirm_ok
+        else "1h_plus_15m" if one_hour_decision.get("valid") and confirm_ok
         else "15m_only" if confirm_ok
         else "waiting"
     )
 
-    if context_ok and one_hour_confirmation.get("valid"):
-        _apply_one_hour_candidate(signal, one_hour_confirmation, confirm_ok)
+    if context_ok and one_hour_decision.get("valid"):
+        _apply_one_hour_candidate(signal, one_hour_decision, confirm_ok)
         # Small score normalization after the engine score has already been computed.
         if not confirm_ok:
             signal["score"] = float(signal.get("score") or 0.0) + 2.0
