@@ -5,25 +5,35 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber } from '../lib/format'
 
+const SHORT_SIDES = new Set(['short', 'sell', 'bear', 'bear_watch'])
+const LONG_SIDES = new Set(['long', 'buy', 'bull', 'bull_watch'])
+
+function normalizedSide(side) {
+  const value = String(side || '').toLowerCase()
+  if (SHORT_SIDES.has(value)) return 'short'
+  if (LONG_SIDES.has(value)) return 'long'
+  return value
+}
+function isShort(row) { return normalizedSide(row?.side) === 'short' }
 function pnlValue(row) {
   const entry = Number(row?.entry_price), mark = Number(row?.mark_price), qty = Number(row?.quantity)
   if (!Number.isFinite(entry) || !Number.isFinite(mark) || !Number.isFinite(qty)) return null
-  return row?.side === 'short' ? (entry - mark) * qty : (mark - entry) * qty
+  return isShort(row) ? (entry - mark) * qty : (mark - entry) * qty
 }
 function pnlPct(row) {
   const entry = Number(row?.entry_price), mark = Number(row?.mark_price)
   if (!Number.isFinite(entry) || !Number.isFinite(mark) || entry === 0) return null
-  return row?.side === 'short' ? ((entry - mark) / entry) * 100 : ((mark - entry) / entry) * 100
+  return isShort(row) ? ((entry - mark) / entry) * 100 : ((mark - entry) / entry) * 100
 }
 function distanceToStopPct(row) {
-  const mark = Number(row?.mark_price), stop = Number(row?.stop_price)
-  if (!Number.isFinite(mark) || !Number.isFinite(stop) || mark === 0) return null
-  return row?.side === 'short' ? ((stop - mark) / mark) * 100 : ((mark - stop) / mark) * 100
+  const entry = Number(row?.entry_price), stop = Number(row?.stop_price)
+  if (!Number.isFinite(entry) || !Number.isFinite(stop) || entry === 0) return null
+  return isShort(row) ? ((stop - entry) / entry) * 100 : ((entry - stop) / entry) * 100
 }
 function distanceToTargetPct(row) {
-  const mark = Number(row?.mark_price), target = Number(row?.target_price)
-  if (!Number.isFinite(mark) || !Number.isFinite(target) || mark === 0) return null
-  return row?.side === 'short' ? ((mark - target) / mark) * 100 : ((target - mark) / mark) * 100
+  const entry = Number(row?.entry_price), target = Number(row?.target_price)
+  if (!Number.isFinite(entry) || !Number.isFinite(target) || entry === 0) return null
+  return isShort(row) ? ((entry - target) / entry) * 100 : ((target - entry) / entry) * 100
 }
 function pnlTone(value) {
   if (value === null || value === undefined) return {}
