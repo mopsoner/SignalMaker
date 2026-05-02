@@ -11,7 +11,7 @@ and 15m remains an execution-quality upgrade instead of the only possible gate.
 
 from __future__ import annotations
 
-MIN_TARGET_DISTANCE_PCT = 0.003
+MIN_TARGET_DISTANCE_PCT = 0.05
 STOP_BUFFER_PCT = 0.002
 MIN_STOP_DISTANCE_PCT = 0.02
 
@@ -41,14 +41,7 @@ def _target_overlaps_context(target_level: float | None, context_level: float | 
 
 
 def _candidate_target(signal: dict, side: str) -> dict:
-    """Pick the next directional hierarchical target after a 1H event.
-
-    The 1H event confirms the setup, but TP1 should not jump directly to the far
-    4H extreme when nearer structural targets exist. The target hierarchy is:
-    nearest opposite shelf -> previous day -> previous week -> 4H range extreme
-    -> major 4H swing. This keeps BMT-like bull setups targeting the next
-    resistance shelf instead of the full 4H range high.
-    """
+    """Pick the first directional hierarchical target at least 5% from entry."""
     price = _price(signal)
     event_level = ((signal.get("wyckoff_event_level") or {}).get("level")
                    or (signal.get("macro_liquidity_context") or {}).get("level"))
@@ -83,31 +76,36 @@ def _candidate_target(signal: dict, side: str) -> dict:
             continue
         level = float(level)
         distance_pct = _level_distance_pct(price, level)
-        if distance_pct is None or distance_pct < MIN_TARGET_DISTANCE_PCT:
+        if distance_pct is None:
             continue
         overlaps = _target_overlaps_context(level, event_level, price)
+        valid_distance = distance_pct >= MIN_TARGET_DISTANCE_PCT
         score = base_quality + max(0.0, 25.0 - min(distance_pct * 100.0, 25.0)) - (100.0 if overlaps else 0.0)
         candidates.append({
             "type": level_type,
             "level": level,
-            "reason": f"1h-confirmed {side} setup targets nearest hierarchical {source}",
+            "reason": f"1h-confirmed {side} setup targets first hierarchical {source} above 5pct",
             "timeframe": "4h",
             "scope": "macro",
             "source": source,
             "distance_pct": distance_pct,
+            "min_target_distance_pct": MIN_TARGET_DISTANCE_PCT,
             "directional": True,
             "overlaps_context": overlaps,
+            "valid": bool(valid_distance and not overlaps),
+            "rejected_reason": None if valid_distance else "target_distance_below_min_5pct",
             "score": score,
             "hierarchy_rank": hierarchy_rank,
             "projected": True,
         })
 
-    valid = [c for c in candidates if not c["overlaps_context"]]
+    valid = [c for c in candidates if c.get("valid")]
     if not valid:
         return {
             "valid": False,
-            "reason": "no_valid_directional_4h_target",
-            "target_candidates": candidates,
+            "reason": "no_hierarchical_target_above_min_5pct",
+            "min_target_distance_pct": MIN_TARGET_DISTANCE_PCT,
+            "target_candidates": sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"])),
         }
 
     selected = sorted(valid, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))[0]
@@ -275,6 +273,10 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
             signal["planner_candidate_status"] = "rejected"
             signal["planner_candidate_reason"] = "blocked_before_planner:no_hierarchical_stop_above_min_2pct"
             signal["stage"] = "stop_watch"
+        if target_result.get("reason") == "no_hierarchical_target_above_min_5pct":
+            signal["planner_candidate_status"] = "rejected"
+            signal["planner_candidate_reason"] = "blocked_before_planner:no_hierarchical_target_above_min_5pct"
+            signal["stage"] = "target_watch"
         return
 
     target = target_result["selected"]
