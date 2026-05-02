@@ -82,6 +82,9 @@ class PipelineService:
             payload["execution_trigger"] = {**legacy_trigger, "timeframe": EXECUTION_INTERVAL}
         if isinstance(payload.get("execution_trigger"), dict):
             payload["execution_trigger"]["timeframe"] = EXECUTION_INTERVAL
+        # one_hour_confirmation_debug used to be a decision field. It is removed
+        # from the public payload to avoid confusion; one_hour_decision is the source of truth.
+        payload.pop("one_hour_confirmation_debug", None)
         payload.pop("rsi_5m", None)
         payload["rsi_15m"] = payload.get("rsi_main")
         payload["rsi_main_timeframe"] = EXECUTION_INTERVAL
@@ -90,6 +93,68 @@ class PipelineService:
         if payload.get("confirm_source") == "5m_bos":
             payload["confirm_source"] = "15m_bos"
         return payload
+
+    def _enforce_one_hour_decision_gate(self, signal: dict) -> dict:
+        """Option A strict gate: 1H decision.valid=false means no trade/candidate."""
+        decision = signal.get("one_hour_decision") or {}
+        if decision.get("valid"):
+            return signal
+
+        reason = decision.get("reason") or "waiting_1h_decision"
+        pipeline = signal.setdefault("pipeline", {})
+        pipeline["collect"] = True
+        pipeline["liquidity"] = True
+        pipeline["zone"] = True
+        pipeline["confirm"] = False
+        pipeline["trade"] = False
+
+        signal["stage"] = "waiting_1h_event"
+        signal["state"] = "waiting_1h_event"
+        signal["trigger"] = "wait"
+        signal["confirm_source"] = None
+        signal["trade"] = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
+        signal["planner_candidate_status"] = "not_created"
+        signal["planner_candidate_reason"] = f"blocked_before_planner:{reason}"
+        signal["planner_candidate_rr"] = None
+        signal["hierarchy_block_reason"] = reason
+        signal["confirm_blocked_by_hierarchy"] = True
+        signal["confirm_block_reason"] = reason
+
+        wyckoff = signal.get("wyckoff_requirement")
+        if isinstance(wyckoff, dict):
+            wyckoff.setdefault("legacy_status", wyckoff.get("status"))
+            wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
+            wyckoff["status"] = "waiting_1h_event"
+            wyckoff["confirmed"] = False
+            wyckoff["setup_ready"] = False
+            wyckoff["reason"] = reason
+            signal["wyckoff_requirement"] = wyckoff
+
+        model = signal.setdefault("confirmation_model", {})
+        model["confirmed_by_1h"] = False
+        model["entry_mode"] = "wait"
+        model["confirmation_source"] = decision.get("source")
+
+        execution_trigger = signal.get("execution_trigger")
+        if isinstance(execution_trigger, dict):
+            execution_trigger["valid"] = False
+            execution_trigger["accepted"] = False
+            execution_trigger["blocked"] = True
+            execution_trigger["blocked_by"] = "decision_1h"
+            execution_trigger["block_reason"] = reason
+            signal["execution_trigger"] = execution_trigger
+
+        gate = signal.setdefault("hierarchy_gate", {})
+        gate.update({
+            "accepted": False,
+            "stage": "waiting_1h_event",
+            "blocked_at": "decision_1h",
+            "block_reason": reason,
+            "one_hour_decision_ok": False,
+            "confirm_15m_accepted": False,
+            "confirmation_path": "waiting_1h_event",
+        })
+        return signal
 
     def _collect_interval_parallel(self, symbols: list[str], interval: str, latest_close_times: dict[str, dict[str, int]], worker_count: int) -> tuple[dict[str, list[dict]], list[dict]]:
         fetched: dict[str, list[dict]] = {}
@@ -111,13 +176,6 @@ class PipelineService:
         return fetched, errors
 
     def _order_symbols_for_analysis(self, symbols: list[str]) -> list[str]:
-        """Analyze the strongest existing assets first.
-
-        The pipeline must collect candles for the whole universe, but the analyze/planner
-        pass should prioritize assets already closest to confirmation. We use the latest
-        persisted 360/table score as the pre-run priority signal, then fall back to
-        alphabetical order for new symbols that have no stored row yet.
-        """
         normalized_symbols = sorted({symbol.upper() for symbol in symbols})
         if not normalized_symbols:
             return []
@@ -214,7 +272,6 @@ class PipelineService:
                     data_quality_counts["missing_4h_bundle"] += 1
                     continue
 
-                # Internal compatibility only: legacy strategy code reads the primary execution series through this key.
                 candles[LEGACY_ENGINE_INTERVAL] = execution_candles
                 raw_signal = self.engine.compute_signal(symbol, candles)
                 raw_signal = apply_context_driven_progression(raw_signal)
@@ -228,11 +285,9 @@ class PipelineService:
                 if raw_signal.get("confirm_source") == "5m_bos":
                     raw_signal["confirm_source"] = "15m_bos"
 
-                # 4H context/target are finalized here. Re-apply the 1H candidate
-                # progression immediately after so the planner receives a complete
-                # trade object even when the first pass lacked the ranked 4H target.
                 raw_signal = apply_hierarchical_stage_gates(raw_signal)
                 raw_signal = apply_context_driven_progression(raw_signal)
+                raw_signal = self._enforce_one_hour_decision_gate(raw_signal)
 
                 if raw_signal.get("confirm_blocked_by_hierarchy"):
                     assessment = {
