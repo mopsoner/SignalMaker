@@ -13,6 +13,7 @@ from __future__ import annotations
 
 MIN_TARGET_DISTANCE_PCT = 0.003
 STOP_BUFFER_PCT = 0.002
+MIN_STOP_DISTANCE_PCT = 0.02
 
 
 def _has_context(value: dict | None) -> bool:
@@ -117,63 +118,87 @@ def _candidate_target(signal: dict, side: str) -> dict:
     }
 
 
-def _first_stop_source(signal: dict, refinement: dict, side: str) -> tuple[float | None, str, str]:
-    """Return the first available raw stop level with a clear source label."""
+def _stop_candidate_list(signal: dict, refinement: dict, side: str) -> list[tuple[float | None, str, str, int]]:
     event_level = (signal.get("wyckoff_event_level") or {}).get("level")
+    macro_ctx_level = (signal.get("macro_liquidity_context") or {}).get("level")
     if side == "bear":
-        candidates = [
-            (refinement.get("last_high_1h"), "last_high_1h", "1H last high above UTAD/rejection"),
-            (signal.get("range_high_1h"), "range_high_1h", "1H range high"),
-            (event_level, "wyckoff_event_level", "4H Wyckoff event level"),
+        return [
+            (refinement.get("last_high_1h"), "last_high_1h", "1H last high above UTAD/rejection", 10),
+            (signal.get("range_high_1h"), "range_high_1h", "1H range high", 20),
+            (event_level, "wyckoff_event_level", "4H Wyckoff event level", 30),
+            (macro_ctx_level, "macro_liquidity_context", "selected 4H macro liquidity context", 40),
+            (signal.get("range_high_4h"), "range_high_4h", "4H range high", 50),
+            (signal.get("major_swing_high_4h"), "major_swing_high_4h", "major 4H swing high", 60),
         ]
-    elif side == "bull":
-        candidates = [
-            (refinement.get("last_low_1h"), "last_low_1h", "1H last low below Spring/reclaim"),
-            (signal.get("range_low_1h"), "range_low_1h", "1H range low"),
-            (event_level, "wyckoff_event_level", "4H Wyckoff event level"),
+    if side == "bull":
+        return [
+            (refinement.get("last_low_1h"), "last_low_1h", "1H last low below Spring/reclaim", 10),
+            (signal.get("range_low_1h"), "range_low_1h", "1H range low", 20),
+            (event_level, "wyckoff_event_level", "4H Wyckoff event level", 30),
+            (macro_ctx_level, "macro_liquidity_context", "selected 4H macro liquidity context", 40),
+            (signal.get("range_low_4h"), "range_low_4h", "4H range low", 50),
+            (signal.get("major_swing_low_4h"), "major_swing_low_4h", "major 4H swing low", 60),
         ]
-    else:
-        return None, "none", "neutral side"
-
-    for level, source, reason in candidates:
-        if level is not None:
-            return float(level), source, reason
-    return None, "none", "missing stop source level"
+    return []
 
 
 def _candidate_stop(signal: dict, side: str) -> dict:
     price = _price(signal)
     refinement = signal.get("refinement_context_1h") or {}
-    raw_stop, source, source_reason = _first_stop_source(signal, refinement, side)
-    if side == "bear":
-        if raw_stop is None:
-            return {"valid": False, "reason": "missing_bear_stop_level", "source": source}
-        stop = raw_stop * (1.0 + STOP_BUFFER_PCT)
-        method = "above_source_plus_buffer"
-        if stop <= price:
-            stop = price * (1.0 + STOP_BUFFER_PCT)
-            method = "above_entry_fallback_plus_buffer"
-    elif side == "bull":
-        if raw_stop is None:
-            return {"valid": False, "reason": "missing_bull_stop_level", "source": source}
-        stop = raw_stop * (1.0 - STOP_BUFFER_PCT)
-        method = "below_source_minus_buffer"
-        if stop >= price:
-            stop = price * (1.0 - STOP_BUFFER_PCT)
-            method = "below_entry_fallback_minus_buffer"
-    else:
-        return {"valid": False, "reason": "neutral_side", "source": source}
+    candidates = []
 
-    return {
-        "valid": True,
-        "level": stop,
-        "source_level": raw_stop,
-        "source": source,
-        "source_reason": source_reason,
-        "buffer_pct": STOP_BUFFER_PCT,
-        "method": method,
-        "reason": f"stop from {source}: {source_reason}",
-    }
+    if price <= 0:
+        return {"valid": False, "reason": "missing_entry_price", "stop_candidates": candidates}
+
+    for raw_stop, source, source_reason, hierarchy_rank in _stop_candidate_list(signal, refinement, side):
+        if raw_stop is None:
+            continue
+        raw_stop = float(raw_stop)
+
+        if side == "bear":
+            if raw_stop <= price:
+                continue
+            stop = raw_stop * (1.0 + STOP_BUFFER_PCT)
+            method = "above_source_plus_buffer"
+        elif side == "bull":
+            if raw_stop >= price:
+                continue
+            stop = raw_stop * (1.0 - STOP_BUFFER_PCT)
+            method = "below_source_minus_buffer"
+        else:
+            return {"valid": False, "reason": "neutral_side", "source": source, "stop_candidates": candidates}
+
+        distance_pct = abs(price - stop) / price
+        candidate = {
+            "valid": distance_pct >= MIN_STOP_DISTANCE_PCT,
+            "level": stop,
+            "source_level": raw_stop,
+            "source": source,
+            "source_reason": source_reason,
+            "buffer_pct": STOP_BUFFER_PCT,
+            "min_stop_distance_pct": MIN_STOP_DISTANCE_PCT,
+            "distance_pct": distance_pct,
+            "hierarchy_rank": hierarchy_rank,
+            "method": method,
+            "reason": f"hierarchical stop from {source}: {source_reason}",
+        }
+        if not candidate["valid"]:
+            candidate["rejected_reason"] = "stop_distance_below_min_2pct"
+        candidates.append(candidate)
+
+    valid_candidates = [candidate for candidate in candidates if candidate.get("valid")]
+    if not valid_candidates:
+        return {
+            "valid": False,
+            "reason": "no_hierarchical_stop_above_min_2pct",
+            "min_stop_distance_pct": MIN_STOP_DISTANCE_PCT,
+            "stop_candidates": sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"])),
+        }
+
+    selected = sorted(valid_candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))[0]
+    selected["stop_candidates"] = sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))
+    selected["selection_policy"] = "hierarchical_stop_min_2pct"
+    return selected
 
 
 def _one_hour_confirmation(signal: dict) -> dict:
@@ -252,6 +277,10 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
             "stop": stop_result,
             "reason": "missing_target_or_stop",
         }
+        if stop_result.get("reason") == "no_hierarchical_stop_above_min_2pct":
+            signal["planner_candidate_status"] = "rejected"
+            signal["planner_candidate_reason"] = "blocked_before_planner:no_hierarchical_stop_above_min_2pct"
+            signal["stage"] = "stop_watch"
         return
 
     target = target_result["selected"]
