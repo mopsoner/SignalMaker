@@ -148,12 +148,12 @@ def _candidate_stop(signal: dict, side: str) -> dict:
         raw_stop = float(raw_stop)
 
         if side == "bear":
-            if raw_stop <= price:
+            if raw_stop < price:
                 continue
             stop = raw_stop * (1.0 + STOP_BUFFER_PCT)
             method = "above_source_plus_buffer"
         elif side == "bull":
-            if raw_stop >= price:
+            if raw_stop > price:
                 continue
             stop = raw_stop * (1.0 - STOP_BUFFER_PCT)
             method = "below_source_minus_buffer"
