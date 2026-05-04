@@ -2,11 +2,11 @@
 
 4H  -> macro context / ranked liquidity context / target map
 1H  -> decision timeframe: Spring / UTAD / MSS / BOS / reclaim / rejection
-15M -> mandatory execution confirmation before planner/trade candidate
+15M -> execution alignment filter, not a second full setup confirmation
 
 Important model rule:
 - 1H validates the setup.
-- 15M validates the trade execution.
+- 15M gives a NO-GO only when microstructure opposes the 1H setup.
 - SL/TP quality is structural and is handled by planner_service, not by fixed 2%/5% filters.
 """
 
@@ -34,7 +34,7 @@ PRE_LIQUIDITY_STAGES = {
     "target_watch",
 }
 PRE_ZONE_STAGES = PRE_LIQUIDITY_STAGES | {"liquidity_watch"}
-PRE_CONFIRM_STAGES = PRE_ZONE_STAGES | {"waiting_1h_event", "awaiting_15m_confirm", "confirm_watch"}
+PRE_CONFIRM_STAGES = PRE_ZONE_STAGES | {"waiting_1h_event", "awaiting_15m_alignment", "confirm_watch"}
 
 
 def _bias_side(signal: dict) -> str:
@@ -42,6 +42,14 @@ def _bias_side(signal: dict) -> str:
     if bias.startswith("bear"):
         return "bear"
     if bias.startswith("bull"):
+        return "bull"
+    return "neutral"
+
+
+def _opposite_side(side: str) -> str:
+    if side == "bull":
+        return "bear"
+    if side == "bear":
         return "bull"
     return "neutral"
 
@@ -92,6 +100,20 @@ def _side_structure_seen(signal: dict, side: str) -> bool:
     return bool(signal.get("mss_bull") or signal.get("bos_bull") or signal.get("mss_bear") or signal.get("bos_bear"))
 
 
+def _structure_source_for_side(signal: dict, side: str):
+    if side == "bull":
+        if signal.get("mss_bull"):
+            return "15m_mss_bull"
+        if signal.get("bos_bull"):
+            return "15m_bos_bull"
+    if side == "bear":
+        if signal.get("mss_bear"):
+            return "15m_mss_bear"
+        if signal.get("bos_bear"):
+            return "15m_bos_bear"
+    return None
+
+
 def _execution_source(signal: dict):
     legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
     public_trigger = signal.get("execution_trigger") or {}
@@ -114,6 +136,70 @@ def _execution_seen(signal: dict) -> bool:
         or public_trigger.get("trigger") in {"break_down_confirm", "break_up_confirm"}
         or _side_structure_seen(signal, side)
     )
+
+
+def _trigger_side_from_text(value) -> str | None:
+    text = str(value or "").lower()
+    if any(token in text for token in ["bull", "up", "long", "buy", "reclaim"]):
+        return "bull"
+    if any(token in text for token in ["bear", "down", "short", "sell", "reject"]):
+        return "bear"
+    return None
+
+
+def _fifteen_min_alignment(signal: dict, side: str) -> dict:
+    """Return aligned / neutral_not_opposed / opposed for 15m vs 1h setup side.
+
+    Wyckoff/SMC intent: a valid 1H setup should not wait for a late 15M breakout.
+    15M only blocks when it actively contradicts the 1H setup.
+    """
+    if side not in {"bull", "bear"}:
+        return {"status": "neutral_not_opposed", "aligned": False, "opposed": False, "source": None, "reason": "neutral_side_no_15m_block"}
+
+    opposite = _opposite_side(side)
+    legacy_trigger = signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or {}
+    public_trigger = signal.get("execution_trigger") or {}
+    source = _execution_source(signal)
+    trigger = public_trigger.get("trigger") or legacy_trigger.get("trigger") or signal.get("trigger")
+
+    aligned_structure = _side_structure_seen(signal, side)
+    opposed_structure = _side_structure_seen(signal, opposite)
+    aligned_source = _structure_source_for_side(signal, side) or source
+    opposed_source = _structure_source_for_side(signal, opposite)
+
+    trigger_side = _trigger_side_from_text(source) or _trigger_side_from_text(trigger)
+    if trigger_side == side:
+        aligned_structure = True
+        aligned_source = source or trigger
+    elif trigger_side == opposite:
+        opposed_structure = True
+        opposed_source = source or trigger
+
+    if opposed_structure and not aligned_structure:
+        return {
+            "status": "opposed",
+            "aligned": False,
+            "opposed": True,
+            "source": opposed_source,
+            "reason": f"15m_{opposite}_microstructure_opposes_1h_{side}_setup",
+        }
+
+    if aligned_structure:
+        return {
+            "status": "aligned",
+            "aligned": True,
+            "opposed": False,
+            "source": aligned_source,
+            "reason": f"15m_microstructure_aligned_with_1h_{side}_setup",
+        }
+
+    return {
+        "status": "neutral_not_opposed",
+        "aligned": False,
+        "opposed": False,
+        "source": source,
+        "reason": f"15m_neutral_not_opposed_to_1h_{side}_setup",
+    }
 
 
 def _block(stage: str, reason: str, source_stage: str) -> dict:
@@ -394,7 +480,7 @@ def _cycle_position_4h(signal: dict) -> dict:
         "execution_target": target,
         "context_level": context_level,
         "stage": stage,
-        "tradability": "entry_allowed_if_1h_event_then_15m_confirm",
+        "tradability": "entry_allowed_if_1h_event_and_15m_not_opposed",
         "is_entry_window": True,
         "reason": f"{side}_4h_context_diagnostic_{zone}" if side != "neutral" else "neutral_context_diagnostic",
     }
@@ -427,7 +513,7 @@ def _resolve_gate(signal: dict) -> dict:
     one_hour_ready = _one_hour_decision_ready(signal, side)
     target_ok = bool(zone_validity.get("target_ok") or _target_level(signal) is not None)
     target_validation = _validate_execution_target(signal, side)
-    execution_seen = _execution_seen(signal)
+    alignment = _fifteen_min_alignment(signal, side)
 
     if side == "neutral":
         return _block("macro_watch", "neutral_bias", "macro_4h")
@@ -445,14 +531,14 @@ def _resolve_gate(signal: dict) -> dict:
         return _block("target_watch", target_validation["reason"], "target")
     if not one_hour_ready:
         return _block("waiting_1h_event", wyckoff.get("reason") or "waiting_1h_wyckoff_smc_event", "decision_1h")
-    if not execution_seen:
-        return _block("awaiting_15m_confirm", "missing_15m_execution_confirmation", "15m_confirm")
+    if alignment["opposed"]:
+        return _block("awaiting_15m_alignment", alignment["reason"], "15m_alignment")
 
     return {
-        "stage": "confirm",
+        "stage": "trade_candidate",
         "blocked": False,
         "blocked_at": None,
-        "reason": "hierarchy_confirmed_1h_plus_15m",
+        "reason": "hierarchy_confirmed_1h_15m_not_opposed",
     }
 
 
@@ -466,8 +552,8 @@ def _normalize_blocked_debug(signal: dict, gate: dict) -> None:
         wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
         if gate.get("blocked_at") == "decision_1h":
             wyckoff["status"] = "waiting_1h_event"
-        elif gate.get("blocked_at") == "15m_confirm":
-            wyckoff["status"] = "awaiting_15m_confirm"
+        elif gate.get("blocked_at") == "15m_alignment":
+            wyckoff["status"] = "awaiting_15m_alignment"
         else:
             wyckoff["status"] = f"blocked_by_{gate['blocked_at']}"
         wyckoff["confirmed"] = False
@@ -499,11 +585,12 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     pipeline = dict(signal.get("pipeline") or {})
     cycle = _cycle_position_4h(signal)
     signal["cycle_position_4h"] = cycle
+    side = _bias_side(signal)
+    alignment = _fifteen_min_alignment(signal, side)
     gate = _resolve_gate(signal)
     accepted = not gate["blocked"]
-    side = _bias_side(signal)
     execution_seen = _execution_seen(signal)
-    execution_source = _execution_source(signal)
+    execution_source = alignment.get("source") or _execution_source(signal)
 
     original_trade = signal.get("trade") or {}
     original_trigger = signal.get("trigger")
@@ -514,11 +601,15 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     execution_trigger = dict(signal.get(LEGACY_EXECUTION_TRIGGER_KEY) or signal.get("execution_trigger") or {})
     execution_trigger.update({
         "seen": execution_seen,
-        "valid": bool(accepted and execution_seen),
+        "valid": bool(accepted),
         "accepted": accepted,
         "timeframe": EXECUTION_TIMEFRAME,
-        "trigger": original_trigger if execution_seen else "wait",
+        "trigger": original_trigger if execution_seen else "alignment_check",
         "confirm_source": execution_source,
+        "alignment_status": alignment["status"],
+        "alignment_reason": alignment["reason"],
+        "aligned": alignment["aligned"],
+        "opposed": alignment["opposed"],
         "blocked": not accepted,
         "blocked_by": gate["blocked_at"],
         "block_reason": None if accepted else gate["reason"],
@@ -528,7 +619,7 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     signal["execution_trigger"] = dict(execution_trigger)
     signal["stage"] = gate["stage"]
     signal["hierarchy_gate"] = {
-        "model": "4h_context__ranked_context__1h_setup__15m_required_v6_no_min_pct_target",
+        "model": "4h_context__ranked_context__1h_setup__15m_alignment_v7_no_min_pct_target",
         "side": side,
         "accepted": accepted,
         "stage": gate["stage"],
@@ -540,8 +631,11 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
         "one_hour_decision_ok": accepted or gate["blocked_at"] not in {"decision_1h"},
         "zone_1h_ok": None,
         "confirm_15m_seen": execution_seen,
-        "confirm_15m_accepted": bool(accepted and execution_seen),
-        "confirmation_path": "1h_setup_15m_required" if accepted else "awaiting_15m_confirm" if gate["blocked_at"] == "15m_confirm" else "waiting_1h_event",
+        "confirm_15m_accepted": bool(accepted),
+        "execution_15m_alignment": alignment["status"],
+        "execution_15m_aligned": alignment["aligned"],
+        "execution_15m_opposed": alignment["opposed"],
+        "confirmation_path": "1h_setup_15m_aligned" if alignment["aligned"] and accepted else "1h_setup_15m_not_opposed" if accepted else "awaiting_15m_alignment" if gate["blocked_at"] == "15m_alignment" else "waiting_1h_event",
     }
     signal["confirm_blocked_by_hierarchy"] = not accepted
     signal["confirm_block_reason"] = None if accepted else gate["reason"]
@@ -550,8 +644,8 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
     pipeline["collect"] = True
     pipeline["liquidity"] = gate["stage"] not in PRE_LIQUIDITY_STAGES
     pipeline["zone"] = gate["stage"] not in PRE_ZONE_STAGES
-    pipeline["confirm"] = bool(accepted and execution_seen)
-    pipeline["trade"] = bool(pipeline.get("trade") and accepted and execution_seen)
+    pipeline["confirm"] = bool(accepted)
+    pipeline["trade"] = bool(pipeline.get("trade") and accepted)
     signal["pipeline"] = pipeline
 
     confirmation_model = dict(signal.get("confirmation_model") or {})
@@ -559,15 +653,16 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
         "primary_tf": "1h",
         "execution_tf": EXECUTION_TIMEFRAME,
         "confirmed_by_1h": _one_hour_decision_ready(signal, side),
-        "confirmed_by_15m": bool(accepted and execution_seen),
+        "confirmed_by_15m": bool(alignment["aligned"]),
+        "fifteen_min_alignment": alignment["status"],
         "confirmation_source": execution_source if accepted else None,
-        "entry_mode": "1h_setup_15m_required",
+        "entry_mode": "1h_setup_15m_alignment_required",
     })
     signal["confirmation_model"] = confirmation_model
 
     if accepted:
         signal["confirm_source"] = execution_source or original_confirm_source or signal.get("confirm_source")
-        signal["trigger"] = original_trigger if execution_seen else "wait"
+        signal["trigger"] = original_trigger if execution_seen else "1h_setup_15m_not_opposed"
         if original_trade:
             signal["trade"] = original_trade
     else:
@@ -576,8 +671,8 @@ def apply_hierarchical_stage_gates(signal: dict) -> dict:
         signal["bias"] = "bear_watch" if side == "bear" else "bull_watch" if side == "bull" else "neutral"
         signal["trade"] = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
         signal["planner_candidate_status"] = "not_created"
-        if gate["blocked_at"] == "15m_confirm":
-            signal["planner_candidate_reason"] = "waiting:missing_15m_execution_confirmation"
+        if gate["blocked_at"] == "15m_alignment":
+            signal["planner_candidate_reason"] = "waiting:15m_opposes_1h_setup"
         elif gate["blocked_at"] == "decision_1h":
             signal["planner_candidate_reason"] = f"waiting:{gate['reason']}"
         else:
