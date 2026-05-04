@@ -15,6 +15,7 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
             'stop_policy': 'structural_invalidation',
             'target_policy': 'structural_liquidity',
+            'execution_policy': '1h_setup_15m_alignment_required',
         }
 
     def _watch_reason(self, signal: dict, trade: dict) -> str:
@@ -30,8 +31,10 @@ class PlannerService:
         if trade.get('entry') is None:
             if not refinement.get('valid', True):
                 return f"watch_missing_1h_setup:{refinement.get('reason', state)}"
-            if not exec_trigger.get('valid', True):
-                return f"watch_missing_execution_trigger:{exec_trigger.get('trigger', state)}"
+            if exec_trigger.get('alignment_status') == 'opposed':
+                return f"watch_15m_opposes_1h_setup:{exec_trigger.get('alignment_reason', state)}"
+            if not exec_trigger.get('accepted', True):
+                return f"watch_missing_execution_alignment:{exec_trigger.get('trigger', state)}"
             if not signal.get('pipeline', {}).get('confirm'):
                 return f"watch_not_confirmed:{state}"
             if execution_target is None:
@@ -83,11 +86,12 @@ class PlannerService:
     def _can_infer_candidate(self, signal: dict) -> bool:
         gate = signal.get('hierarchy_gate') or {}
         exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-        if gate.get('accepted') is True and exec_trigger.get('valid') is True:
-            return True
-        if signal.get('confirm_blocked_by_hierarchy'):
+        alignment_status = exec_trigger.get('alignment_status')
+        if alignment_status == 'opposed' or signal.get('confirm_blocked_by_hierarchy'):
             return False
-        return bool(signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted') and exec_trigger.get('valid'))
+        if gate.get('accepted') is True and exec_trigger.get('accepted') is True:
+            return True
+        return bool(signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted'))
 
     def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, hierarchy_rank: int) -> None:
         level_float = self._level_from(level)
@@ -248,7 +252,7 @@ class PlannerService:
             'target_distance_pct': target_distance_pct,
             'stop_validation': 'structural_invalidation',
             'target_validation': 'structural_liquidity',
-            'inferred_by': 'planner_from_accepted_signal_v1' if trade.get('entry') is None else 'signal_trade_object',
+            'inferred_by': 'planner_from_accepted_signal_v2_15m_alignment' if trade.get('entry') is None else 'signal_trade_object',
         }
         if stop_candidates:
             resolved['stop_candidates'] = stop_candidates[:8]
@@ -284,7 +288,7 @@ class PlannerService:
 
         signal['trade'] = resolved_trade
         signal['planner_trade_plan'] = {
-            'model': 'accepted_signal_inference_v2_structural_sl_tp',
+            'model': 'accepted_signal_inference_v3_15m_alignment_structural_sl_tp',
             'side': side,
             'entry': entry,
             'stop': stop,
