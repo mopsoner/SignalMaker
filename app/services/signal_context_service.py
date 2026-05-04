@@ -253,6 +253,37 @@ def _execution_alignment(exec_trigger: dict) -> tuple[str, bool, bool]:
     return status, aligned, opposed
 
 
+def _mark_structural_plan_block(signal: dict, *, reason: str, blocked_at: str, alignment_status: str, aligned_15m: bool) -> None:
+    """After a valid 1H decision, show structural planner blocks instead of stale decision_1h blocks."""
+    signal["hierarchy_block_reason"] = reason
+    signal["confirm_blocked_by_hierarchy"] = True
+    signal["confirm_block_reason"] = reason
+
+    gate = signal.setdefault("hierarchy_gate", {})
+    gate.update({
+        "accepted": False,
+        "stage": signal.get("stage") or "plan_watch",
+        "blocked_at": blocked_at,
+        "block_reason": reason,
+        "one_hour_decision_ok": True,
+        "zone_1h_ok": True,
+        "confirm_15m_seen": aligned_15m,
+        "confirm_15m_accepted": False,
+        "execution_15m_alignment": alignment_status,
+        "confirmation_path": "structural_plan_watch",
+    })
+
+    for key in ("execution_trigger", "execution_trigger_5m"):
+        execution_trigger = signal.get(key)
+        if isinstance(execution_trigger, dict):
+            execution_trigger["blocked"] = True
+            execution_trigger["blocked_by"] = blocked_at
+            execution_trigger["block_reason"] = reason
+            execution_trigger["accepted"] = False
+            execution_trigger["valid"] = False
+            signal[key] = execution_trigger
+
+
 def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool, alignment_status: str, aligned_15m: bool) -> None:
     if not confirmation.get("valid"):
         return
@@ -271,10 +302,12 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
             signal["planner_candidate_status"] = "rejected"
             signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_stop"
             signal["stage"] = "stop_watch"
+            _mark_structural_plan_block(signal, reason="missing_structural_stop", blocked_at="stop", alignment_status=alignment_status, aligned_15m=aligned_15m)
         if target_result.get("reason") == "missing_structural_target":
             signal["planner_candidate_status"] = "rejected"
             signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_target"
             signal["stage"] = "target_watch"
+            _mark_structural_plan_block(signal, reason="missing_structural_target", blocked_at="target", alignment_status=alignment_status, aligned_15m=aligned_15m)
         return
 
     target = target_result["selected"]
@@ -283,6 +316,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
     reward = abs(target["level"] - price)
     if risk <= 0 or reward <= 0:
         signal["one_hour_candidate_rejected"] = {"reason": "invalid_risk_reward"}
+        _mark_structural_plan_block(signal, reason="invalid_risk_reward", blocked_at="planner", alignment_status=alignment_status, aligned_15m=aligned_15m)
         return
 
     pipeline = signal.setdefault("pipeline", {})
@@ -332,6 +366,7 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
         "stage": signal["stage"],
         "blocked_at": None if confirm_ok else "15m_alignment",
         "block_reason": None if confirm_ok else "waiting_15m_alignment",
+        "one_hour_decision_ok": True,
         "zone_1h_ok": True,
         "confirm_15m_seen": aligned_15m,
         "confirm_15m_accepted": bool(confirm_ok),
