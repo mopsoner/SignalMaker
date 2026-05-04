@@ -1,19 +1,15 @@
 """Context-driven signal progression helpers.
 
-The 4H macro window is diagnostic/scoring context. Once the engine has already
-identified macro liquidity, entry liquidity and a target, the setup can progress
-to Zone/Confirm based on those contexts and the local execution trigger.
-
-This module also adds the SignalMaker execution rule discussed in the product
-logic: 4H defines the macro side/target, 1H can validate the Wyckoff/SMC idea,
-and 15m remains an execution-quality upgrade instead of the only possible gate.
+4H defines macro context and target map.
+1H validates the Wyckoff/SMC setup.
+15M is an execution alignment filter: it blocks only when it opposes the 1H setup.
+SL and TP are structural, not fixed 2% / 5% distance filters.
 """
 
 from __future__ import annotations
 
-MIN_TARGET_DISTANCE_PCT = 0.05
+CONTEXT_TARGET_OVERLAP_PCT = 0.003
 STOP_BUFFER_PCT = 0.002
-MIN_STOP_DISTANCE_PCT = 0.02
 
 
 def _has_context(value: dict | None) -> bool:
@@ -37,11 +33,11 @@ def _level_distance_pct(price: float, level: float | None) -> float | None:
 def _target_overlaps_context(target_level: float | None, context_level: float | None, price: float) -> bool:
     if target_level is None or context_level is None or price <= 0:
         return False
-    return abs(float(target_level) - float(context_level)) / price <= MIN_TARGET_DISTANCE_PCT
+    return abs(float(target_level) - float(context_level)) / price <= CONTEXT_TARGET_OVERLAP_PCT
 
 
 def _candidate_target(signal: dict, side: str) -> dict:
-    """Pick the first directional hierarchical target at least 5% from entry."""
+    """Pick the first directional structural liquidity target."""
     price = _price(signal)
     event_level = ((signal.get("wyckoff_event_level") or {}).get("level")
                    or (signal.get("macro_liquidity_context") or {}).get("level"))
@@ -79,21 +75,20 @@ def _candidate_target(signal: dict, side: str) -> dict:
         if distance_pct is None:
             continue
         overlaps = _target_overlaps_context(level, event_level, price)
-        valid_distance = distance_pct >= MIN_TARGET_DISTANCE_PCT
         score = base_quality + max(0.0, 25.0 - min(distance_pct * 100.0, 25.0)) - (100.0 if overlaps else 0.0)
         candidates.append({
             "type": level_type,
             "level": level,
-            "reason": f"1h-confirmed {side} setup targets first hierarchical {source} above 5pct",
+            "reason": f"1h-confirmed {side} setup targets structural liquidity at {source}",
             "timeframe": "4h",
             "scope": "macro",
             "source": source,
             "distance_pct": distance_pct,
-            "min_target_distance_pct": MIN_TARGET_DISTANCE_PCT,
             "directional": True,
             "overlaps_context": overlaps,
-            "valid": bool(valid_distance and not overlaps),
-            "rejected_reason": None if valid_distance else "target_distance_below_min_5pct",
+            "valid": bool(not overlaps),
+            "rejected_reason": "target_overlaps_context" if overlaps else None,
+            "validation": "structural_liquidity_target" if not overlaps else "context_overlap",
             "score": score,
             "hierarchy_rank": hierarchy_rank,
             "projected": True,
@@ -103,8 +98,7 @@ def _candidate_target(signal: dict, side: str) -> dict:
     if not valid:
         return {
             "valid": False,
-            "reason": "no_hierarchical_target_above_min_5pct",
-            "min_target_distance_pct": MIN_TARGET_DISTANCE_PCT,
+            "reason": "missing_structural_target",
             "target_candidates": sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"])),
         }
 
@@ -167,35 +161,32 @@ def _candidate_stop(signal: dict, side: str) -> dict:
             return {"valid": False, "reason": "neutral_side", "source": source, "stop_candidates": candidates}
 
         distance_pct = abs(price - stop) / price
-        candidate = {
-            "valid": distance_pct >= MIN_STOP_DISTANCE_PCT,
+        candidates.append({
+            "valid": True,
             "level": stop,
             "source_level": raw_stop,
             "source": source,
             "source_reason": source_reason,
             "buffer_pct": STOP_BUFFER_PCT,
-            "min_stop_distance_pct": MIN_STOP_DISTANCE_PCT,
             "distance_pct": distance_pct,
             "hierarchy_rank": hierarchy_rank,
             "method": method,
-            "reason": f"hierarchical stop from {source}: {source_reason}",
-        }
-        if not candidate["valid"]:
-            candidate["rejected_reason"] = "stop_distance_below_min_2pct"
-        candidates.append(candidate)
+            "validation": "structural_stop",
+            "reason": f"hierarchical structural stop from {source}: {source_reason}",
+            "rejected_reason": None,
+        })
 
     valid_candidates = [candidate for candidate in candidates if candidate.get("valid")]
     if not valid_candidates:
         return {
             "valid": False,
-            "reason": "no_hierarchical_stop_above_min_2pct",
-            "min_stop_distance_pct": MIN_STOP_DISTANCE_PCT,
+            "reason": "missing_structural_stop",
             "stop_candidates": sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"])),
         }
 
     selected = sorted(valid_candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))[0]
     selected["stop_candidates"] = sorted(candidates, key=lambda item: (item["hierarchy_rank"], item["distance_pct"]))
-    selected["selection_policy"] = "hierarchical_stop_min_2pct"
+    selected["selection_policy"] = "hierarchical_structural_stop"
     return selected
 
 
@@ -255,7 +246,14 @@ def _one_hour_decision(signal: dict) -> dict:
     }
 
 
-def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool) -> None:
+def _execution_alignment(exec_trigger: dict) -> tuple[str, bool, bool]:
+    status = exec_trigger.get("alignment_status") or ("aligned" if exec_trigger.get("valid") else "neutral_not_opposed")
+    aligned = bool(exec_trigger.get("aligned") or status == "aligned")
+    opposed = bool(exec_trigger.get("opposed") or status == "opposed")
+    return status, aligned, opposed
+
+
+def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool, alignment_status: str, aligned_15m: bool) -> None:
     if not confirmation.get("valid"):
         return
 
@@ -267,15 +265,15 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
         signal["one_hour_candidate_rejected"] = {
             "target": target_result,
             "stop": stop_result,
-            "reason": "missing_target_or_stop",
+            "reason": "missing_structural_target_or_stop",
         }
-        if stop_result.get("reason") == "no_hierarchical_stop_above_min_2pct":
+        if stop_result.get("reason") == "missing_structural_stop":
             signal["planner_candidate_status"] = "rejected"
-            signal["planner_candidate_reason"] = "blocked_before_planner:no_hierarchical_stop_above_min_2pct"
+            signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_stop"
             signal["stage"] = "stop_watch"
-        if target_result.get("reason") == "no_hierarchical_target_above_min_5pct":
+        if target_result.get("reason") == "missing_structural_target":
             signal["planner_candidate_status"] = "rejected"
-            signal["planner_candidate_reason"] = "blocked_before_planner:no_hierarchical_target_above_min_5pct"
+            signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_target"
             signal["stage"] = "target_watch"
         return
 
@@ -291,29 +289,29 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
     pipeline["collect"] = True
     pipeline["liquidity"] = True
     pipeline["zone"] = True
-    pipeline["confirm"] = True
-    pipeline["trade"] = True
+    pipeline["confirm"] = bool(confirm_ok)
+    pipeline["trade"] = bool(confirm_ok)
 
     signal["execution_target"] = target
     signal["projected_target"] = target
     signal["confirm_source"] = signal.get("confirm_source") or confirmation.get("source")
-    signal["trigger"] = signal.get("trigger") if confirm_ok else "1h_confirm_15m_optional"
-    signal["stage"] = "trade_ready" if confirm_ok else "trade_candidate"
-    signal["state"] = "trade_ready" if confirm_ok else "trade_candidate"
-    signal["hierarchy_block_reason"] = None
-    signal["confirm_blocked_by_hierarchy"] = False
-    signal["confirm_block_reason"] = None
-    signal["planner_candidate_status"] = "candidate_watch"
-    signal["planner_candidate_reason"] = None
-    signal["planner_candidate_rr"] = reward / risk
+    signal["trigger"] = signal.get("trigger") if confirm_ok else "wait"
+    signal["stage"] = "trade_ready" if confirm_ok else "awaiting_15m_alignment"
+    signal["state"] = "trade_ready" if confirm_ok else "awaiting_15m_alignment"
+    signal["hierarchy_block_reason"] = None if confirm_ok else "waiting_15m_alignment"
+    signal["confirm_blocked_by_hierarchy"] = not confirm_ok
+    signal["confirm_block_reason"] = None if confirm_ok else "waiting_15m_alignment"
+    signal["planner_candidate_status"] = "candidate_watch" if confirm_ok else "not_created"
+    signal["planner_candidate_reason"] = None if confirm_ok else "waiting:15m_alignment"
+    signal["planner_candidate_rr"] = reward / risk if confirm_ok else None
     signal["stop_source"] = stop_result
 
     wyckoff = signal.get("wyckoff_requirement")
     if isinstance(wyckoff, dict):
         wyckoff.setdefault("legacy_status", wyckoff.get("status"))
         wyckoff.setdefault("legacy_reason", wyckoff.get("reason"))
-        wyckoff["status"] = "execution_ready" if confirm_ok else "1h_confirmed_15m_optional"
-        wyckoff["confirmed"] = True
+        wyckoff["status"] = "execution_ready" if confirm_ok else "awaiting_15m_alignment"
+        wyckoff["confirmed"] = bool(confirm_ok)
         wyckoff["setup_ready"] = True
         wyckoff["reason"] = confirmation.get("source") or "1h_wyckoff_smc_confirmed"
         signal["wyckoff_requirement"] = wyckoff
@@ -330,50 +328,49 @@ def _apply_one_hour_candidate(signal: dict, confirmation: dict, confirm_ok: bool
 
     gate = signal.setdefault("hierarchy_gate", {})
     gate.update({
-        "accepted": True,
+        "accepted": bool(confirm_ok),
         "stage": signal["stage"],
-        "blocked_at": None,
-        "block_reason": None,
+        "blocked_at": None if confirm_ok else "15m_alignment",
+        "block_reason": None if confirm_ok else "waiting_15m_alignment",
         "zone_1h_ok": True,
-        "confirm_15m_seen": confirm_ok,
-        "confirmation_path": "1h_plus_15m" if confirm_ok else "1h_primary_15m_optional",
+        "confirm_15m_seen": aligned_15m,
+        "confirm_15m_accepted": bool(confirm_ok),
+        "execution_15m_alignment": alignment_status,
+        "confirmation_path": "1h_setup_15m_aligned" if aligned_15m and confirm_ok else "1h_setup_15m_not_opposed" if confirm_ok else "awaiting_15m_alignment",
     })
 
     execution_trigger = signal.get("execution_trigger")
     if isinstance(execution_trigger, dict):
-        execution_trigger["blocked"] = False
-        execution_trigger["blocked_by"] = None
-        execution_trigger["block_reason"] = None
-        execution_trigger["accepted"] = True
+        execution_trigger["blocked"] = not confirm_ok
+        execution_trigger["blocked_by"] = None if confirm_ok else "15m_alignment"
+        execution_trigger["block_reason"] = None if confirm_ok else "waiting_15m_alignment"
+        execution_trigger["accepted"] = bool(confirm_ok)
         execution_trigger["valid"] = bool(confirm_ok)
         signal["execution_trigger"] = execution_trigger
 
     legacy_trigger = signal.get("execution_trigger_5m")
     if isinstance(legacy_trigger, dict):
-        legacy_trigger["blocked"] = False
-        legacy_trigger["blocked_by"] = None
-        legacy_trigger["block_reason"] = None
-        legacy_trigger["accepted"] = True
+        legacy_trigger["blocked"] = not confirm_ok
+        legacy_trigger["blocked_by"] = None if confirm_ok else "15m_alignment"
+        legacy_trigger["block_reason"] = None if confirm_ok else "waiting_15m_alignment"
+        legacy_trigger["accepted"] = bool(confirm_ok)
         legacy_trigger["valid"] = bool(confirm_ok)
         signal["execution_trigger_5m"] = legacy_trigger
 
-    signal["trade"] = {
-        "status": "candidate",
-        "side": "sell" if side == "bear" else "buy",
-        "entry": price,
-        "stop": stop,
-        "stop_source": stop_result,
-        "target": target["level"],
-        "target_source": target,
-    }
+    if confirm_ok:
+        signal["trade"] = {
+            "status": "candidate",
+            "side": "sell" if side == "bear" else "buy",
+            "entry": price,
+            "stop": stop,
+            "stop_source": stop_result,
+            "target": target["level"],
+            "target_source": target,
+        }
 
 
 def apply_context_driven_progression(signal: dict) -> dict:
-    """Progress Zone/Confirm from identified contexts instead of 4H hard gate.
-
-    This replaces the previous package-level monkey patch. It is an explicit
-    post-engine normalization step used by the pipeline before planner assessment.
-    """
+    """Progress Zone/Confirm from identified contexts before planner assessment."""
     pipeline = signal.setdefault("pipeline", {})
     macro_ctx = signal.get("macro_liquidity_context") or signal.get("liquidity_context") or {}
     entry_ctx = signal.get("entry_liquidity_context") or {}
@@ -384,7 +381,8 @@ def apply_context_driven_progression(signal: dict) -> dict:
 
     context_ok = _has_context(macro_ctx) and _has_context(entry_ctx) and _has_context(target)
     setup_ready = bool(wyckoff.get("setup_ready") or wyckoff.get("confirmed"))
-    confirm_ok = bool(exec_trigger.get("valid"))
+    alignment_status, aligned_15m, opposed_15m = _execution_alignment(exec_trigger)
+    confirm_ok = bool(exec_trigger.get("accepted", exec_trigger.get("valid", False)) and not opposed_15m)
     one_hour_decision = _one_hour_decision(signal)
 
     signal["one_hour_decision"] = one_hour_decision
@@ -392,9 +390,10 @@ def apply_context_driven_progression(signal: dict) -> dict:
         "primary_tf": "1h",
         "execution_tf": signal.get("execution_timeframe") or "15m",
         "confirmed_by_1h": bool(one_hour_decision.get("valid")),
-        "confirmed_by_15m": confirm_ok,
+        "confirmed_by_15m": bool(aligned_15m),
+        "fifteen_min_alignment": alignment_status,
         "confirmation_source": exec_trigger.get("confirm_source") or one_hour_decision.get("source"),
-        "entry_mode": "15m_confirmed" if confirm_ok else "1h_confirm_15m_optional" if one_hour_decision.get("valid") else "wait",
+        "entry_mode": "1h_setup_15m_alignment_required" if one_hour_decision.get("valid") else "wait",
     }
 
     if context_ok:
@@ -423,19 +422,18 @@ def apply_context_driven_progression(signal: dict) -> dict:
             wyckoff["reason"] = "context identified; 4h window kept as diagnostic only"
 
     signal.setdefault("hierarchy_gate", {})["confirmation_path"] = (
-        "1h_primary_15m_optional" if one_hour_decision.get("valid") and not confirm_ok
-        else "1h_plus_15m" if one_hour_decision.get("valid") and confirm_ok
-        else "15m_only" if confirm_ok
+        "1h_setup_15m_aligned" if one_hour_decision.get("valid") and aligned_15m and confirm_ok
+        else "1h_setup_15m_not_opposed" if one_hour_decision.get("valid") and confirm_ok
+        else "awaiting_15m_alignment" if one_hour_decision.get("valid")
         else "waiting"
     )
 
     if context_ok and one_hour_decision.get("valid"):
-        _apply_one_hour_candidate(signal, one_hour_decision, confirm_ok)
-        # Small score normalization after the engine score has already been computed.
+        _apply_one_hour_candidate(signal, one_hour_decision, confirm_ok, alignment_status, aligned_15m)
         if not confirm_ok:
-            signal["score"] = float(signal.get("score") or 0.0) + 2.0
+            signal["score"] = float(signal.get("score") or 0.0) + 1.0
             final_breakdown = signal.setdefault("final_score_breakdown", {})
-            final_breakdown["one_hour_confirm"] = final_breakdown.get("one_hour_confirm", 0) + 2.0
+            final_breakdown["one_hour_confirm"] = final_breakdown.get("one_hour_confirm", 0) + 1.0
         else:
             signal["score"] = float(signal.get("score") or 0.0) + 1.0
             final_breakdown = signal.setdefault("final_score_breakdown", {})
