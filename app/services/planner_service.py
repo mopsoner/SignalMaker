@@ -3,10 +3,6 @@ from datetime import datetime, timezone
 from app.services.runtime_settings import load_runtime_settings
 
 
-MIN_TARGET_DISTANCE_PCT = 0.05
-MIN_STOP_DISTANCE_PCT = 0.02
-
-
 class PlannerService:
     def heartbeat(self) -> dict:
         runtime = load_runtime_settings()
@@ -17,8 +13,8 @@ class PlannerService:
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'min_score': strategy['planner_min_score'],
             'min_rr': strategy['planner_min_rr'],
-            'min_target_distance_pct': MIN_TARGET_DISTANCE_PCT,
-            'min_stop_distance_pct': MIN_STOP_DISTANCE_PCT,
+            'stop_policy': 'structural_invalidation',
+            'target_policy': 'structural_liquidity',
         }
 
     def _watch_reason(self, signal: dict, trade: dict) -> str:
@@ -87,14 +83,11 @@ class PlannerService:
     def _can_infer_candidate(self, signal: dict) -> bool:
         gate = signal.get('hierarchy_gate') or {}
         exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-        confirmation_model = signal.get('confirmation_model') or {}
-        if gate.get('accepted') is True:
+        if gate.get('accepted') is True and exec_trigger.get('valid') is True:
             return True
         if signal.get('confirm_blocked_by_hierarchy'):
             return False
-        if signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted'):
-            return True
-        return bool(confirmation_model.get('confirmed_by_1h') or confirmation_model.get('confirmed_by_15m'))
+        return bool(signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted') and exec_trigger.get('valid'))
 
     def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, hierarchy_rank: int) -> None:
         level_float = self._level_from(level)
@@ -111,9 +104,9 @@ class PlannerService:
             'distance': abs(level_float - entry),
             'distance_pct': distance_pct,
             'hierarchy_rank': hierarchy_rank,
-            'valid': bool(distance_pct is not None and distance_pct >= MIN_STOP_DISTANCE_PCT),
-            'min_stop_distance_pct': MIN_STOP_DISTANCE_PCT,
-            'rejected_reason': None if distance_pct is not None and distance_pct >= MIN_STOP_DISTANCE_PCT else 'stop_distance_below_min_2pct',
+            'valid': True,
+            'validation': 'structural_stop',
+            'rejected_reason': None,
         })
 
     def _infer_stop(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
@@ -142,7 +135,7 @@ class PlannerService:
             selected = valid_candidates[0]
             return selected['level'], selected['source'], ordered
 
-        return None, 'no_hierarchical_stop_above_min_2pct', ordered
+        return None, 'missing_structural_stop', ordered
 
     def _add_target_candidate(self, candidates: list[dict], *, name: str, value, entry: float, side: str, hierarchy_rank: int) -> None:
         level = self._level_from(value)
@@ -159,9 +152,9 @@ class PlannerService:
             'distance': abs(level - entry),
             'distance_pct': distance_pct,
             'hierarchy_rank': hierarchy_rank,
-            'valid': bool(distance_pct is not None and distance_pct >= MIN_TARGET_DISTANCE_PCT),
-            'min_target_distance_pct': MIN_TARGET_DISTANCE_PCT,
-            'rejected_reason': None if distance_pct is not None and distance_pct >= MIN_TARGET_DISTANCE_PCT else 'target_distance_below_min_5pct',
+            'valid': True,
+            'validation': 'structural_liquidity_target',
+            'rejected_reason': None,
         })
 
     def _infer_target(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
@@ -181,14 +174,14 @@ class PlannerService:
             fallback_keys = ['range_high_1h', 'previous_day_high', 'old_resistance_shelf', 'previous_week_high', 'range_high_4h', 'major_swing_high_4h']
         ordered_sources.extend((key, signal.get(key)) for key in fallback_keys)
 
-        seen = set()
+        seen_levels = set()
         for source, value in ordered_sources:
             level = self._level_from(value)
             if level is not None:
-                dedupe_key = (source, round(level, 12))
-                if dedupe_key in seen:
+                dedupe_key = round(level, 12)
+                if dedupe_key in seen_levels:
                     continue
-                seen.add(dedupe_key)
+                seen_levels.add(dedupe_key)
             self._add_target_candidate(candidates, name=source, value=value, entry=entry, side=side, hierarchy_rank=hierarchy_rank)
             hierarchy_rank += 10
 
@@ -197,7 +190,7 @@ class PlannerService:
         if valid_candidates:
             selected = valid_candidates[0]
             return selected['level'], selected['source'], ordered
-        return None, 'no_hierarchical_target_above_min_5pct', ordered
+        return None, 'missing_structural_target', ordered
 
     def _resolve_trade_plan(self, signal: dict, trade: dict) -> tuple[dict, str | None]:
         side = self._side_from_signal(signal, trade)
@@ -218,7 +211,7 @@ class PlannerService:
         if stop is None:
             stop, stop_source, stop_candidates = self._infer_stop(signal, side=side, entry=entry)
         if stop is None:
-            return {'side': side, 'entry': entry, 'stop_candidates': stop_candidates}, stop_source or 'missing_stop'
+            return {'side': side, 'entry': entry, 'stop_candidates': stop_candidates}, stop_source or 'missing_structural_stop'
 
         target = self._as_float(trade.get('target'))
         target_source = trade.get('target_source') or 'trade.target'
@@ -226,30 +219,10 @@ class PlannerService:
         if target is None:
             target, target_source, target_candidates = self._infer_target(signal, side=side, entry=entry)
         if target is None:
-            return {'side': side, 'entry': entry, 'stop': stop, 'stop_candidates': stop_candidates, 'target_candidates': target_candidates}, target_source or 'missing_target'
+            return {'side': side, 'entry': entry, 'stop': stop, 'stop_candidates': stop_candidates, 'target_candidates': target_candidates}, target_source or 'missing_structural_target'
 
         stop_distance_pct = self._distance_pct(entry, stop)
         target_distance_pct = self._distance_pct(entry, target)
-        if stop_distance_pct is None or stop_distance_pct < MIN_STOP_DISTANCE_PCT:
-            return {
-                'side': side,
-                'entry': entry,
-                'stop': stop,
-                'target': target,
-                'stop_distance_pct': stop_distance_pct,
-                'min_stop_distance_pct': MIN_STOP_DISTANCE_PCT,
-                'stop_candidates': stop_candidates,
-            }, 'stop_distance_below_min_2pct'
-        if target_distance_pct is None or target_distance_pct < MIN_TARGET_DISTANCE_PCT:
-            return {
-                'side': side,
-                'entry': entry,
-                'stop': stop,
-                'target': target,
-                'target_distance_pct': target_distance_pct,
-                'min_target_distance_pct': MIN_TARGET_DISTANCE_PCT,
-                'target_candidates': target_candidates,
-            }, 'target_distance_below_min_5pct'
 
         if side == 'short':
             if stop <= entry:
@@ -273,8 +246,8 @@ class PlannerService:
             'target_source': target_source,
             'stop_distance_pct': stop_distance_pct,
             'target_distance_pct': target_distance_pct,
-            'min_stop_distance_pct': MIN_STOP_DISTANCE_PCT,
-            'min_target_distance_pct': MIN_TARGET_DISTANCE_PCT,
+            'stop_validation': 'structural_invalidation',
+            'target_validation': 'structural_liquidity',
             'inferred_by': 'planner_from_accepted_signal_v1' if trade.get('entry') is None else 'signal_trade_object',
         }
         if stop_candidates:
@@ -311,7 +284,7 @@ class PlannerService:
 
         signal['trade'] = resolved_trade
         signal['planner_trade_plan'] = {
-            'model': 'accepted_signal_inference_v1',
+            'model': 'accepted_signal_inference_v2_structural_sl_tp',
             'side': side,
             'entry': entry,
             'stop': stop,
@@ -321,8 +294,8 @@ class PlannerService:
             'target_source': resolved_trade.get('target_source'),
             'stop_distance_pct': resolved_trade.get('stop_distance_pct'),
             'target_distance_pct': resolved_trade.get('target_distance_pct'),
-            'min_stop_distance_pct': MIN_STOP_DISTANCE_PCT,
-            'min_target_distance_pct': MIN_TARGET_DISTANCE_PCT,
+            'stop_validation': resolved_trade.get('stop_validation'),
+            'target_validation': resolved_trade.get('target_validation'),
             'rr_ratio': rr,
         }
         signal.setdefault('pipeline', {})['trade'] = True
