@@ -19,6 +19,7 @@ class PlannerService:
             'stop_buffer_pct': STOP_BUFFER_PCT,
             'target_policy': 'structural_liquidity',
             'execution_policy': '1h_setup_15m_alignment_required',
+            'side_policy': 'position_side_long_short__entry_action_buy_sell',
         }
 
     def _watch_reason(self, signal: dict, trade: dict) -> str:
@@ -69,7 +70,9 @@ class PlannerService:
         return abs(float(level) - entry) / entry
 
     def _side_from_signal(self, signal: dict, trade: dict) -> str | None:
-        raw_side = (trade.get('side') or '').lower()
+        raw_position_side = (trade.get('position_side') or trade.get('side') or '').lower()
+        raw_entry_action = (trade.get('entry_action') or trade.get('order_side') or '').lower()
+        raw_side = raw_position_side or raw_entry_action
         if raw_side in {'long', 'buy', 'bull'}:
             return 'long'
         if raw_side in {'short', 'sell', 'bear'}:
@@ -85,6 +88,25 @@ class PlannerService:
         if gate_side == 'bear':
             return 'short'
         return None
+
+    def _side_fields(self, position_side: str) -> dict:
+        if position_side == 'short':
+            return {
+                'side': 'short',
+                'position_side': 'short',
+                'entry_action': 'sell',
+                'exit_action': 'buy',
+                'order_side': 'sell',
+                'side_label': 'SHORT',
+            }
+        return {
+            'side': 'long',
+            'position_side': 'long',
+            'entry_action': 'buy',
+            'exit_action': 'sell',
+            'order_side': 'buy',
+            'side_label': 'LONG',
+        }
 
     def _can_infer_candidate(self, signal: dict) -> bool:
         gate = signal.get('hierarchy_gate') or {}
@@ -221,7 +243,7 @@ class PlannerService:
             entry = self._as_float(signal.get('price'))
             entry_source = 'signal.price'
         if entry is None:
-            return {'side': side}, self._watch_reason(signal, trade)
+            return {'position_side': side, **self._side_fields(side)}, self._watch_reason(signal, trade)
 
         stop = self._as_float(trade.get('stop'))
         stop_source = trade.get('stop_source') or 'trade.stop'
@@ -229,7 +251,7 @@ class PlannerService:
         if stop is None:
             stop, stop_source, stop_candidates = self._infer_stop(signal, side=side, entry=entry)
         if stop is None:
-            return {'side': side, 'entry': entry, 'stop_candidates': stop_candidates}, stop_source or 'missing_structural_stop'
+            return {'entry': entry, 'stop_candidates': stop_candidates, **self._side_fields(side)}, stop_source or 'missing_structural_stop'
 
         target = self._as_float(trade.get('target'))
         target_source = trade.get('target_source') or 'trade.target'
@@ -237,25 +259,25 @@ class PlannerService:
         if target is None:
             target, target_source, target_candidates = self._infer_target(signal, side=side, entry=entry)
         if target is None:
-            return {'side': side, 'entry': entry, 'stop': stop, 'stop_candidates': stop_candidates, 'target_candidates': target_candidates}, target_source or 'missing_structural_target'
+            return {'entry': entry, 'stop': stop, 'stop_candidates': stop_candidates, 'target_candidates': target_candidates, **self._side_fields(side)}, target_source or 'missing_structural_target'
 
         stop_distance_pct = self._distance_pct(entry, stop)
         target_distance_pct = self._distance_pct(entry, target)
 
         if side == 'short':
             if stop <= entry:
-                return {'side': side, 'entry': entry, 'stop': stop, 'target': target}, 'invalid_short_stop'
+                return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_short_stop'
             if target >= entry:
-                return {'side': side, 'entry': entry, 'stop': stop, 'target': target}, 'invalid_short_target'
+                return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_short_target'
         else:
             if stop >= entry:
-                return {'side': side, 'entry': entry, 'stop': stop, 'target': target}, 'invalid_long_stop'
+                return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_long_stop'
             if target <= entry:
-                return {'side': side, 'entry': entry, 'stop': stop, 'target': target}, 'invalid_long_target'
+                return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_long_target'
 
         resolved = {
+            **self._side_fields(side),
             'status': 'planned',
-            'side': side,
             'entry': entry,
             'stop': stop,
             'target': target,
@@ -266,7 +288,7 @@ class PlannerService:
             'target_distance_pct': target_distance_pct,
             'stop_validation': 'structural_invalidation',
             'target_validation': 'structural_liquidity',
-            'inferred_by': 'planner_from_accepted_signal_v2_15m_alignment' if trade.get('entry') is None else 'signal_trade_object',
+            'inferred_by': 'planner_from_accepted_signal_v4_normalized_side' if trade.get('entry') is None else 'signal_trade_object',
         }
         if stop_candidates:
             resolved['stop_candidates'] = stop_candidates[:8]
@@ -285,7 +307,7 @@ class PlannerService:
             signal['trade_plan_rejected'] = resolved_trade
             return {'accepted': False, 'reason': error_reason, 'candidate': None}
 
-        side = resolved_trade['side']
+        side = resolved_trade['position_side']
         entry = resolved_trade['entry']
         stop = resolved_trade['stop']
         target = resolved_trade['target']
@@ -302,8 +324,13 @@ class PlannerService:
 
         signal['trade'] = resolved_trade
         signal['planner_trade_plan'] = {
-            'model': 'accepted_signal_inference_v3_15m_alignment_structural_sl_tp',
-            'side': side,
+            'model': 'accepted_signal_inference_v4_normalized_side_structural_sl_tp',
+            'side': resolved_trade.get('side'),
+            'position_side': resolved_trade.get('position_side'),
+            'entry_action': resolved_trade.get('entry_action'),
+            'exit_action': resolved_trade.get('exit_action'),
+            'order_side': resolved_trade.get('order_side'),
+            'side_label': resolved_trade.get('side_label'),
             'entry': entry,
             'stop': stop,
             'target': target,
@@ -322,6 +349,11 @@ class PlannerService:
         candidate = {
             'symbol': signal['symbol'],
             'side': side,
+            'position_side': resolved_trade.get('position_side'),
+            'entry_action': resolved_trade.get('entry_action'),
+            'exit_action': resolved_trade.get('exit_action'),
+            'order_side': resolved_trade.get('order_side'),
+            'side_label': resolved_trade.get('side_label'),
             'stage': stage,
             'score': score,
             'entry_price': entry,
