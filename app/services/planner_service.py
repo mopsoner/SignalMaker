@@ -19,50 +19,19 @@ class PlannerService:
             'stop_buffer_pct': STOP_BUFFER_PCT,
             'target_policy': 'structural_liquidity',
             'execution_policy': '1h_setup_15m_alignment_required',
-            'side_policy': 'position_side_long_short__entry_action_buy_sell',
+            'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
 
-    def _watch_reason(self, signal: dict, trade: dict) -> str:
-        hierarchy_block_reason = signal.get('hierarchy_block_reason')
-        if hierarchy_block_reason:
-            return hierarchy_block_reason
-        bias = signal.get('bias')
-        state = signal.get('state') or 'watch'
-        execution_target = (signal.get('execution_target') or {}).get('level')
-        entry_context = signal.get('entry_liquidity_context') or {}
-        refinement = signal.get('refinement_context_1h') or {}
-        exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-        if trade.get('entry') is None:
-            if not refinement.get('valid', True):
-                return f"watch_missing_1h_setup:{refinement.get('reason', state)}"
-            if exec_trigger.get('alignment_status') == 'opposed':
-                return f"watch_15m_opposes_1h_setup:{exec_trigger.get('alignment_reason', state)}"
-            if not exec_trigger.get('accepted', True):
-                return f"watch_missing_execution_alignment:{exec_trigger.get('trigger', state)}"
-            if not signal.get('pipeline', {}).get('confirm'):
-                return f"watch_not_confirmed:{state}"
-            if execution_target is None:
-                return 'watch_missing_target_projection'
-            if entry_context.get('level') is None:
-                return 'watch_missing_entry_context'
-            return f"watch_missing_entry:{bias or state}"
-        return 'watch_unresolved'
-
     def _as_float(self, value):
+        if isinstance(value, dict):
+            value = value.get('level')
         if value is None:
             return None
         try:
             number = float(value)
         except (TypeError, ValueError):
             return None
-        if number <= 0:
-            return None
-        return number
-
-    def _level_from(self, value):
-        if isinstance(value, dict):
-            return self._as_float(value.get('level'))
-        return self._as_float(value)
+        return number if number > 0 else None
 
     def _distance_pct(self, entry: float, level: float | None) -> float | None:
         if entry <= 0 or level is None:
@@ -70,9 +39,7 @@ class PlannerService:
         return abs(float(level) - entry) / entry
 
     def _side_from_signal(self, signal: dict, trade: dict) -> str | None:
-        raw_position_side = (trade.get('position_side') or trade.get('side') or '').lower()
-        raw_entry_action = (trade.get('entry_action') or trade.get('order_side') or '').lower()
-        raw_side = raw_position_side or raw_entry_action
+        raw_side = (trade.get('position_side') or trade.get('side') or trade.get('entry_action') or trade.get('order_side') or '').lower()
         if raw_side in {'long', 'buy', 'bull'}:
             return 'long'
         if raw_side in {'short', 'sell', 'bear'}:
@@ -91,21 +58,47 @@ class PlannerService:
 
     def _side_fields(self, position_side: str) -> dict:
         if position_side == 'short':
-            return {'side': 'short', 'position_side': 'short', 'entry_action': 'sell', 'exit_action': 'buy', 'order_side': 'sell', 'side_label': 'SHORT'}
-        return {'side': 'long', 'position_side': 'long', 'entry_action': 'buy', 'exit_action': 'sell', 'order_side': 'buy', 'side_label': 'LONG'}
+            return {
+                'side': 'short',
+                'position_side': 'short',
+                'entry_action': 'sell',
+                'exit_action': 'buy',
+                'order_side': 'sell',
+                'side_label': 'SHORT',
+            }
+        return {
+            'side': 'long',
+            'position_side': 'long',
+            'entry_action': 'buy',
+            'exit_action': 'sell',
+            'order_side': 'buy',
+            'side_label': 'LONG',
+        }
+
+    def _watch_reason(self, signal: dict, trade: dict) -> str:
+        if signal.get('hierarchy_block_reason'):
+            return signal['hierarchy_block_reason']
+        state = signal.get('state') or 'watch'
+        exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
+        if exec_trigger.get('alignment_status') == 'opposed':
+            return f"watch_15m_opposes_1h_setup:{exec_trigger.get('alignment_reason', state)}"
+        if not signal.get('pipeline', {}).get('confirm'):
+            return f'watch_not_confirmed:{state}'
+        if (signal.get('execution_target') or {}).get('level') is None:
+            return 'watch_missing_target_projection'
+        if (signal.get('entry_liquidity_context') or {}).get('level') is None:
+            return 'watch_missing_entry_context'
+        return f"watch_missing_entry:{signal.get('bias') or state}"
 
     def _can_infer_candidate(self, signal: dict) -> bool:
-        gate = signal.get('hierarchy_gate') or {}
         exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-        alignment_status = exec_trigger.get('alignment_status')
-        if alignment_status == 'opposed' or signal.get('confirm_blocked_by_hierarchy'):
+        if exec_trigger.get('alignment_status') == 'opposed' or signal.get('confirm_blocked_by_hierarchy'):
             return False
-        if gate.get('accepted') is True and exec_trigger.get('accepted') is True:
-            return True
-        return bool(signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted'))
+        gate = signal.get('hierarchy_gate') or {}
+        return bool(gate.get('accepted') is True or signal.get('pipeline', {}).get('confirm'))
 
-    def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, hierarchy_rank: int) -> None:
-        source_level = self._level_from(level)
+    def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, rank: int) -> None:
+        source_level = self._as_float(level)
         if source_level is None:
             return
         if side == 'short':
@@ -120,16 +113,15 @@ class PlannerService:
             method = 'below_source_minus_buffer'
         else:
             return
-        distance_pct = self._distance_pct(entry, stop_level)
         candidates.append({
             'source': name,
             'source_level': source_level,
             'level': stop_level,
             'distance': abs(stop_level - entry),
-            'distance_pct': distance_pct,
+            'distance_pct': self._distance_pct(entry, stop_level),
             'buffer_pct': STOP_BUFFER_PCT,
             'method': method,
-            'hierarchy_rank': hierarchy_rank,
+            'hierarchy_rank': rank,
             'valid': True,
             'validation': 'structural_stop',
             'rejected_reason': None,
@@ -137,66 +129,80 @@ class PlannerService:
 
     def _infer_stop(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
         candidates: list[dict] = []
-        entry_context = signal.get('entry_liquidity_context') or {}
-        macro_context = signal.get('macro_liquidity_context') or signal.get('liquidity_context') or {}
+        entry_ctx = signal.get('entry_liquidity_context') or {}
+        macro_ctx = signal.get('macro_liquidity_context') or signal.get('liquidity_context') or {}
         if side == 'short':
             sources = [
-                ('entry_liquidity_context', entry_context, 10),
+                ('entry_liquidity_context', entry_ctx, 5),
                 ('external_swing_high', signal.get('external_swing_high'), 20),
                 ('internal_bear_pivot_high', signal.get('internal_bear_pivot_high'), 30),
                 ('range_high_1h', signal.get('range_high_1h'), 40),
                 ('previous_day_high', signal.get('previous_day_high'), 50),
-                ('macro_liquidity_context', macro_context, 60),
+                ('macro_liquidity_context', macro_ctx, 60),
+                ('range_high_4h', signal.get('range_high_4h'), 70),
+                ('major_swing_high_4h', signal.get('major_swing_high_4h'), 80),
             ]
         else:
             sources = [
-                ('entry_liquidity_context', entry_context, 10),
+                ('entry_liquidity_context', entry_ctx, 5),
                 ('external_swing_low', signal.get('external_swing_low'), 20),
                 ('internal_bull_pivot_low', signal.get('internal_bull_pivot_low'), 30),
                 ('range_low_1h', signal.get('range_low_1h'), 40),
                 ('previous_day_low', signal.get('previous_day_low'), 50),
-                ('macro_liquidity_context', macro_context, 60),
+                ('macro_liquidity_context', macro_ctx, 60),
+                ('range_low_4h', signal.get('range_low_4h'), 70),
+                ('major_swing_low_4h', signal.get('major_swing_low_4h'), 80),
             ]
         for name, value, rank in sources:
-            self._add_stop_candidate(candidates, name=name, level=value, entry=entry, side=side, hierarchy_rank=rank)
-        ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item['distance_pct'] or 999))
+            self._add_stop_candidate(candidates, name=name, level=value, entry=entry, side=side, rank=rank)
+        ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
         if ordered:
             selected = ordered[0]
             return selected['level'], selected['source'], ordered
         return None, 'missing_structural_stop', ordered
 
-    def _add_target_candidate(self, candidates: list[dict], *, name: str, value, entry: float, side: str, hierarchy_rank: int) -> None:
-        level = self._level_from(value)
+    def _add_target_candidate(self, candidates: list[dict], *, name: str, value, entry: float, side: str, rank: int) -> None:
+        level = self._as_float(value)
         if level is None:
             return
         if side == 'short' and level >= entry:
             return
         if side == 'long' and level <= entry:
             return
-        candidates.append({'source': name, 'level': level, 'distance': abs(level - entry), 'distance_pct': self._distance_pct(entry, level), 'hierarchy_rank': hierarchy_rank, 'valid': True, 'validation': 'structural_liquidity_target', 'rejected_reason': None})
+        candidates.append({
+            'source': name,
+            'level': level,
+            'distance': abs(level - entry),
+            'distance_pct': self._distance_pct(entry, level),
+            'hierarchy_rank': rank,
+            'valid': True,
+            'validation': 'structural_liquidity_target',
+            'rejected_reason': None,
+        })
 
     def _infer_target(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
         candidates: list[dict] = []
-        hierarchy_rank = 10
-        ordered_sources = [('execution_target', signal.get('execution_target')), ('projected_target', signal.get('projected_target')), ('context_selection_debug.selected_target', (signal.get('context_selection_debug') or {}).get('selected_target'))]
-        for index, target_candidate in enumerate((signal.get('context_selection_debug') or {}).get('target_candidates') or []):
-            ordered_sources.append((f'context_selection_debug.target_candidates[{index}]', target_candidate))
-        if side == 'short':
-            fallback_keys = ['range_low_1h', 'previous_day_low', 'old_support_shelf', 'previous_week_low', 'range_low_4h', 'major_swing_low_4h']
-        else:
-            fallback_keys = ['range_high_1h', 'previous_day_high', 'old_resistance_shelf', 'previous_week_high', 'range_high_4h', 'major_swing_high_4h']
-        ordered_sources.extend((key, signal.get(key)) for key in fallback_keys)
-        seen_levels = set()
+        ordered_sources = [
+            ('execution_target', signal.get('execution_target')),
+            ('projected_target', signal.get('projected_target')),
+            ('context_selection_debug.selected_target', (signal.get('context_selection_debug') or {}).get('selected_target')),
+        ]
+        for index, item in enumerate((signal.get('context_selection_debug') or {}).get('target_candidates') or []):
+            ordered_sources.append((f'context_selection_debug.target_candidates[{index}]', item))
+        fallback = ['range_low_1h', 'previous_day_low', 'old_support_shelf', 'previous_week_low', 'range_low_4h', 'major_swing_low_4h'] if side == 'short' else ['range_high_1h', 'previous_day_high', 'old_resistance_shelf', 'previous_week_high', 'range_high_4h', 'major_swing_high_4h']
+        ordered_sources.extend((key, signal.get(key)) for key in fallback)
+        seen = set()
+        rank = 10
         for source, value in ordered_sources:
-            level = self._level_from(value)
+            level = self._as_float(value)
             if level is not None:
-                dedupe_key = round(level, 12)
-                if dedupe_key in seen_levels:
+                key = round(level, 12)
+                if key in seen:
                     continue
-                seen_levels.add(dedupe_key)
-            self._add_target_candidate(candidates, name=source, value=value, entry=entry, side=side, hierarchy_rank=hierarchy_rank)
-            hierarchy_rank += 10
-        ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item['distance_pct'] or 999))
+                seen.add(key)
+            self._add_target_candidate(candidates, name=source, value=value, entry=entry, side=side, rank=rank)
+            rank += 10
+        ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
         if ordered:
             selected = ordered[0]
             return selected['level'], selected['source'], ordered
@@ -215,14 +221,14 @@ class PlannerService:
             return {**self._side_fields(side)}, self._watch_reason(signal, trade)
         stop = self._as_float(trade.get('stop'))
         stop_source = trade.get('stop_source') or 'trade.stop'
-        stop_candidates: list[dict] = []
+        stop_candidates = []
         if stop is None:
             stop, stop_source, stop_candidates = self._infer_stop(signal, side=side, entry=entry)
         if stop is None:
             return {'entry': entry, 'stop_candidates': stop_candidates, **self._side_fields(side)}, stop_source or 'missing_structural_stop'
         target = self._as_float(trade.get('target'))
         target_source = trade.get('target_source') or 'trade.target'
-        target_candidates: list[dict] = []
+        target_candidates = []
         if target is None:
             target, target_source, target_candidates = self._infer_target(signal, side=side, entry=entry)
         if target is None:
@@ -250,7 +256,7 @@ class PlannerService:
             'target_distance_pct': self._distance_pct(entry, target),
             'stop_validation': 'structural_invalidation',
             'target_validation': 'structural_liquidity',
-            'inferred_by': 'planner_from_accepted_signal_v5_buffered_stop_validation' if trade.get('entry') is None else 'signal_trade_object',
+            'inferred_by': 'planner_from_accepted_signal_v6_upsert_compatible_candidate',
         }
         if stop_candidates:
             resolved['stop_candidates'] = stop_candidates[:8]
@@ -281,17 +287,12 @@ class PlannerService:
         if rr is None or rr < strategy['planner_min_rr']:
             return {'accepted': False, 'reason': 'low_rr', 'candidate': None, 'rr_ratio': rr}
         signal['trade'] = resolved_trade
-        signal['planner_trade_plan'] = {'model': 'accepted_signal_inference_v5_buffered_stop_validation', **resolved_trade, 'rr_ratio': rr}
+        signal['planner_trade_plan'] = {'model': 'accepted_signal_inference_v6_upsert_compatible_candidate', **resolved_trade, 'rr_ratio': rr}
         signal.setdefault('pipeline', {})['trade'] = True
         stage = 'trade' if signal.get('pipeline', {}).get('trade') else signal.get('state', 'collect')
         candidate = {
             'symbol': signal['symbol'],
             'side': side,
-            'position_side': resolved_trade.get('position_side'),
-            'entry_action': resolved_trade.get('entry_action'),
-            'exit_action': resolved_trade.get('exit_action'),
-            'order_side': resolved_trade.get('order_side'),
-            'side_label': resolved_trade.get('side_label'),
             'stage': stage,
             'score': score,
             'entry_price': entry,
