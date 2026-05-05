@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 
 from app.services.runtime_settings import load_runtime_settings
 
+STOP_BUFFER_PCT = 0.002
+
 
 class PlannerService:
     def heartbeat(self) -> dict:
@@ -13,7 +15,8 @@ class PlannerService:
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'min_score': strategy['planner_min_score'],
             'min_rr': strategy['planner_min_rr'],
-            'stop_policy': 'structural_invalidation',
+            'stop_policy': 'structural_invalidation_with_buffer',
+            'stop_buffer_pct': STOP_BUFFER_PCT,
             'target_policy': 'structural_liquidity',
             'execution_policy': '1h_setup_15m_alignment_required',
         }
@@ -94,19 +97,30 @@ class PlannerService:
         return bool(signal.get('pipeline', {}).get('confirm') and exec_trigger.get('accepted'))
 
     def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, hierarchy_rank: int) -> None:
-        level_float = self._level_from(level)
-        if level_float is None:
+        source_level = self._level_from(level)
+        if source_level is None:
             return
-        if side == 'short' and level_float < entry:
+        if side == 'short':
+            if source_level < entry:
+                return
+            stop_level = source_level * (1.0 + STOP_BUFFER_PCT)
+            method = 'above_source_plus_buffer'
+        elif side == 'long':
+            if source_level > entry:
+                return
+            stop_level = source_level * (1.0 - STOP_BUFFER_PCT)
+            method = 'below_source_minus_buffer'
+        else:
             return
-        if side == 'long' and level_float > entry:
-            return
-        distance_pct = self._distance_pct(entry, level_float)
+        distance_pct = self._distance_pct(entry, stop_level)
         candidates.append({
             'source': name,
-            'level': level_float,
-            'distance': abs(level_float - entry),
+            'source_level': source_level,
+            'level': stop_level,
+            'distance': abs(stop_level - entry),
             'distance_pct': distance_pct,
+            'buffer_pct': STOP_BUFFER_PCT,
+            'method': method,
             'hierarchy_rank': hierarchy_rank,
             'valid': True,
             'validation': 'structural_stop',
