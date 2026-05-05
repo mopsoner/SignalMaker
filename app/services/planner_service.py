@@ -97,9 +97,9 @@ class PlannerService:
         level_float = self._level_from(level)
         if level_float is None:
             return
-        if side == 'short' and level_float <= entry:
+        if side == 'short' and level_float < entry:
             return
-        if side == 'long' and level_float >= entry:
+        if side == 'long' and level_float > entry:
             return
         distance_pct = self._distance_pct(entry, level_float)
         candidates.append({
