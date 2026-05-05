@@ -5,12 +5,14 @@ Rules:
 - 1H validates the Wyckoff/SMC setup.
 - 15M is an alignment filter: aligned or neutral_not_opposed is tradable; opposed blocks.
 - SL/TP are structural. Stop buffer is applied before stop validation.
+- Debug fields stay JSON-safe and shallow to avoid recursive payload serialization.
 """
 
 from __future__ import annotations
 
 CONTEXT_TARGET_OVERLAP_PCT = 0.003
 STOP_BUFFER_PCT = 0.002
+MAX_DEBUG_CANDIDATES = 6
 
 
 def _as_float(value):
@@ -56,6 +58,25 @@ def _alignment(exec_trigger: dict) -> tuple[str, bool, bool]:
     aligned = bool(exec_trigger.get("aligned") or status == "aligned")
     opposed = bool(exec_trigger.get("opposed") or status == "opposed")
     return status, aligned, opposed
+
+
+def _shallow_candidates(items: list[dict]) -> list[dict]:
+    safe = []
+    for item in (items or [])[:MAX_DEBUG_CANDIDATES]:
+        safe.append({
+            "source": item.get("source"),
+            "type": item.get("type"),
+            "level": item.get("level"),
+            "source_level": item.get("source_level"),
+            "distance_pct": item.get("distance_pct"),
+            "hierarchy_rank": item.get("hierarchy_rank"),
+            "validation": item.get("validation"),
+            "method": item.get("method"),
+            "buffer_pct": item.get("buffer_pct"),
+            "valid": item.get("valid"),
+            "rejected_reason": item.get("rejected_reason"),
+        })
+    return safe
 
 
 def _target_candidates(signal: dict, side: str) -> list[dict]:
@@ -122,8 +143,9 @@ def _candidate_target(signal: dict, side: str) -> dict:
     candidates = _target_candidates(signal, side)
     valid = [item for item in candidates if item.get("valid")]
     if not valid:
-        return {"valid": False, "reason": "missing_structural_target", "target_candidates": candidates}
-    return {"valid": True, "selected": valid[0], "target_candidates": candidates}
+        return {"valid": False, "reason": "missing_structural_target", "target_candidates": _shallow_candidates(candidates)}
+    selected = dict(valid[0])
+    return {"valid": True, "selected": selected, "target_candidates": _shallow_candidates(candidates)}
 
 
 def _stop_sources(signal: dict, side: str) -> list[tuple[str, object, str, int]]:
@@ -197,7 +219,7 @@ def _candidate_stop(signal: dict, side: str) -> dict:
     if not candidates:
         return {"valid": False, "reason": "missing_structural_stop", "stop_candidates": []}
     selected = dict(candidates[0])
-    selected["stop_candidates"] = candidates
+    selected["stop_candidates"] = _shallow_candidates(candidates)
     selected["selection_policy"] = "hierarchical_structural_stop_buffer_first"
     return selected
 
@@ -304,7 +326,8 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     pipeline.update({"collect": True, "liquidity": True, "zone": True, "confirm": bool(confirm_ok), "trade": bool(confirm_ok)})
     signal["execution_target"] = target
     signal["projected_target"] = target
-    signal["stop_source"] = stop_result
+    signal["stop_source"] = stop_result.get("source")
+    signal["stop_debug"] = {"selected": {k: stop_result.get(k) for k in ("source", "source_level", "level", "distance_pct", "buffer_pct", "method", "validation")}, "candidates": stop_result.get("stop_candidates", [])}
     signal["planner_candidate_status"] = "candidate_watch" if confirm_ok else "not_created"
     signal["planner_candidate_reason"] = None if confirm_ok else "waiting:15m_alignment"
     signal["planner_candidate_rr"] = reward / risk if confirm_ok else None
@@ -338,7 +361,17 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     if isinstance(zone, dict):
         zone.update({"valid": True, "wyckoff_ok": True, "target_ok": True, "reason": "valid_1h_wyckoff_candidate"})
     if confirm_ok:
-        signal["trade"] = {"status": "candidate", **_side_fields(side), "entry": entry, "stop": stop, "stop_source": stop_result, "target": target["level"], "target_source": target}
+        signal["trade"] = {
+            "status": "candidate",
+            **_side_fields(side),
+            "entry": entry,
+            "stop": stop,
+            "stop_source": stop_result.get("source"),
+            "stop_debug": signal["stop_debug"],
+            "target": target["level"],
+            "target_source": target.get("source"),
+            "target_debug": {k: target.get(k) for k in ("type", "source", "level", "distance_pct", "validation")},
+        }
 
 
 def apply_context_driven_progression(signal: dict) -> dict:
