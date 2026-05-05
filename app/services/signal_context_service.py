@@ -68,6 +68,7 @@ def _shallow_candidates(items: list[dict]) -> list[dict]:
             "type": item.get("type"),
             "level": item.get("level"),
             "source_level": item.get("source_level"),
+            "buffered_level": item.get("buffered_level"),
             "distance_pct": item.get("distance_pct"),
             "hierarchy_rank": item.get("hierarchy_rank"),
             "validation": item.get("validation"),
@@ -185,6 +186,7 @@ def _candidate_stop(signal: dict, side: str) -> dict:
     if entry <= 0:
         return {"valid": False, "reason": "missing_entry_price", "stop_candidates": []}
     candidates = []
+    rejected = []
     for source, value, source_reason, rank in _stop_sources(signal, side):
         source_level = _as_float(value)
         if source_level is None:
@@ -193,11 +195,33 @@ def _candidate_stop(signal: dict, side: str) -> dict:
             stop = source_level * (1.0 + STOP_BUFFER_PCT)
             method = "above_source_plus_buffer"
             if stop <= entry:
+                rejected.append({
+                    "source": source,
+                    "source_level": source_level,
+                    "buffered_level": stop,
+                    "distance_pct": _distance_pct(entry, stop),
+                    "hierarchy_rank": rank,
+                    "method": method,
+                    "buffer_pct": STOP_BUFFER_PCT,
+                    "valid": False,
+                    "rejected_reason": "buffered_stop_not_above_entry",
+                })
                 continue
         elif side == "bull":
             stop = source_level * (1.0 - STOP_BUFFER_PCT)
             method = "below_source_minus_buffer"
             if stop >= entry:
+                rejected.append({
+                    "source": source,
+                    "source_level": source_level,
+                    "buffered_level": stop,
+                    "distance_pct": _distance_pct(entry, stop),
+                    "hierarchy_rank": rank,
+                    "method": method,
+                    "buffer_pct": STOP_BUFFER_PCT,
+                    "valid": False,
+                    "rejected_reason": "buffered_stop_not_below_entry",
+                })
                 continue
         else:
             continue
@@ -216,10 +240,15 @@ def _candidate_stop(signal: dict, side: str) -> dict:
             "rejected_reason": None,
         })
     candidates = sorted(candidates, key=lambda item: (item["hierarchy_rank"], item.get("distance_pct") or 999))
+    rejected = sorted(rejected, key=lambda item: (item["hierarchy_rank"], abs(item.get("distance_pct") or 999)))
     if not candidates:
-        return {"valid": False, "reason": "missing_structural_stop", "stop_candidates": []}
+        reason = "missing_structural_stop"
+        if rejected:
+            reason = "price_extended_above_structural_stop_sources" if side == "bear" else "price_extended_below_structural_stop_sources"
+        return {"valid": False, "reason": reason, "stop_candidates": [], "rejected_stop_candidates": _shallow_candidates(rejected)}
     selected = dict(candidates[0])
     selected["stop_candidates"] = _shallow_candidates(candidates)
+    selected["rejected_stop_candidates"] = _shallow_candidates(rejected)
     selected["selection_policy"] = "hierarchical_structural_stop_buffer_first"
     return selected
 
@@ -252,18 +281,7 @@ def _one_hour_decision(signal: dict) -> dict:
         mss = bos = valid_event = False
         source = None
     valid = bool(side in {"bear", "bull"} and macro_ok and valid_event)
-    return {
-        "side": side,
-        "valid": valid,
-        "reason": "1h_wyckoff_smc_confirmed" if valid else "waiting_1h_sweep_reclaim_rejection_or_mss",
-        "sweep_seen": swept,
-        "rejection_seen": bool(side == "bear" and valid_event),
-        "reclaim_seen": bool(side == "bull" and valid_event),
-        "mss_seen": bool(mss),
-        "bos_seen": bool(bos),
-        "source": source,
-        "cycle_filter_bypassed": True,
-    }
+    return {"side": side, "valid": valid, "reason": "1h_wyckoff_smc_confirmed" if valid else "waiting_1h_sweep_reclaim_rejection_or_mss", "sweep_seen": swept, "rejection_seen": bool(side == "bear" and valid_event), "reclaim_seen": bool(side == "bull" and valid_event), "mss_seen": bool(mss), "bos_seen": bool(bos), "source": source, "cycle_filter_bypassed": True}
 
 
 def _side_fields(side: str) -> dict:
@@ -277,18 +295,7 @@ def _mark_block(signal: dict, *, reason: str, blocked_at: str, alignment_status:
     signal["confirm_blocked_by_hierarchy"] = True
     signal["confirm_block_reason"] = reason
     gate = signal.setdefault("hierarchy_gate", {})
-    gate.update({
-        "accepted": False,
-        "stage": signal.get("stage") or "plan_watch",
-        "blocked_at": blocked_at,
-        "block_reason": reason,
-        "one_hour_decision_ok": True,
-        "zone_1h_ok": True,
-        "confirm_15m_seen": aligned_15m,
-        "confirm_15m_accepted": False,
-        "execution_15m_alignment": alignment_status,
-        "confirmation_path": "structural_plan_watch",
-    })
+    gate.update({"accepted": False, "stage": signal.get("stage") or "plan_watch", "blocked_at": blocked_at, "block_reason": reason, "one_hour_decision_ok": True, "zone_1h_ok": True, "confirm_15m_seen": aligned_15m, "confirm_15m_accepted": False, "execution_15m_alignment": alignment_status, "confirmation_path": "structural_plan_watch"})
     for key in ("execution_trigger", "execution_trigger_5m"):
         obj = signal.get(key)
         if isinstance(obj, dict):
@@ -302,17 +309,19 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     stop_result = _candidate_stop(signal, side)
     entry = _price(signal)
     if not target_result.get("valid") or not stop_result.get("valid") or entry <= 0:
+        stop_reason = stop_result.get("reason") or "missing_structural_stop"
+        target_reason = target_result.get("reason") or "missing_structural_target"
         signal["one_hour_candidate_rejected"] = {"target": target_result, "stop": stop_result, "reason": "missing_structural_target_or_stop"}
         if not stop_result.get("valid"):
             signal["planner_candidate_status"] = "rejected"
-            signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_stop"
+            signal["planner_candidate_reason"] = f"blocked_before_planner:{stop_reason}"
             signal["stage"] = "stop_watch"
-            _mark_block(signal, reason="missing_structural_stop", blocked_at="stop", alignment_status=alignment_status, aligned_15m=aligned_15m)
+            _mark_block(signal, reason=stop_reason, blocked_at="stop", alignment_status=alignment_status, aligned_15m=aligned_15m)
         elif not target_result.get("valid"):
             signal["planner_candidate_status"] = "rejected"
-            signal["planner_candidate_reason"] = "blocked_before_planner:missing_structural_target"
+            signal["planner_candidate_reason"] = f"blocked_before_planner:{target_reason}"
             signal["stage"] = "target_watch"
-            _mark_block(signal, reason="missing_structural_target", blocked_at="target", alignment_status=alignment_status, aligned_15m=aligned_15m)
+            _mark_block(signal, reason=target_reason, blocked_at="target", alignment_status=alignment_status, aligned_15m=aligned_15m)
         return
     target = target_result["selected"]
     stop = stop_result["level"]
@@ -327,7 +336,7 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     signal["execution_target"] = target
     signal["projected_target"] = target
     signal["stop_source"] = stop_result.get("source")
-    signal["stop_debug"] = {"selected": {k: stop_result.get(k) for k in ("source", "source_level", "level", "distance_pct", "buffer_pct", "method", "validation")}, "candidates": stop_result.get("stop_candidates", [])}
+    signal["stop_debug"] = {"selected": {k: stop_result.get(k) for k in ("source", "source_level", "level", "distance_pct", "buffer_pct", "method", "validation")}, "candidates": stop_result.get("stop_candidates", []), "rejected": stop_result.get("rejected_stop_candidates", [])}
     signal["planner_candidate_status"] = "candidate_watch" if confirm_ok else "not_created"
     signal["planner_candidate_reason"] = None if confirm_ok else "waiting:15m_alignment"
     signal["planner_candidate_rr"] = reward / risk if confirm_ok else None
@@ -337,18 +346,7 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     signal["confirm_blocked_by_hierarchy"] = not confirm_ok
     signal["confirm_block_reason"] = None if confirm_ok else "waiting_15m_alignment"
     gate = signal.setdefault("hierarchy_gate", {})
-    gate.update({
-        "accepted": bool(confirm_ok),
-        "stage": signal["stage"],
-        "blocked_at": None if confirm_ok else "15m_alignment",
-        "block_reason": None if confirm_ok else "waiting_15m_alignment",
-        "one_hour_decision_ok": True,
-        "zone_1h_ok": True,
-        "confirm_15m_seen": aligned_15m,
-        "confirm_15m_accepted": bool(confirm_ok),
-        "execution_15m_alignment": alignment_status,
-        "confirmation_path": "1h_setup_15m_aligned" if aligned_15m and confirm_ok else "1h_setup_15m_not_opposed" if confirm_ok else "awaiting_15m_alignment",
-    })
+    gate.update({"accepted": bool(confirm_ok), "stage": signal["stage"], "blocked_at": None if confirm_ok else "15m_alignment", "block_reason": None if confirm_ok else "waiting_15m_alignment", "one_hour_decision_ok": True, "zone_1h_ok": True, "confirm_15m_seen": aligned_15m, "confirm_15m_accepted": bool(confirm_ok), "execution_15m_alignment": alignment_status, "confirmation_path": "1h_setup_15m_aligned" if aligned_15m and confirm_ok else "1h_setup_15m_not_opposed" if confirm_ok else "awaiting_15m_alignment"})
     for key in ("execution_trigger", "execution_trigger_5m"):
         obj = signal.get(key)
         if isinstance(obj, dict):
@@ -361,17 +359,7 @@ def _apply_one_hour_candidate(signal: dict, decision: dict, confirm_ok: bool, al
     if isinstance(zone, dict):
         zone.update({"valid": True, "wyckoff_ok": True, "target_ok": True, "reason": "valid_1h_wyckoff_candidate"})
     if confirm_ok:
-        signal["trade"] = {
-            "status": "candidate",
-            **_side_fields(side),
-            "entry": entry,
-            "stop": stop,
-            "stop_source": stop_result.get("source"),
-            "stop_debug": signal["stop_debug"],
-            "target": target["level"],
-            "target_source": target.get("source"),
-            "target_debug": {k: target.get(k) for k in ("type", "source", "level", "distance_pct", "validation")},
-        }
+        signal["trade"] = {"status": "candidate", **_side_fields(side), "entry": entry, "stop": stop, "stop_source": stop_result.get("source"), "stop_debug": signal["stop_debug"], "target": target["level"], "target_source": target.get("source"), "target_debug": {k: target.get(k) for k in ("type", "source", "level", "distance_pct", "validation")}}
 
 
 def apply_context_driven_progression(signal: dict) -> dict:
@@ -385,25 +373,13 @@ def apply_context_driven_progression(signal: dict) -> dict:
     decision = _one_hour_decision(signal)
     confirm_ok = bool(decision.get("valid") and not opposed_15m)
     signal["one_hour_decision"] = decision
-    signal["confirmation_model"] = {
-        "primary_tf": "1h",
-        "execution_tf": signal.get("execution_timeframe") or "15m",
-        "confirmed_by_1h": bool(decision.get("valid")),
-        "confirmed_by_15m": bool(aligned_15m),
-        "fifteen_min_alignment": alignment_status,
-        "confirmation_source": exec_trigger.get("confirm_source") or decision.get("source"),
-        "entry_mode": "1h_setup_15m_alignment_required" if decision.get("valid") else "wait",
-    }
+    signal["confirmation_model"] = {"primary_tf": "1h", "execution_tf": signal.get("execution_timeframe") or "15m", "confirmed_by_1h": bool(decision.get("valid")), "confirmed_by_15m": bool(aligned_15m), "fifteen_min_alignment": alignment_status, "confirmation_source": exec_trigger.get("confirm_source") or decision.get("source"), "entry_mode": "1h_setup_15m_alignment_required" if decision.get("valid") else "wait"}
     if context_ok:
         pipeline.update({"collect": True, "liquidity": True, "zone": True})
         zone = signal.setdefault("zone_validity", {})
         if isinstance(zone, dict):
             zone.update({"valid": True, "target_ok": True, "wyckoff_ok": bool(decision.get("valid") or zone.get("wyckoff_ok")), "reason": "valid_context_zone"})
-    signal.setdefault("hierarchy_gate", {})["confirmation_path"] = (
-        "1h_setup_15m_aligned" if decision.get("valid") and aligned_15m and confirm_ok else
-        "1h_setup_15m_not_opposed" if decision.get("valid") and confirm_ok else
-        "awaiting_15m_alignment" if decision.get("valid") else "waiting"
-    )
+    signal.setdefault("hierarchy_gate", {})["confirmation_path"] = ("1h_setup_15m_aligned" if decision.get("valid") and aligned_15m and confirm_ok else "1h_setup_15m_not_opposed" if decision.get("valid") and confirm_ok else "awaiting_15m_alignment" if decision.get("valid") else "waiting")
     if context_ok and decision.get("valid"):
         _apply_one_hour_candidate(signal, decision, confirm_ok, alignment_status, aligned_15m)
         signal["score"] = float(signal.get("score") or 0.0) + 1.0
