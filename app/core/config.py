@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
     binance_rest_base: str = Field(default="https://api.binance.us", alias="BINANCE_REST_BASE")
+    binance_collector_enabled: bool = Field(default=True, alias="BINANCE_COLLECTOR_ENABLED")
     binance_testnet_rest_base: str = Field(default="https://testnet.binance.vision", alias="BINANCE_TESTNET_REST_BASE")
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_secret_key: str = Field(default="", alias="BINANCE_SECRET_KEY")
