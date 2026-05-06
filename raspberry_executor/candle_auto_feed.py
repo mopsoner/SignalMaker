@@ -72,6 +72,11 @@ def resolve_feed_symbols(settings) -> tuple[list[str], list[str]]:
 def run_once() -> dict:
     ensure_env()
     settings = load_settings()
+    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
+    endpoint_check = client.check_candle_ingest_endpoint()
+    if not endpoint_check.get("ok"):
+        return {"status": "blocked", "endpoint_check": endpoint_check, "pushed": [], "errors": []}
+
     symbols, quote_assets = resolve_feed_symbols(settings)
     intervals = _csv(os.getenv("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
     limit = int(os.getenv("CANDLE_FEED_LIMIT", "120"))
@@ -79,7 +84,6 @@ def run_once() -> dict:
     if not symbols:
         return {"status": "skipped", "reason": "no_symbols_configured", "intervals": intervals}
 
-    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     pushed = []
     errors = []
 
