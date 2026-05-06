@@ -1,15 +1,14 @@
-import logging
 import time
 from datetime import datetime, timezone
 
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.config import load_settings
+from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("raspberry-executor")
+logger = setup_logging("raspberry-executor")
 
 
 def _order_id(payload: dict | None):
@@ -124,6 +123,7 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
     quantity = _quantity_from_quote(current_price, settings.order_quote_amount)
 
     try:
+        logger.info("execute candidate=%s signal=%s execution=%s side=%s amount=%s qty=%s", candidate_id, candidate.get("symbol"), execution_symbol, side, settings.order_quote_amount, quantity)
         entry = binance.place_market_entry(execution_symbol, side, quantity)
         entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
         if entry_price is None:
@@ -181,6 +181,7 @@ def main() -> None:
         try:
             signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run, "execution_quote_asset": settings.execution_quote_asset, "order_quote_amount": settings.order_quote_amount})
             candidates = signalmaker.get_open_candidates(limit=10)
+            logger.info("candidates fetched count=%s", len(candidates))
             for candidate in candidates:
                 execute_candidate(settings, signalmaker, binance, state, guard, candidate)
             report_final_events(settings, signalmaker, binance, state)
