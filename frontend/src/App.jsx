@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
@@ -25,9 +25,9 @@ export default function App() {
           </button>
         </div>
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
-          <NavLink to="/" end onClick={closeMenu}>Dashboard</NavLink>
-          <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
+          <NavLink to="/dashboard" onClick={closeMenu}>Dashboard</NavLink>
+          <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
           <NavLink to="/logs" onClick={closeMenu}>Logs</NavLink>
           <NavLink to="/settings" onClick={closeMenu}>Admin Settings</NavLink>
@@ -35,7 +35,8 @@ export default function App() {
       </aside>
       <main className="content" onClick={menuOpen ? closeMenu : undefined}>
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
+          <Route path="/" element={<Navigate to="/positions" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
