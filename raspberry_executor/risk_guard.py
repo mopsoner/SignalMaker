@@ -2,9 +2,10 @@ from datetime import datetime, timezone
 
 
 class RiskGuard:
-    def __init__(self, quote_assets: list[str], max_candidate_age_seconds: int) -> None:
+    def __init__(self, quote_assets: list[str], max_candidate_age_seconds: int, allow_shorts: bool = False) -> None:
         self.quote_assets = {quote.upper() for quote in quote_assets}
         self.max_candidate_age_seconds = max_candidate_age_seconds
+        self.allow_shorts = allow_shorts
 
     def execution_symbol(self, candidate: dict, execution_quote_asset: str | None = None) -> str:
         # Do not transform USDT/USDC or any quote asset here.
@@ -22,6 +23,9 @@ class RiskGuard:
         side = str(candidate.get("side", "")).lower()
         if side not in {"long", "short", "buy", "sell", "bull", "bear"}:
             return False, f"unsupported_side:{side}"
+        normalized_side = self.normalize_side(side)
+        if normalized_side == "short" and not self.allow_shorts:
+            return False, "shorts_disabled_on_raspberry_spot_executor"
         if candidate.get("entry_price") is None:
             return False, "missing_entry_price"
         if candidate.get("stop_price") is None:
