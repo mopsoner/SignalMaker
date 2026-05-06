@@ -17,6 +17,7 @@ DEFAULTS = {
     "BINANCE_API_KEY": "",
     "BINANCE_SECRET_KEY": "",
     "CANDLE_FEED_ENABLED": "true",
+    "CANDLE_FEED_QUOTES": "USDT",
     "CANDLE_FEED_INTERVALS": "15m,1h,4h",
     "CANDLE_FEED_LIMIT": "50",
     "CANDLE_FEED_POLL_SECONDS": "180",
@@ -50,12 +51,17 @@ def read_env() -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
+    if not values.get("CANDLE_FEED_QUOTES") and values.get("CANDLE_FEED_QUOTE_ASSETS"):
+        values["CANDLE_FEED_QUOTES"] = values["CANDLE_FEED_QUOTE_ASSETS"]
     return values
 
 
 def write_env(values: dict[str, str]) -> None:
     merged = DEFAULTS.copy()
     merged.update({key: str(value) for key, value in values.items() if key in DEFAULTS})
+    if not merged.get("CANDLE_FEED_QUOTES") and merged.get("CANDLE_FEED_QUOTE_ASSETS"):
+        merged["CANDLE_FEED_QUOTES"] = merged["CANDLE_FEED_QUOTE_ASSETS"]
+    merged["CANDLE_FEED_QUOTE_ASSETS"] = merged.get("CANDLE_FEED_QUOTES", "")
     lines = [
         f"SIGNALMAKER_BASE_URL={merged['SIGNALMAKER_BASE_URL']}",
         f"GATEWAY_ID={merged['GATEWAY_ID']}",
@@ -72,6 +78,7 @@ def write_env(values: dict[str, str]) -> None:
         f"BINANCE_SECRET_KEY={merged['BINANCE_SECRET_KEY']}",
         "",
         f"CANDLE_FEED_ENABLED={merged['CANDLE_FEED_ENABLED']}",
+        f"CANDLE_FEED_QUOTES={merged['CANDLE_FEED_QUOTES']}",
         f"CANDLE_FEED_INTERVALS={merged['CANDLE_FEED_INTERVALS']}",
         f"CANDLE_FEED_LIMIT={merged['CANDLE_FEED_LIMIT']}",
         f"CANDLE_FEED_POLL_SECONDS={merged['CANDLE_FEED_POLL_SECONDS']}",
