@@ -1,0 +1,16 @@
+[Unit]
+Description=SignalMaker Raspberry Executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/SignalMaker
+EnvironmentFile=/home/pi/SignalMaker/.env
+ExecStart=/home/pi/SignalMaker/.venv/bin/python -m raspberry_executor.main
+Restart=always
+RestartSec=10
+User=pi
+
+[Install]
+WantedBy=multi-user.target
