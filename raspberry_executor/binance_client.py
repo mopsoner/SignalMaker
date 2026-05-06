@@ -33,7 +33,8 @@ class BinanceClient:
             headers=headers,
             timeout=20,
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(f"Binance {method.upper()} {path} failed status={response.status_code} body={response.text}")
         return response.json()
 
     def current_price(self, symbol: str) -> float:
