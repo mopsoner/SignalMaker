@@ -9,14 +9,18 @@ fi
 . .venv/bin/activate
 
 if [ ! -f .deps_ok ]; then
+  python -m pip install --upgrade pip setuptools wheel
   pip install -r requirements-raspberry.txt
   touch .deps_ok
 fi
 
 if [ ! -f .env ]; then
   cp .env.raspberry.example .env
-  echo "Edit .env first: nano .env"
-  exit 0
 fi
 
-python -m raspberry_executor.main
+echo "Web UI: http://$(hostname -I | awk '{print $1}'):8090"
+echo "Admin:  http://$(hostname -I | awk '{print $1}'):8090/admin"
+echo "Logs:   http://$(hostname -I | awk '{print $1}'):8090/logs"
+echo ""
+
+python -m raspberry_executor.run_all
