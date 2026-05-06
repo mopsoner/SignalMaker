@@ -7,10 +7,13 @@ from raspberry_executor.env_store import ensure_env
 from raspberry_executor.signalmaker_client import SignalMakerClient
 
 
-def fetch_klines(base_url: str, symbol: str, interval: str, limit: int) -> list[dict]:
+def fetch_klines(base_url: str, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict]:
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+    if start_time is not None:
+        params["startTime"] = int(start_time)
     response = requests.get(
         f"{base_url.rstrip('/')}/api/v3/klines",
-        params={"symbol": symbol.upper(), "interval": interval, "limit": limit},
+        params=params,
         timeout=20,
     )
     response.raise_for_status()
