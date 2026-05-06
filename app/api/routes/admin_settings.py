@@ -21,6 +21,7 @@ class SettingsPayload(BaseModel):
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
     bot: dict[str, Any] = {}
+    live: dict[str, Any] = {}
 
 
 @router.get('/admin/settings')
