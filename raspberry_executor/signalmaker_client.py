@@ -42,6 +42,19 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker candle ingest response: {type(data).__name__}")
         return data
 
+    def candle_summary(self, symbol: str | None = None) -> list[dict]:
+        params = {"symbol": symbol.upper()} if symbol else None
+        response = self.session.get(
+            self._url("/api/v1/market-data/candles/summary"),
+            params=params,
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected SignalMaker candle summary response: {type(data).__name__}")
+        return data
+
     def heartbeat(self, *args, **kwargs) -> dict:
         return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
 
