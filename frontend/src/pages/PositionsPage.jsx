@@ -32,11 +32,30 @@ function pnlTone(value) {
   return { fontWeight: 700 }
 }
 
+function StatusBadge({ enabled }) {
+  return (
+    <span
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 999,
+        padding: '10px 14px',
+        fontWeight: 800,
+        color: enabled ? 'var(--green)' : 'var(--red)',
+        background: 'rgba(9, 14, 24, 0.7)',
+      }}
+    >
+      SHORTS: {enabled ? 'ENABLED' : 'DISABLED'}
+    </span>
+  )
+}
+
 export default function PositionsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=100'), []), 10000)
   const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 10000)
+  const { data: settings = {} } = usePollingQuery(useCallback(() => api.adminSettings(), []), 15000)
+  const shortsEnabled = settings?.live?.live_spot_allow_shorts === true
 
   async function runExecutor() {
     setBusy(true); setMessage('')
@@ -68,7 +87,11 @@ export default function PositionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Positions" subtitle="Paper execution state, orders, fills, PnL and stop/target distances" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button>} />
+    <PageHeader
+      title="Positions"
+      subtitle="Paper execution state, orders, fills, PnL and stop/target distances"
+      actions={<><StatusBadge enabled={shortsEnabled} /><button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button></>}
+    />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
