@@ -8,6 +8,8 @@ class SignalMakerClient:
         self.session = requests.Session()
 
     def _url(self, path: str) -> str:
+        if self.base_url.endswith("/api/v1") and path.startswith("/api/v1"):
+            return f"{self.base_url}{path[len('/api/v1'):] }"
         return f"{self.base_url}{path}"
 
     def get_open_candidates(self, limit: int = 10) -> list[dict]:
@@ -17,37 +19,7 @@ class SignalMakerClient:
             timeout=15,
         )
         response.raise_for_status()
-        return response.json()
-
-    def report_execution(self, payload: dict) -> dict:
-        response = self.session.post(
-            self._url("/api/v1/gateway/executions"),
-            json=payload,
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def report_event(self, payload: dict) -> dict:
-        response = self.session.post(
-            self._url("/api/v1/gateway/execution-events"),
-            json=payload,
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def heartbeat(self, *, mode: str, version: str = "0.1.0", meta: dict | None = None) -> dict:
-        response = self.session.post(
-            self._url("/api/v1/gateway/heartbeat"),
-            json={
-                "gateway_id": self.gateway_id,
-                "status": "ok",
-                "mode": mode,
-                "version": version,
-                "meta": meta or {},
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
+        return data
