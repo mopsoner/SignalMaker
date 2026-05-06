@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from raspberry_executor.env_store import read_env
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -36,7 +38,8 @@ def load_settings() -> Settings:
     except Exception:
         pass
 
-    quote_assets = _csv(os.getenv("QUOTE_ASSETS", "USDT"))
+    persisted_env = read_env()
+    quote_assets = _csv(persisted_env.get("QUOTE_ASSETS", "USDT"))
     return Settings(
         signalmaker_base_url=os.environ["SIGNALMAKER_BASE_URL"].rstrip("/"),
         gateway_id=os.getenv("GATEWAY_ID", "raspberry-fr-1"),
