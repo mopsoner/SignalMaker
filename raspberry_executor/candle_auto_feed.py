@@ -5,7 +5,7 @@ import requests
 
 from raspberry_executor.candle_push_once import fetch_klines
 from raspberry_executor.config import load_settings
-from raspberry_executor.env_store import ensure_env
+from raspberry_executor.env_store import ensure_env, read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.signalmaker_client import SignalMakerClient
 
@@ -47,26 +47,14 @@ def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0
 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str]]:
-    # Existing env first: ALLOWED_SYMBOLS can contain either full symbols or quote assets.
-    # Example: ALLOWED_SYMBOLS=ACHUSDT,BTCUSDT feeds only those symbols.
-    # Example: ALLOWED_SYMBOLS=USDT discovers all tradable spot pairs quoted in USDT.
-    configured = settings.allowed_symbols
-    explicit_symbols = [item for item in configured if item not in KNOWN_QUOTES]
-    quote_assets = [item for item in configured if item in KNOWN_QUOTES]
+    env = read_env()
+    configured_quotes = _csv(env.get("CANDLE_FEED_QUOTES") or env.get("CANDLE_FEED_QUOTE_ASSETS") or "USDT")
+    explicit_symbols = _csv(env.get("CANDLE_FEED_SYMBOLS"))
 
-    # Optional override, but not required. Existing ALLOWED_SYMBOLS remains the main config.
-    explicit_symbols.extend(_csv(os.getenv("CANDLE_FEED_SYMBOLS")))
-    quote_assets.extend(_csv(os.getenv("CANDLE_FEED_QUOTE_ASSETS")))
-
-    explicit_symbols = sorted(set(explicit_symbols))
-    quote_assets = sorted(set(quote_assets))
-    max_symbols = int(os.getenv("CANDLE_FEED_MAX_SYMBOLS", "0"))
-
-    if quote_assets:
-        discovered = discover_spot_symbols(settings.binance_base_url, quote_assets, limit=max_symbols)
-        return sorted(set(explicit_symbols + discovered)), quote_assets
-
-    return explicit_symbols, quote_assets
+    max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
+    discovered = discover_spot_symbols(settings.binance_base_url, configured_quotes, limit=max_symbols)
+    symbols = sorted(set(explicit_symbols + discovered))
+    return symbols, configured_quotes
 
 
 def run_once() -> dict:
@@ -82,7 +70,7 @@ def run_once() -> dict:
     limit = int(os.getenv("CANDLE_FEED_LIMIT", "120"))
 
     if not symbols:
-        return {"status": "skipped", "reason": "no_symbols_configured", "intervals": intervals}
+        return {"status": "skipped", "reason": "no_symbols_configured", "quote_assets": quote_assets, "intervals": intervals}
 
     pushed = []
     errors = []
@@ -123,8 +111,8 @@ def run_loop() -> None:
 
     poll_seconds = int(os.getenv("CANDLE_FEED_POLL_SECONDS", "60"))
     logger.info(
-        "candle feed started allowed_symbols=%s intervals=%s poll_seconds=%s",
-        os.getenv("ALLOWED_SYMBOLS", ""),
+        "candle feed started quotes=%s intervals=%s poll_seconds=%s",
+        os.getenv("CANDLE_FEED_QUOTES", "USDT"),
         os.getenv("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
         poll_seconds,
     )
