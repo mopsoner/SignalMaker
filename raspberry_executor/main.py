@@ -22,6 +22,14 @@ def _status(payload: dict | None) -> str:
     return str((payload or {}).get("status", "NEW")).lower()
 
 
+def _executed_qty(payload: dict, fallback: float) -> float:
+    try:
+        value = float(payload.get("executedQty") or 0)
+        return value if value > 0 else fallback
+    except Exception:
+        return fallback
+
+
 def build_execution_report(settings, candidate: dict, execution_symbol: str, entry: dict, tp: dict | None, sl: dict | None, quantity: float, entry_price: float) -> dict:
     side = RiskGuard.normalize_side(str(candidate["side"]))
     return {
@@ -55,7 +63,7 @@ def build_execution_report(settings, candidate: dict, execution_symbol: str, ent
             "price": float(candidate["stop_price"]),
             "payload": sl or {},
         } if sl else None,
-        "payload": {"candidate": candidate},
+        "payload": {"candidate": candidate, "order_quote_amount": settings.order_quote_amount},
     }
 
 
@@ -106,18 +114,19 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
 
     execution_symbol = guard.execution_symbol(candidate, settings.execution_quote_asset)
     side = guard.normalize_side(str(candidate["side"]))
-    quantity = settings.quantity
+    quantity = binance.quantity_from_quote_amount(execution_symbol, settings.order_quote_amount)
 
     try:
-        entry = binance.place_market_entry(execution_symbol, side, quantity)
+        entry = binance.place_market_entry(execution_symbol, side, quantity, settings.order_quote_amount)
         entry_price = BinanceClient.average_fill_price(entry, fallback=float(candidate["entry_price"]))
         if entry_price is None:
             raise RuntimeError("Unable to determine entry fill price")
+        executed_qty = _executed_qty(entry, quantity)
 
-        tp = binance.place_exit_limit(execution_symbol, side, quantity, float(candidate["target_price"]))
-        sl = binance.place_stop_loss(execution_symbol, side, quantity, float(candidate["stop_price"]))
+        tp = binance.place_exit_limit(execution_symbol, side, executed_qty, float(candidate["target_price"]))
+        sl = binance.place_stop_loss(execution_symbol, side, executed_qty, float(candidate["stop_price"]))
 
-        report = build_execution_report(settings, candidate, execution_symbol, entry, tp, sl, quantity, float(entry_price))
+        report = build_execution_report(settings, candidate, execution_symbol, entry, tp, sl, executed_qty, float(entry_price))
         response = signalmaker.report_execution(report)
         logger.info("execution recorded candidate=%s response=%s", candidate_id, response)
 
@@ -126,7 +135,7 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
             "execution_symbol": execution_symbol,
             "signal_symbol": candidate["symbol"],
             "side": side,
-            "quantity": quantity,
+            "quantity": executed_qty,
             "entry_order_id": _order_id(entry),
             "tp_order_id": _order_id(tp),
             "sl_order_id": _order_id(sl),
@@ -155,14 +164,15 @@ def main() -> None:
     guard = RiskGuard(settings.allowed_symbols, settings.max_candidate_age_seconds)
 
     logger.info(
-        "Raspberry executor started gateway_id=%s dry_run=%s execution_quote_asset=%s",
+        "Raspberry executor started gateway_id=%s dry_run=%s execution_quote_asset=%s order_quote_amount=%s",
         settings.gateway_id,
         settings.dry_run,
         settings.execution_quote_asset,
+        settings.order_quote_amount,
     )
     while True:
         try:
-            signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run, "execution_quote_asset": settings.execution_quote_asset})
+            signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run, "execution_quote_asset": settings.execution_quote_asset, "order_quote_amount": settings.order_quote_amount})
             candidates = signalmaker.get_open_candidates(limit=10)
             for candidate in candidates:
                 execute_candidate(settings, signalmaker, binance, state, guard, candidate)
