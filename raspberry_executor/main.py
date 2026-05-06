@@ -30,6 +30,12 @@ def _executed_qty(payload: dict, fallback: float) -> float:
         return fallback
 
 
+def _quantity_from_quote(price: float, quote_amount: float) -> float:
+    if price <= 0:
+        raise RuntimeError("Invalid current price")
+    return round(float(quote_amount) / float(price), 6)
+
+
 def build_execution_report(settings, candidate: dict, execution_symbol: str, entry: dict, tp: dict | None, sl: dict | None, quantity: float, entry_price: float) -> dict:
     side = RiskGuard.normalize_side(str(candidate["side"]))
     return {
@@ -114,11 +120,12 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
 
     execution_symbol = guard.execution_symbol(candidate, settings.execution_quote_asset)
     side = guard.normalize_side(str(candidate["side"]))
-    quantity = binance.quantity_from_quote_amount(execution_symbol, settings.order_quote_amount)
+    current_price = binance.current_price(execution_symbol)
+    quantity = _quantity_from_quote(current_price, settings.order_quote_amount)
 
     try:
-        entry = binance.place_market_entry(execution_symbol, side, quantity, settings.order_quote_amount)
-        entry_price = BinanceClient.average_fill_price(entry, fallback=float(candidate["entry_price"]))
+        entry = binance.place_market_entry(execution_symbol, side, quantity)
+        entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
         if entry_price is None:
             raise RuntimeError("Unable to determine entry fill price")
         executed_qty = _executed_qty(entry, quantity)
