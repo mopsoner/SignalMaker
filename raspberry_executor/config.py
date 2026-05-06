@@ -8,7 +8,7 @@ class Settings:
     gateway_id: str
     poll_seconds: int
     dry_run: bool
-    execution_quote_asset: str
+    quote_assets: list[str]
     allowed_symbols: list[str]
     allow_shorts: bool
     order_quote_amount: float
@@ -36,13 +36,14 @@ def load_settings() -> Settings:
     except Exception:
         pass
 
+    quote_assets = _csv(os.getenv("QUOTE_ASSETS", "USDT"))
     return Settings(
         signalmaker_base_url=os.environ["SIGNALMAKER_BASE_URL"].rstrip("/"),
         gateway_id=os.getenv("GATEWAY_ID", "raspberry-fr-1"),
         poll_seconds=int(os.getenv("POLL_SECONDS", "15")),
         dry_run=_bool(os.getenv("DRY_RUN"), default=True),
-        execution_quote_asset=os.getenv("EXECUTION_QUOTE_ASSET", "USDC").strip().upper(),
-        allowed_symbols=_csv(os.getenv("ALLOWED_SYMBOLS", "")),
+        quote_assets=quote_assets,
+        allowed_symbols=quote_assets,
         allow_shorts=_bool(os.getenv("ALLOW_SHORTS"), default=False),
         order_quote_amount=float(os.getenv("ORDER_QUOTE_AMOUNT", "20")),
         max_candidate_age_seconds=int(os.getenv("MAX_CANDIDATE_AGE_SECONDS", "900")),
