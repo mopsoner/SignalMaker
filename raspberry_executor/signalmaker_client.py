@@ -32,7 +32,24 @@ class SignalMakerClient:
             "candles": [],
         }
         url = self._url("/api/v1/market-data/candles")
-        response = self.session.post(url, json=probe, timeout=15)
+        try:
+            response = self.session.post(url, json=probe, timeout=(5, 5))
+        except requests.Timeout:
+            return {
+                "ok": False,
+                "status_code": None,
+                "url": url,
+                "reason": "endpoint_timeout",
+                "message": "SignalMaker timed out on the candle ingest probe. Pull/redeploy main, restart Replit, or reduce Replit load before enabling the candle feed.",
+            }
+        except requests.RequestException as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "url": url,
+                "reason": "endpoint_unreachable",
+                "message": str(exc),
+            }
         if response.status_code == 405:
             return {
                 "ok": False,
@@ -62,7 +79,7 @@ class SignalMakerClient:
         response = self.session.post(
             self._url("/api/v1/market-data/candles"),
             json=payload,
-            timeout=30,
+            timeout=(5, 60),
         )
         response.raise_for_status()
         data = response.json()
@@ -82,6 +99,18 @@ class SignalMakerClient:
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected SignalMaker candle summary response: {type(data).__name__}")
         return data
+
+    def latest_candle(self, symbol: str, interval: str) -> dict | None:
+        response = self.session.get(
+            self._url("/api/v1/market-data/candles"),
+            params={"symbol": symbol.upper(), "interval": interval, "limit": 1, "latest": "true"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected SignalMaker latest candle response: {type(data).__name__}")
+        return data[0] if data else None
 
     def heartbeat(self, *args, **kwargs) -> dict:
         return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
