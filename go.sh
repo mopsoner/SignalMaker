@@ -2,6 +2,10 @@
 set -e
 cd "$(dirname "$0")"
 
+if [ -d .git ]; then
+  git pull --ff-only || true
+fi
+
 if [ ! -d .venv ]; then
   python3 -m venv .venv
 fi
