@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+from sqlalchemy import select
 
+from app.db.session import SessionLocal
+from app.models.market_candle import MarketCandle
 from app.services.runtime_settings import load_runtime_settings
 
 logger = logging.getLogger(__name__)
@@ -57,10 +60,23 @@ class CollectorService:
         runtime = load_runtime_settings()
         self.runtime = runtime
         self.base_url = runtime['binance']['binance_rest_base'].rstrip('/')
+        self.collector_enabled = bool(runtime['binance'].get('binance_collector_enabled', False))
         self.session = requests.Session()
         self._rate = RateLimiter()
 
+    def _stored_symbols(self, limit: int | None = None) -> list[str]:
+        db = SessionLocal()
+        try:
+            stmt = select(MarketCandle.symbol).distinct().order_by(MarketCandle.symbol)
+            if limit:
+                stmt = stmt.limit(limit)
+            return [str(symbol).upper() for symbol in db.scalars(stmt).all()]
+        finally:
+            db.close()
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        if not self.collector_enabled:
+            raise RuntimeError('Binance collector is disabled; use POST /api/v1/market-data/candles to ingest candles')
         self._rate.wait_if_needed()
         url = f"{self.base_url}{path}"
         for attempt in range(3):
@@ -103,10 +119,11 @@ class CollectorService:
     def heartbeat(self) -> dict:
         return {
             'service': 'collector',
-            'status': 'ready',
+            'status': 'ready' if self.collector_enabled else 'disabled_external_ingest_mode',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'base_url': self.base_url,
             'pipeline_intervals': list(PIPELINE_INTERVALS),
+            'binance_collector_enabled': self.collector_enabled,
         }
 
     def _runtime_csv(self, key: str) -> list[str]:
@@ -117,6 +134,14 @@ class CollectorService:
         ]
 
     def discover_symbols(self, limit: int | None = None) -> list[str]:
+        if not self.collector_enabled:
+            symbols = self._stored_symbols(limit=limit)
+            logger.info(
+                "Binance collector disabled. Using %d symbols from stored market_candles.",
+                len(symbols),
+            )
+            return symbols
+
         info = self._get('/api/v3/exchangeInfo')
         allowed_quotes = self._runtime_csv('binance_quote_assets')
         excluded_bases = set(self._runtime_csv('binance_excluded_base_assets'))
@@ -146,6 +171,8 @@ class CollectorService:
         return symbols
 
     def fetch_klines(self, symbol: str, interval: str, limit: int, start_time: int | None = None) -> list[dict[str, Any]]:
+        if not self.collector_enabled:
+            return []
         if limit <= 0:
             return []
         params: dict[str, Any] = {'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -198,6 +225,8 @@ class CollectorService:
         return int(limit), int(latest_close_time) + 1
 
     def collect_interval(self, symbol: str, interval: str, latest_close_time: int | None = None) -> list[dict[str, Any]]:
+        if not self.collector_enabled:
+            return []
         limit, start_time = self._compute_incremental_limit(interval, latest_close_time)
         return self.fetch_klines(symbol, interval, limit, start_time=start_time)
 
