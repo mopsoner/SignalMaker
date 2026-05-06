@@ -30,7 +30,16 @@ class GatewayExecutionService:
 
     @staticmethod
     def _status(value: str | None) -> str:
-        return (value or "new").lower()
+        normalized = (value or "new").lower()
+        if normalized in {"new", "partially_filled", "pending_new"}:
+            return "open"
+        if normalized in {"filled", "closed"}:
+            return "filled"
+        if normalized in {"canceled", "cancelled", "expired"}:
+            return "cancelled"
+        if normalized in {"rejected", "error"}:
+            return "error"
+        return normalized
 
     @staticmethod
     def _exchange_order_id(value: str | int | None) -> str | None:
