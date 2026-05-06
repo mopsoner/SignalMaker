@@ -9,6 +9,19 @@ from app.core.config import settings as base_settings
 from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
 
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
         "app_name": base_settings.app_name,
@@ -89,7 +102,10 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
-        payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
+        payload.setdefault("binance", {})["binance_collector_enabled"] = _as_bool(
+            payload.get("binance", {}).get("binance_collector_enabled", True),
+            default=True,
+        )
         return payload
     finally:
         if owns_session:
@@ -100,6 +116,10 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     strategy = payload.get("strategy")
     if isinstance(strategy, dict):
         strategy["signal_execution_interval"] = "15m"
+
+    binance = payload.get("binance")
+    if isinstance(binance, dict) and "binance_collector_enabled" in binance:
+        binance["binance_collector_enabled"] = _as_bool(binance["binance_collector_enabled"], default=True)
 
     for category, values in payload.items():
         if not isinstance(values, dict):
