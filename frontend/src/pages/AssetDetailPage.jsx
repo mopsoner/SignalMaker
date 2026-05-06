@@ -13,6 +13,12 @@ function summarizeContext(value) {
   return `${type} @ ${level}`
 }
 
+function humanizeKey(value) {
+  return String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
 function DebugRow({ label, value }) {
   return (
     <div className="debug-row">
@@ -20,6 +26,16 @@ function DebugRow({ label, value }) {
       <div className="debug-value">{typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '—')}</div>
     </div>
   )
+}
+
+function ScoreBreakdown({ breakdown }) {
+  const rows = Object.entries(breakdown || {})
+  if (!rows.length) {
+    return <DebugRow label="Score breakdown" value="—" />
+  }
+  return rows.map(([key, value]) => (
+    <DebugRow key={key} label={humanizeKey(key)} value={typeof value === 'number' ? fmtNumber(value, 2) : value} />
+  ))
 }
 
 function CopyablePayload({ payload }) {
@@ -65,7 +81,9 @@ export default function AssetDetailPage() {
   const loadAsset = useCallback(() => api.asset(symbol), [symbol])
   const { data: asset, loading, error } = usePollingQuery(loadAsset, 15000)
   const payload = asset?.state_payload || {}
-  const breakdown = payload?.score_breakdown || {}
+  const breakdown = payload?.score_breakdown || payload?.final_score_breakdown || {}
+  const legacyBreakdown = payload?.legacy_score_breakdown || {}
+  const displayScore = payload?.score ?? asset?.score
 
   return (
     <div className="page-stack">
@@ -80,7 +98,7 @@ export default function AssetDetailPage() {
           <div className="stats-grid">
             <StatCard label="Stage" value={asset.stage} />
             <StatCard label="Bias" value={asset.bias || '—'} />
-            <StatCard label="Score" value={fmtNumber(asset.score, 2)} hint={`Updated ${fmtDate(asset.updated_at)}`} />
+            <StatCard label="Score" value={fmtNumber(displayScore, 2)} hint={`Updated ${fmtDate(asset.updated_at)}`} />
             <StatCard label="Session" value={payload.session_phase || asset.session || '—'} hint={`Filter ${payload.session_confirm_filter_enabled ? 'ON' : 'OFF'}`} />
           </div>
           <section className="panel two-col">
@@ -106,15 +124,8 @@ export default function AssetDetailPage() {
           <section className="panel two-col">
             <div>
               <h2>Score breakdown</h2>
-              <DebugRow label="Liquidity" value={breakdown.liquidity} />
-              <DebugRow label="Structure" value={breakdown.structure} />
-              <DebugRow label="Confirmation" value={breakdown.confirmation} />
-              <DebugRow label="Session" value={breakdown.session} />
-              <DebugRow label="Quality" value={breakdown.quality} />
-              <DebugRow label="Volume" value={breakdown.volume} />
-              <DebugRow label="HTF alignment" value={breakdown.htf_alignment} />
-              <DebugRow label="Market quality" value={breakdown.market_quality} />
-              <DebugRow label="Target quality" value={breakdown.target_quality} />
+              <ScoreBreakdown breakdown={breakdown} />
+              {Object.keys(legacyBreakdown).length ? <DebugRow label="Legacy score" value={fmtNumber(payload.legacy_score, 2)} /> : null}
             </div>
             <div>
               <h2>MSS / BOS structure</h2>
