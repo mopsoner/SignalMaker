@@ -104,7 +104,7 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
         logger.info("skip candidate=%s reason=%s", candidate_id, reason)
         return
 
-    execution_symbol = guard.execution_symbol(candidate, settings.symbol_map)
+    execution_symbol = guard.execution_symbol(candidate, settings.execution_quote_asset)
     side = guard.normalize_side(str(candidate["side"]))
     quantity = settings.quantity
 
@@ -154,10 +154,15 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.allowed_symbols, settings.max_candidate_age_seconds)
 
-    logger.info("Raspberry executor started gateway_id=%s dry_run=%s", settings.gateway_id, settings.dry_run)
+    logger.info(
+        "Raspberry executor started gateway_id=%s dry_run=%s execution_quote_asset=%s",
+        settings.gateway_id,
+        settings.dry_run,
+        settings.execution_quote_asset,
+    )
     while True:
         try:
-            signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run})
+            signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run, "execution_quote_asset": settings.execution_quote_asset})
             candidates = signalmaker.get_open_candidates(limit=10)
             for candidate in candidates:
                 execute_candidate(settings, signalmaker, binance, state, guard, candidate)
