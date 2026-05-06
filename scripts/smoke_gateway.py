@@ -1,5 +1,10 @@
 import os
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./gateway_smoke.db")
 os.environ.setdefault("CREATE_TABLES_ON_BOOT", "true")
@@ -12,7 +17,7 @@ from app.services.gateway_execution_service import GatewayExecutionService
 
 
 def main() -> None:
-    db_path = Path("gateway_smoke.db")
+    db_path = ROOT / "gateway_smoke.db"
     if db_path.exists():
         db_path.unlink()
 
