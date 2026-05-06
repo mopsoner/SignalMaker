@@ -6,6 +6,7 @@ const EMPTY_SETTINGS = {
   general: { app_name: '', app_env: '', cors_origins: '', create_tables_on_boot: true },
   binance: {
     binance_rest_base: '',
+    binance_collector_enabled: true,
     binance_quote_assets: '',
     binance_symbol_status: '',
     binance_max_symbols: 25,
@@ -146,6 +147,7 @@ export default function AdminSettingsPage() {
       </Section>
 
       <Section title="Binance" description="Collector limits, incremental fetch and exchange connectivity.">
+        <Field label="Binance collector enabled"><input type="checkbox" checked={Boolean(settings.binance.binance_collector_enabled)} onChange={(e) => updateField('binance', 'binance_collector_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="REST base URL"><input style={inputStyle} value={settings.binance.binance_rest_base} onChange={(e) => updateField('binance', 'binance_rest_base', e.target.value)} disabled={loading} /></Field>
         <Field label="Quote assets"><input style={inputStyle} value={settings.binance.binance_quote_assets} onChange={(e) => updateField('binance', 'binance_quote_assets', e.target.value)} disabled={loading} /></Field>
         <Field label="Symbol status"><input style={inputStyle} value={settings.binance.binance_symbol_status} onChange={(e) => updateField('binance', 'binance_symbol_status', e.target.value)} disabled={loading} /></Field>
