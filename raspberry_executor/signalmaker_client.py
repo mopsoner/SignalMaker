@@ -24,6 +24,34 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
         return data
 
+    def check_candle_ingest_endpoint(self) -> dict:
+        probe = {
+            "source": f"{self.gateway_id}-probe",
+            "symbol": "BTCUSDT",
+            "interval": "15m",
+            "candles": [],
+        }
+        url = self._url("/api/v1/market-data/candles")
+        response = self.session.post(url, json=probe, timeout=15)
+        if response.status_code == 405:
+            return {
+                "ok": False,
+                "status_code": 405,
+                "url": url,
+                "reason": "method_not_allowed_post_endpoint_missing",
+                "message": "SignalMaker is reachable, but the deployed backend does not accept POST /api/v1/market-data/candles. Pull/redeploy main and restart Replit.",
+            }
+        if response.status_code == 404:
+            return {
+                "ok": False,
+                "status_code": 404,
+                "url": url,
+                "reason": "endpoint_not_found",
+                "message": "SignalMaker is reachable, but /api/v1/market-data/candles is missing. Pull/redeploy main and restart Replit.",
+            }
+        response.raise_for_status()
+        return {"ok": True, "status_code": response.status_code, "url": url}
+
     def post_candles(self, symbol: str, interval: str, candles: list[dict], source: str | None = None) -> dict:
         payload = {
             "source": source or self.gateway_id,
