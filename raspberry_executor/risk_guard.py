@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 
 class RiskGuard:
-    def __init__(self, allowed_symbols: list[str], max_candidate_age_seconds: int) -> None:
-        self.allowed_symbols = set(symbol.upper() for symbol in allowed_symbols)
+    def __init__(self, quote_assets: list[str], max_candidate_age_seconds: int) -> None:
+        self.quote_assets = {quote.upper() for quote in quote_assets}
         self.max_candidate_age_seconds = max_candidate_age_seconds
 
     def execution_symbol(self, candidate: dict, execution_quote_asset: str | None = None) -> str:
@@ -17,8 +17,8 @@ class RiskGuard:
         if candidate.get("status") != "open":
             return False, "candidate_not_open"
         symbol = str(candidate.get("symbol", "")).upper()
-        if self.allowed_symbols and symbol not in self.allowed_symbols:
-            return False, f"symbol_not_allowed:{symbol}"
+        if self.quote_assets and not any(symbol.endswith(quote) for quote in self.quote_assets):
+            return False, f"quote_not_allowed:{symbol}"
         side = str(candidate.get("side", "")).lower()
         if side not in {"long", "short", "buy", "sell", "bull", "bear"}:
             return False, f"unsupported_side:{side}"
