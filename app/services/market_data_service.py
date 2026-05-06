@@ -32,6 +32,12 @@ class MarketDataService:
             self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}"))
         self.db.commit()
 
+    def list_symbols(self, limit: int | None = None) -> list[str]:
+        stmt = select(MarketCandle.symbol).distinct().order_by(MarketCandle.symbol)
+        if limit:
+            stmt = stmt.limit(limit)
+        return [str(symbol).upper() for symbol in self.db.scalars(stmt).all()]
+
     def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
         if latest:
             filters = "WHERE 1=1"
