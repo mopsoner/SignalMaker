@@ -1,21 +1,15 @@
 from datetime import datetime, timezone
 
 
-QUOTE_ASSETS = ("USDT", "USDC", "FDUSD", "BUSD", "TUSD", "USD")
-
-
 class RiskGuard:
     def __init__(self, allowed_symbols: list[str], max_candidate_age_seconds: int) -> None:
         self.allowed_symbols = set(symbol.upper() for symbol in allowed_symbols)
         self.max_candidate_age_seconds = max_candidate_age_seconds
 
-    def execution_symbol(self, candidate: dict, execution_quote_asset: str) -> str:
-        signal_symbol = str(candidate.get("symbol", "")).upper()
-        quote = execution_quote_asset.upper()
-        for existing_quote in QUOTE_ASSETS:
-            if signal_symbol.endswith(existing_quote):
-                return f"{signal_symbol[:-len(existing_quote)]}{quote}"
-        return f"{signal_symbol}{quote}"
+    def execution_symbol(self, candidate: dict, execution_quote_asset: str | None = None) -> str:
+        # Do not transform USDT/USDC or any quote asset here.
+        # The Raspberry executor must trade the exact SignalMaker candidate symbol.
+        return str(candidate.get("symbol", "")).upper()
 
     def accept(self, candidate: dict, *, already_executed: bool) -> tuple[bool, str]:
         if already_executed:
