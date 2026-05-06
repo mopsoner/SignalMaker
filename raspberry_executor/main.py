@@ -1,5 +1,4 @@
 import time
-from datetime import datetime, timezone
 
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.config import load_settings
@@ -17,10 +16,6 @@ def _order_id(payload: dict | None):
     return payload.get("orderId") or payload.get("order_id")
 
 
-def _status(payload: dict | None) -> str:
-    return str((payload or {}).get("status", "NEW")).lower()
-
-
 def _executed_qty(payload: dict, fallback: float) -> float:
     try:
         value = float(payload.get("executedQty") or 0)
@@ -35,44 +30,7 @@ def _quantity_from_quote(price: float, quote_amount: float) -> float:
     return round(float(quote_amount) / float(price), 6)
 
 
-def build_execution_report(settings, candidate: dict, execution_symbol: str, entry: dict, tp: dict | None, sl: dict | None, quantity: float, entry_price: float) -> dict:
-    side = RiskGuard.normalize_side(str(candidate["side"]))
-    return {
-        "gateway_id": settings.gateway_id,
-        "candidate_id": candidate["candidate_id"],
-        "signal_symbol": candidate["symbol"],
-        "execution_symbol": execution_symbol,
-        "side": side,
-        "quantity": quantity,
-        "entry_price": float(candidate["entry_price"]),
-        "stop_price": float(candidate["stop_price"]),
-        "target_price": float(candidate["target_price"]),
-        "exchange": "binance",
-        "mode": "dry_run" if settings.dry_run else "live",
-        "entry_order": {
-            "exchange_order_id": _order_id(entry),
-            "status": _status(entry),
-            "avg_price": entry_price,
-            "executed_qty": quantity,
-            "payload": entry,
-        },
-        "tp_order": {
-            "exchange_order_id": _order_id(tp),
-            "status": _status(tp),
-            "price": float(candidate["target_price"]),
-            "payload": tp or {},
-        } if tp else None,
-        "sl_order": {
-            "exchange_order_id": _order_id(sl),
-            "status": _status(sl),
-            "price": float(candidate["stop_price"]),
-            "payload": sl or {},
-        } if sl else None,
-        "payload": {"candidate": candidate, "order_quote_amount": settings.order_quote_amount},
-    }
-
-
-def report_final_events(settings, signalmaker: SignalMakerClient, binance: BinanceClient, state: StateStore) -> None:
+def report_final_events(binance: BinanceClient, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         symbol = position["execution_symbol"]
         tp_order_id = position.get("tp_order_id")
@@ -84,33 +42,15 @@ def report_final_events(settings, signalmaker: SignalMakerClient, binance: Binan
             logger.warning("order status failed candidate=%s error=%s", candidate_id, exc)
             continue
 
-        event_type = None
-        exchange_order_id = None
-        payload = None
         if tp_status and str(tp_status.get("status", "")).upper() == "FILLED":
-            event_type = "take_profit_filled"
-            exchange_order_id = tp_order_id
-            payload = tp_status
+            state.close_position(candidate_id, "take_profit_filled", tp_status)
+            logger.info("local position closed candidate=%s reason=take_profit_filled", candidate_id)
         elif sl_status and str(sl_status.get("status", "")).upper() == "FILLED":
-            event_type = "stop_loss_filled"
-            exchange_order_id = sl_order_id
-            payload = sl_status
-
-        if event_type:
-            signalmaker.report_event({
-                "gateway_id": settings.gateway_id,
-                "candidate_id": candidate_id,
-                "event_type": event_type,
-                "exchange": "binance",
-                "exchange_order_id": exchange_order_id,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "payload": payload or {},
-            })
-            state.remove_open_position(candidate_id)
-            logger.info("reported final event candidate=%s event=%s", candidate_id, event_type)
+            state.close_position(candidate_id, "stop_loss_filled", sl_status)
+            logger.info("local position closed candidate=%s reason=stop_loss_filled", candidate_id)
 
 
-def execute_candidate(settings, signalmaker: SignalMakerClient, binance: BinanceClient, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
+def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
     candidate_id = candidate["candidate_id"]
     accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
     if not accepted:
@@ -133,34 +73,28 @@ def execute_candidate(settings, signalmaker: SignalMakerClient, binance: Binance
         tp = binance.place_exit_limit(execution_symbol, side, executed_qty, float(candidate["target_price"]))
         sl = binance.place_stop_loss(execution_symbol, side, executed_qty, float(candidate["stop_price"]))
 
-        report = build_execution_report(settings, candidate, execution_symbol, entry, tp, sl, executed_qty, float(entry_price))
-        response = signalmaker.report_execution(report)
-        logger.info("execution recorded candidate=%s response=%s", candidate_id, response)
-
         state.mark_executed(candidate_id)
         state.add_open_position(candidate_id, {
-            "execution_symbol": execution_symbol,
+            "candidate_id": candidate_id,
             "signal_symbol": candidate["symbol"],
+            "execution_symbol": execution_symbol,
             "side": side,
             "quantity": executed_qty,
+            "entry_price": float(entry_price),
+            "stop_price": float(candidate["stop_price"]),
+            "target_price": float(candidate["target_price"]),
             "entry_order_id": _order_id(entry),
             "tp_order_id": _order_id(tp),
             "sl_order_id": _order_id(sl),
+            "candidate": candidate,
+            "entry_payload": entry,
+            "tp_payload": tp or {},
+            "sl_payload": sl or {},
         })
+        logger.info("local position opened candidate=%s execution=%s qty=%s", candidate_id, execution_symbol, executed_qty)
     except Exception as exc:
         logger.exception("execution failed candidate=%s", candidate_id)
-        try:
-            signalmaker.report_event({
-                "gateway_id": settings.gateway_id,
-                "candidate_id": candidate_id,
-                "event_type": "execution_error",
-                "exchange": "binance",
-                "reason": str(exc),
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "payload": {},
-            })
-        except Exception:
-            logger.exception("failed to report execution error candidate=%s", candidate_id)
+        state.add_event(candidate_id, "execution_error", {"error": str(exc), "candidate": candidate})
 
 
 def main() -> None:
@@ -179,12 +113,11 @@ def main() -> None:
     )
     while True:
         try:
-            signalmaker.heartbeat(mode="executor", meta={"dry_run": settings.dry_run, "execution_quote_asset": settings.execution_quote_asset, "order_quote_amount": settings.order_quote_amount})
             candidates = signalmaker.get_open_candidates(limit=10)
             logger.info("candidates fetched count=%s", len(candidates))
             for candidate in candidates:
-                execute_candidate(settings, signalmaker, binance, state, guard, candidate)
-            report_final_events(settings, signalmaker, binance, state)
+                execute_candidate(settings, binance, state, guard, candidate)
+            report_final_events(binance, state)
         except Exception:
             logger.exception("main loop error")
         time.sleep(settings.poll_seconds)
