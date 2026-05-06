@@ -10,6 +10,7 @@ class Settings:
     dry_run: bool
     execution_quote_asset: str
     allowed_symbols: list[str]
+    allow_shorts: bool
     order_quote_amount: float
     max_candidate_age_seconds: int
     binance_base_url: str
@@ -42,6 +43,7 @@ def load_settings() -> Settings:
         dry_run=_bool(os.getenv("DRY_RUN"), default=True),
         execution_quote_asset=os.getenv("EXECUTION_QUOTE_ASSET", "USDC").strip().upper(),
         allowed_symbols=_csv(os.getenv("ALLOWED_SYMBOLS", "")),
+        allow_shorts=_bool(os.getenv("ALLOW_SHORTS"), default=False),
         order_quote_amount=float(os.getenv("ORDER_QUOTE_AMOUNT", "20")),
         max_candidate_age_seconds=int(os.getenv("MAX_CANDIDATE_AGE_SECONDS", "900")),
         binance_base_url=os.getenv("BINANCE_BASE_URL", "https://api.binance.com").rstrip("/"),
