@@ -57,13 +57,13 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
         logger.info("skip candidate=%s reason=%s", candidate_id, reason)
         return
 
-    execution_symbol = guard.execution_symbol(candidate, settings.execution_quote_asset)
+    execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
     current_price = binance.current_price(execution_symbol)
     quantity = _quantity_from_quote(current_price, settings.order_quote_amount)
 
     try:
-        logger.info("execute candidate=%s signal=%s execution=%s side=%s amount=%s qty=%s", candidate_id, candidate.get("symbol"), execution_symbol, side, settings.order_quote_amount, quantity)
+        logger.info("execute candidate=%s symbol=%s side=%s amount=%s qty=%s", candidate_id, execution_symbol, side, settings.order_quote_amount, quantity)
         entry = binance.place_market_entry(execution_symbol, side, quantity)
         entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
         if entry_price is None:
@@ -91,7 +91,7 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
             "tp_payload": tp or {},
             "sl_payload": sl or {},
         })
-        logger.info("local position opened candidate=%s execution=%s qty=%s", candidate_id, execution_symbol, executed_qty)
+        logger.info("local position opened candidate=%s symbol=%s qty=%s", candidate_id, execution_symbol, executed_qty)
     except Exception as exc:
         logger.exception("execution failed candidate=%s", candidate_id)
         state.add_event(candidate_id, "execution_error", {"error": str(exc), "candidate": candidate})
@@ -105,10 +105,9 @@ def main() -> None:
     guard = RiskGuard(settings.allowed_symbols, settings.max_candidate_age_seconds)
 
     logger.info(
-        "Raspberry executor started gateway_id=%s dry_run=%s execution_quote_asset=%s order_quote_amount=%s",
+        "Raspberry executor started gateway_id=%s dry_run=%s order_quote_amount=%s",
         settings.gateway_id,
         settings.dry_run,
-        settings.execution_quote_asset,
         settings.order_quote_amount,
     )
     while True:
