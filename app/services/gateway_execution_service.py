@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.order import Order
+from app.models.trade_candidate import TradeCandidate
 from app.schemas.gateway import GatewayExecutionEvent, GatewayExecutionReport
 from app.services.fill_service import FillService
 from app.services.order_service import OrderService
@@ -35,6 +36,20 @@ class GatewayExecutionService:
     def _exchange_order_id(value: str | int | None) -> str | None:
         return str(value) if value is not None else None
 
+    @staticmethod
+    def _payload_symbol(report: GatewayExecutionReport) -> str | None:
+        payload = report.entry_order.payload or {}
+        symbol = payload.get("symbol")
+        return str(symbol).upper() if symbol else None
+
+    @staticmethod
+    def _exit_side(side: str) -> str:
+        return "sell" if side == "long" else "buy"
+
+    @staticmethod
+    def _entry_side(side: str) -> str:
+        return "buy" if side == "long" else "sell"
+
     def _find_order_by_exchange_id(self, candidate_id: str, exchange_order_id: str | int | None) -> Order | None:
         exchange_id = self._exchange_order_id(exchange_order_id)
         if not exchange_id:
@@ -50,17 +65,15 @@ class GatewayExecutionService:
         return self.positions.get_open_position_for_candidate(candidate_id)
 
     def record_execution(self, report: GatewayExecutionReport) -> dict[str, Any]:
-        candidate = self.db.get(self.candidates.db.get_bind().mapper.class_ if False else type("Dummy", (), {}), report.candidate_id) if False else None
-        # Use direct DB lookup through the mapped model kept inside TradeCandidateService internals.
-        from app.models.trade_candidate import TradeCandidate
-
         candidate = self.db.get(TradeCandidate, report.candidate_id)
         if candidate is None:
             raise ValueError(f"Unknown candidate_id: {report.candidate_id}")
 
-        symbol = (report.execution_symbol or report.signal_symbol or report.entry_order.payload.get("symbol") if report.entry_order.payload else None or candidate.symbol).upper()
+        symbol = (report.execution_symbol or report.signal_symbol or self._payload_symbol(report) or candidate.symbol).upper()
         side = report.side.lower()
         entry_price = report.entry_order.avg_price or report.entry_order.price or report.entry_price or candidate.entry_price
+        if entry_price is None:
+            raise ValueError("Gateway execution report requires an entry price or avg fill price")
         filled_qty = report.entry_order.executed_qty or report.quantity
         target_price = report.target_price if report.target_price is not None else candidate.target_price
         stop_price = report.stop_price if report.stop_price is not None else candidate.stop_price
@@ -69,8 +82,8 @@ class GatewayExecutionService:
             symbol=symbol,
             side=side,
             quantity=float(filled_qty),
-            entry_price=entry_price,
-            mark_price=entry_price,
+            entry_price=float(entry_price),
+            mark_price=float(entry_price),
             stop_price=stop_price,
             target_price=target_price,
             meta={
@@ -89,11 +102,11 @@ class GatewayExecutionService:
             candidate_id=report.candidate_id,
             position_id=position.position_id,
             symbol=symbol,
-            side="buy" if side == "long" else "sell",
+            side=self._entry_side(side),
             order_type="market",
             quantity=float(filled_qty),
             requested_price=report.entry_price,
-            filled_price=entry_price,
+            filled_price=float(entry_price),
             status=self._status(report.entry_order.status),
             meta={
                 "source": "gateway_execution",
@@ -118,7 +131,7 @@ class GatewayExecutionService:
                 candidate_id=report.candidate_id,
                 position_id=position.position_id,
                 symbol=symbol,
-                side="sell" if side == "long" else "buy",
+                side=self._exit_side(side),
                 order_type="take_profit",
                 quantity=float(filled_qty),
                 requested_price=report.tp_order.price or target_price,
@@ -139,7 +152,7 @@ class GatewayExecutionService:
                 candidate_id=report.candidate_id,
                 position_id=position.position_id,
                 symbol=symbol,
-                side="sell" if side == "long" else "buy",
+                side=self._exit_side(side),
                 order_type="stop_loss",
                 quantity=float(filled_qty),
                 requested_price=report.sl_order.price or stop_price,
@@ -168,7 +181,12 @@ class GatewayExecutionService:
     def record_event(self, event: GatewayExecutionEvent) -> dict[str, Any]:
         order = self._find_order_by_exchange_id(event.candidate_id, event.exchange_order_id)
         if order is not None:
-            next_status = "filled" if event.event_type.endswith("_filled") else "cancelled" if event.event_type == "order_cancelled" else "error" if event.event_type == "execution_error" else order.status
+            next_status = (
+                "filled" if event.event_type.endswith("_filled")
+                else "cancelled" if event.event_type == "order_cancelled"
+                else "error" if event.event_type == "execution_error"
+                else order.status
+            )
             meta = {**(order.meta or {}), "last_gateway_event": event.model_dump(mode="json")}
             self.orders.update_order(order.order_id, status=next_status, meta=meta)
 
@@ -176,8 +194,7 @@ class GatewayExecutionService:
         closed_position_id = None
         if position is not None and event.event_type in FINAL_EVENT_REASONS:
             reason = event.reason or FINAL_EVENT_REASONS[event.event_type]
-            meta = {**(position.meta or {}), "close_reason": reason, "last_gateway_event": event.model_dump(mode="json")}
-            position.meta = meta
+            position.meta = {**(position.meta or {}), "close_reason": reason, "last_gateway_event": event.model_dump(mode="json")}
             self.db.commit()
             self.positions.close_position(position.position_id, mark_price=position.mark_price)
             closed_position_id = position.position_id
