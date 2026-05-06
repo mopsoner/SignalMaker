@@ -23,3 +23,12 @@ class SignalMakerClient:
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
         return data
+
+    def heartbeat(self, *args, **kwargs) -> dict:
+        return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
+
+    def report_execution(self, payload: dict) -> dict:
+        return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
+
+    def report_event(self, payload: dict) -> dict:
+        return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
