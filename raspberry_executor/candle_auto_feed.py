@@ -10,7 +10,6 @@ from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.signalmaker_client import SignalMakerClient
 
 logger = setup_logging("raspberry-candle-feed")
-KNOWN_QUOTES = {"USDT", "USDC", "FDUSD", "BUSD", "TUSD", "USD", "EUR", "BTC", "ETH", "BNB"}
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
@@ -48,13 +47,9 @@ def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str]]:
     env = read_env()
-    configured_quotes = _csv(env.get("CANDLE_FEED_QUOTES") or env.get("CANDLE_FEED_QUOTE_ASSETS") or "USDT")
-    explicit_symbols = _csv(env.get("CANDLE_FEED_SYMBOLS"))
-
+    quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
-    discovered = discover_spot_symbols(settings.binance_base_url, configured_quotes, limit=max_symbols)
-    symbols = sorted(set(explicit_symbols + discovered))
-    return symbols, configured_quotes
+    return discover_spot_symbols(settings.binance_base_url, quote_assets, limit=max_symbols), quote_assets
 
 
 def run_once() -> dict:
@@ -111,8 +106,8 @@ def run_loop() -> None:
 
     poll_seconds = int(os.getenv("CANDLE_FEED_POLL_SECONDS", "60"))
     logger.info(
-        "candle feed started quotes=%s intervals=%s poll_seconds=%s",
-        os.getenv("CANDLE_FEED_QUOTES", "USDT"),
+        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s",
+        os.getenv("QUOTE_ASSETS", "USDT"),
         os.getenv("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
         poll_seconds,
     )
