@@ -18,6 +18,13 @@ def _find_summary(rows: list[dict[str, Any]], symbol: str, interval: str) -> dic
     return None
 
 
+def _fail(result: dict[str, Any], check: dict[str, Any]) -> int:
+    result["status"] = "failed"
+    result["checks"].append(check)
+    print(json.dumps(result, indent=2))
+    return 1
+
+
 def main() -> int:
     ensure_env()
     settings = load_settings()
@@ -25,28 +32,63 @@ def main() -> int:
     limit = int(os.getenv("CANDLE_FEED_LIMIT", "120"))
     smoke_symbol_limit = int(os.getenv("CANDLE_FEED_SMOKE_SYMBOL_LIMIT", "3"))
 
-    symbols, quote_assets = resolve_feed_symbols(settings)
-    selected_symbols = symbols[:smoke_symbol_limit]
-
     result: dict[str, Any] = {
         "status": "pending",
         "signalmaker_base_url": settings.signalmaker_base_url,
         "gateway_id": settings.gateway_id,
         "allowed_symbols": settings.allowed_symbols,
-        "quote_assets": quote_assets,
-        "discovered_symbol_count": len(symbols),
-        "tested_symbol_count": len(selected_symbols),
-        "tested_symbols": selected_symbols,
         "intervals": intervals,
         "limit": limit,
         "checks": [],
     }
 
-    if not selected_symbols:
+    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
+
+    try:
+        summary_probe = client.candle_summary("BTCUSDT")
+        result["checks"].append({
+            "name": "signalmaker_get_summary",
+            "ok": True,
+            "url": client._url("/api/v1/market-data/candles/summary"),
+            "row_count": len(summary_probe),
+        })
+    except Exception as exc:
+        return _fail(result, {
+            "name": "signalmaker_get_summary",
+            "ok": False,
+            "url": client._url("/api/v1/market-data/candles/summary"),
+            "error": str(exc),
+            "hint": "Check SIGNALMAKER_BASE_URL. Use the public Replit HTTPS URL without :8080 and without a typo in the domain.",
+        })
+
+    endpoint_check = client.check_candle_ingest_endpoint()
+    result["checks"].append({"name": "signalmaker_post_candles_probe", **endpoint_check})
+    if not endpoint_check.get("ok"):
         result["status"] = "failed"
-        result["checks"].append({"name": "resolve_feed_symbols", "ok": False, "error": "no_symbols_resolved"})
+        result["hint"] = "The Raspberry URL/port may be correct if GET worked, but the deployed SignalMaker backend is not accepting POST /api/v1/market-data/candles yet. Pull main and restart Replit."
         print(json.dumps(result, indent=2))
         return 1
+
+    try:
+        symbols, quote_assets = resolve_feed_symbols(settings)
+    except Exception as exc:
+        return _fail(result, {
+            "name": "resolve_feed_symbols",
+            "ok": False,
+            "error": str(exc),
+            "hint": "Check BINANCE_BASE_URL and ALLOWED_SYMBOLS. Example: ALLOWED_SYMBOLS=USDT or ALLOWED_SYMBOLS=BTCUSDT,ETHUSDT.",
+        })
+
+    selected_symbols = symbols[:smoke_symbol_limit]
+    result.update({
+        "quote_assets": quote_assets,
+        "discovered_symbol_count": len(symbols),
+        "tested_symbol_count": len(selected_symbols),
+        "tested_symbols": selected_symbols,
+    })
+
+    if not selected_symbols:
+        return _fail(result, {"name": "resolve_feed_symbols", "ok": False, "error": "no_symbols_resolved"})
 
     result["checks"].append({
         "name": "resolve_feed_symbols",
@@ -56,7 +98,6 @@ def main() -> int:
         "quote_assets": quote_assets,
     })
 
-    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     pushed = []
     errors = []
 
