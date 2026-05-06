@@ -18,6 +18,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "binance": {
         "binance_rest_base": base_settings.binance_rest_base,
+        "binance_collector_enabled": getattr(base_settings, "binance_collector_enabled", True),
         "binance_quote_assets": base_settings.binance_quote_assets,
         "binance_symbol_status": base_settings.binance_symbol_status,
         "binance_max_symbols": base_settings.binance_max_symbols,
@@ -88,6 +89,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
+        payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
         return payload
     finally:
         if owns_session:
