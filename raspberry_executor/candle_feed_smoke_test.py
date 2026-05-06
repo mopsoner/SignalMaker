@@ -3,7 +3,7 @@ import os
 import sys
 from typing import Any
 
-from raspberry_executor.candle_auto_feed import resolve_feed_symbols
+from raspberry_executor.candle_auto_feed import discover_spot_symbols, resolve_feed_symbols
 from raspberry_executor.candle_push_once import fetch_klines
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
@@ -36,7 +36,7 @@ def main() -> int:
         "status": "pending",
         "signalmaker_base_url": settings.signalmaker_base_url,
         "gateway_id": settings.gateway_id,
-        "allowed_symbols": settings.allowed_symbols,
+        "quote_assets": settings.quote_assets,
         "intervals": intervals,
         "limit": limit,
         "checks": [],
@@ -70,19 +70,23 @@ def main() -> int:
         return 1
 
     try:
+        total_tradeable_symbols = discover_spot_symbols(settings.binance_base_url, settings.quote_assets, limit=0)
         symbols, quote_assets = resolve_feed_symbols(settings)
     except Exception as exc:
         return _fail(result, {
             "name": "resolve_feed_symbols",
             "ok": False,
             "error": str(exc),
-            "hint": "Check BINANCE_BASE_URL and ALLOWED_SYMBOLS. Example: ALLOWED_SYMBOLS=USDT or ALLOWED_SYMBOLS=BTCUSDT,ETHUSDT.",
+            "hint": "Check BINANCE_BASE_URL and QUOTE_ASSETS. Example: QUOTE_ASSETS=USDT or QUOTE_ASSETS=USDC.",
         })
 
     selected_symbols = symbols[:smoke_symbol_limit]
     result.update({
         "quote_assets": quote_assets,
-        "discovered_symbol_count": len(symbols),
+        "total_spot_tradeable_symbol_count_for_quote": len(total_tradeable_symbols),
+        "total_spot_tradeable_symbols_sample": total_tradeable_symbols[:20],
+        "feed_symbol_count_after_max_limit": len(symbols),
+        "configured_feed_max_symbols_applied": len(symbols) < len(total_tradeable_symbols),
         "tested_symbol_count": len(selected_symbols),
         "tested_symbols": selected_symbols,
     })
@@ -93,9 +97,10 @@ def main() -> int:
     result["checks"].append({
         "name": "resolve_feed_symbols",
         "ok": True,
-        "symbol_count": len(symbols),
-        "tested_symbols": selected_symbols,
         "quote_assets": quote_assets,
+        "total_spot_tradeable_symbol_count_for_quote": len(total_tradeable_symbols),
+        "feed_symbol_count_after_max_limit": len(symbols),
+        "tested_symbols": selected_symbols,
     })
 
     pushed = []
