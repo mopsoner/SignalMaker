@@ -1,0 +1,48 @@
+from datetime import datetime, timezone
+
+
+class RiskGuard:
+    def __init__(self, allowed_symbols: list[str], max_candidate_age_seconds: int) -> None:
+        self.allowed_symbols = set(symbol.upper() for symbol in allowed_symbols)
+        self.max_candidate_age_seconds = max_candidate_age_seconds
+
+    def execution_symbol(self, candidate: dict, symbol_map: dict[str, str]) -> str:
+        signal_symbol = str(candidate.get("symbol", "")).upper()
+        return symbol_map.get(signal_symbol, signal_symbol)
+
+    def accept(self, candidate: dict, *, already_executed: bool) -> tuple[bool, str]:
+        if already_executed:
+            return False, "already_executed_locally"
+        if candidate.get("status") != "open":
+            return False, "candidate_not_open"
+        symbol = str(candidate.get("symbol", "")).upper()
+        if self.allowed_symbols and symbol not in self.allowed_symbols:
+            return False, f"symbol_not_allowed:{symbol}"
+        side = str(candidate.get("side", "")).lower()
+        if side not in {"long", "short", "buy", "sell", "bull", "bear"}:
+            return False, f"unsupported_side:{side}"
+        if candidate.get("entry_price") is None:
+            return False, "missing_entry_price"
+        if candidate.get("stop_price") is None:
+            return False, "missing_stop_price"
+        if candidate.get("target_price") is None:
+            return False, "missing_target_price"
+        created_at = candidate.get("created_at")
+        if created_at:
+            try:
+                created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - created).total_seconds()
+                if age > self.max_candidate_age_seconds:
+                    return False, f"candidate_stale:{int(age)}s"
+            except Exception:
+                pass
+        return True, "accepted"
+
+    @staticmethod
+    def normalize_side(side: str) -> str:
+        value = side.lower()
+        if value in {"long", "buy", "bull"}:
+            return "long"
+        if value in {"short", "sell", "bear"}:
+            return "short"
+        return value
