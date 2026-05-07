@@ -8,7 +8,7 @@ from raspberry_executor.state import StateStore
 
 
 def page(title, body):
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>{escape(title)}</h1>{body}</body></html>""".encode()
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none;cursor:pointer}}button.danger,.button.danger{{background:#b42318}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>{escape(title)}</h1>{body}</body></html>""".encode()
 
 
 def cell(v):
@@ -49,6 +49,18 @@ def events_html():
     return out + '</table></div>'
 
 
+def logs_actions_html():
+    return """
+    <div class='actions'>
+      <a class='button' href='/logs/download'>Download full log file</a>
+      <form method='post' action='/logs/delete' onsubmit="return confirm('Delete logs/executor.log ?');" style='margin:0'>
+        <button class='danger' type='submit'>Delete log file</button>
+      </form>
+      <span class='muted'>File: logs/executor.log</span>
+    </div>
+    """
+
+
 class Handler(BaseHTTPRequestHandler):
     def send_page(self, title, body, code=200):
         data = page(title, body)
@@ -70,6 +82,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def delete_log_file(self):
+        try:
+            if LOG_FILE.exists():
+                LOG_FILE.unlink()
+        except Exception:
+            # Keep the UI usable even if the file is currently locked by the logger.
+            pass
+        self.send_response(303)
+        self.send_header('Location', '/logs')
+        self.end_headers()
+
     def do_GET(self):
         if self.path.startswith('/positions'):
             return self.send_page('Local Positions', positions_html())
@@ -79,8 +102,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_log_file()
         if self.path.startswith('/logs'):
             logs = '\n'.join(escape(x) for x in tail_logs(400))
-            download = "<div class='actions'><a class='button' href='/logs/download'>Download full log file</a><span class='muted'>File: logs/executor.log</span></div>"
-            return self.send_page('Logs', f"<div class='box'>{download}<pre>{logs}</pre></div>")
+            return self.send_page('Logs', f"<div class='box'>{logs_actions_html()}<pre>{logs}</pre></div>")
         if self.path.startswith('/admin'):
             vals = read_env(); body = "<form method='post'>"
             for key in vals:
@@ -92,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_page('Raspberry Executor', f"<div class='box'><p class='ok'>Local mode: only trade candidates are read from SignalMaker.</p>{rows}</div>")
 
     def do_POST(self):
+        if self.path.startswith('/logs/delete'):
+            return self.delete_log_file()
         length = int(self.headers.get('Content-Length','0'))
         posted = {k: v[-1] for k, v in parse_qs(self.rfile.read(length).decode()).items()}
         current = read_env()
