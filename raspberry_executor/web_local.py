@@ -3,12 +3,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 from raspberry_executor.env_store import SECRET_KEYS, public_env, read_env, write_env
-from raspberry_executor.logging_setup import tail_logs
+from raspberry_executor.logging_setup import LOG_FILE, tail_logs
 from raspberry_executor.state import StateStore
 
 
 def page(title, body):
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button{{padding:10px 16px;background:#2d6cdf;color:white;border:0;border-radius:6px}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>{escape(title)}</h1>{body}</body></html>""".encode()
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>{escape(title)}</h1>{body}</body></html>""".encode()
 
 
 def cell(v):
@@ -58,14 +58,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_log_file(self):
+        if not LOG_FILE.exists():
+            data = b''
+        else:
+            data = LOG_FILE.read_bytes()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Disposition', 'attachment; filename="raspberry-executor.log"')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         if self.path.startswith('/positions'):
             return self.send_page('Local Positions', positions_html())
         if self.path.startswith('/events'):
             return self.send_page('Local Events', events_html())
+        if self.path.startswith('/logs/download'):
+            return self.send_log_file()
         if self.path.startswith('/logs'):
             logs = '\n'.join(escape(x) for x in tail_logs(400))
-            return self.send_page('Logs', f"<div class='box'><pre>{logs}</pre></div>")
+            download = "<div class='actions'><a class='button' href='/logs/download'>Download full log file</a><span class='muted'>File: logs/executor.log</span></div>"
+            return self.send_page('Logs', f"<div class='box'>{download}<pre>{logs}</pre></div>")
         if self.path.startswith('/admin'):
             vals = read_env(); body = "<form method='post'>"
             for key in vals:
