@@ -5,7 +5,7 @@ from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.main import main as executor_main
+from raspberry_executor.main_spot_oco import main as executor_main
 from raspberry_executor.web_local import run_web
 
 logger = setup_logging("raspberry-executor")
