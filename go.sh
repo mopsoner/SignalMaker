@@ -22,6 +22,9 @@ if [ ! -f .env ]; then
   cp .env.raspberry.example .env
 fi
 
+echo "Initializing SQLite database..."
+python -m raspberry_executor.install_sqlite
+
 echo "Running Raspberry Binance smoke test..."
 python -m raspberry_executor.binance_smoke_test
 
