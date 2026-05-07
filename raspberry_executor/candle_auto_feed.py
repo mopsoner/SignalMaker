@@ -93,13 +93,40 @@ def _clear_retry(queue: dict[str, dict], symbol: str, interval: str) -> None:
     queue.pop(_pair_key(symbol, interval), None)
 
 
+def _exchange_info(base_url: str) -> dict:
+    response = requests.get(f"{base_url.rstrip('/')}/api/v3/exchangeInfo", timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def binance_request_weight_limit_per_minute(base_url: str) -> int:
+    data = _exchange_info(base_url)
+    for item in data.get("rateLimits", []):
+        if (
+            item.get("rateLimitType") == "REQUEST_WEIGHT"
+            and item.get("interval") == "MINUTE"
+            and int(item.get("intervalNum", 1)) == 1
+        ):
+            return int(item.get("limit"))
+    return 6000
+
+
+def effective_binance_requests_per_minute(base_url: str, env: dict[str, str]) -> tuple[int, int, float]:
+    doc_limit = binance_request_weight_limit_per_minute(base_url)
+    ratio = float(env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60") or "0.60")
+    ratio = min(max(ratio, 0.05), 0.95)
+    override = int(env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0") or "0")
+    computed = max(1, int(doc_limit * ratio))
+    if override > 0:
+        return min(override, computed), doc_limit, ratio
+    return computed, doc_limit, ratio
+
+
 def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
     quotes = {quote.upper() for quote in quote_assets if quote.strip()}
     if not quotes:
         return []
-    response = requests.get(f"{base_url.rstrip('/')}/api/v3/exchangeInfo", timeout=20)
-    response.raise_for_status()
-    data = response.json()
+    data = _exchange_info(base_url)
     symbols = []
     for row in data.get("symbols", []):
         symbol = str(row.get("symbol", "")).upper()
@@ -166,7 +193,7 @@ def run_once() -> dict:
     intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
     limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
     max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
-    requests_per_minute = max(1, int(env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "300") or "300"))
+    requests_per_minute, binance_doc_weight_limit_1m, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
     retry_queue = _load_retry_queue()
 
     if not symbols:
@@ -211,7 +238,9 @@ def run_once() -> dict:
         "quote_assets": quote_assets,
         "intervals": intervals,
         "max_workers": worker_count,
-        "binance_requests_per_minute": requests_per_minute,
+        "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m,
+        "binance_request_weight_ratio": weight_ratio,
+        "binance_effective_requests_per_minute": requests_per_minute,
         "pushed": pushed,
         "skipped": skipped,
         "errors": errors,
@@ -229,13 +258,19 @@ def run_loop() -> None:
         return
 
     poll_seconds = int(env.get("CANDLE_FEED_POLL_SECONDS", "60") or "60")
+    try:
+        doc_limit = binance_request_weight_limit_per_minute(load_settings().binance_base_url)
+    except Exception:
+        doc_limit = 6000
     logger.info(
-        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_rpm=%s",
+        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s",
         env.get("QUOTE_ASSETS", "USDT"),
         env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
         poll_seconds,
         env.get("CANDLE_FEED_MAX_WORKERS", "3"),
-        env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "300"),
+        doc_limit,
+        env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60"),
+        env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0"),
     )
 
     while True:
