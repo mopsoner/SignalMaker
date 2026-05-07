@@ -17,7 +17,7 @@ def dashboard():
     open_count = len(state.open_positions())
     closed_count = len(state.closed_positions())
     events = state.events()
-    error_count = len([e for e in events[-100:] if 'error' in str(e.get('event_type', '')).lower()])
+    error_count = len([e for e in events[-100:] if str(e.get('event_type', '')).endswith('error')])
     logs = '\n'.join(escape(x) for x in tail_logs(50))
     html = """
     <h1>Raspberry 360 Dashboard</h1>
@@ -48,37 +48,62 @@ def dashboard():
     return html
 
 
-def event_message(event):
-    event_type = str(event.get('event_type', ''))
-    payload = event.get('payload') or {}
-    text = str(payload)
-    low = (event_type + ' ' + text).lower()
-    if 'brokenpipeerror' in low or 'broken pipe' in low:
-        return 'Browser/client disconnected while the UI was writing. Not a trading error.'
-    if isinstance(payload, dict) and payload.get('error'):
-        return str(payload.get('error'))[:220]
-    if isinstance(payload, dict) and isinstance(payload.get('candidate'), dict):
-        cand = payload.get('candidate')
-        return '{} {} stop={} target={}'.format(cand.get('symbol',''), cand.get('side',''), cand.get('stop_price','-'), cand.get('target_price','-'))
-    return text[:220]
+def raw_payload(event):
+    return str(event.get('payload') or {})
 
 
 def event_level(event):
-    low = (str(event.get('event_type','')) + ' ' + str(event.get('payload') or {})).lower()
-    if 'brokenpipeerror' in low or 'broken pipe' in low:
+    event_type = str(event.get('event_type', ''))
+    text = (event_type + ' ' + raw_payload(event)).lower()
+    if event_type == 'position_opened':
+        return 'ok', 'Opened'
+    if event_type == 'take_profit_filled':
+        return 'ok', 'Take profit'
+    if event_type == 'stop_loss_filled':
+        return 'warn', 'Stop loss'
+    if event_type == 'execution_error':
+        return 'bad', 'Execution error'
+    if 'brokenpipeerror' in text or 'broken pipe' in text:
         return 'warn', 'UI warning'
-    if 'error' in low or 'failed' in low or 'exception' in low:
+    if 'error' in event_type or 'failed' in event_type:
         return 'bad', 'Error'
-    if 'opened' in low or 'executed' in low or 'filled' in low:
-        return 'ok', 'Trade'
     return '', 'Info'
+
+
+def event_message(event):
+    event_type = str(event.get('event_type', ''))
+    payload = event.get('payload') or {}
+    text = raw_payload(event)
+    low = (event_type + ' ' + text).lower()
+    if event_type == 'position_opened' and isinstance(payload, dict):
+        return 'Opened {} {} qty={} entry={} stop={} target={}'.format(payload.get('execution_symbol',''), payload.get('side',''), payload.get('quantity','-'), payload.get('entry_price','-'), payload.get('stop_price','-'), payload.get('target_price','-'))
+    if event_type == 'stop_loss_filled':
+        return 'Stop loss filled. Position closed by Binance OCO.'
+    if event_type == 'take_profit_filled':
+        return 'Take profit filled. Position closed by Binance OCO.'
+    if 'brokenpipeerror' in low or 'broken pipe' in low:
+        return 'Browser/client disconnected while the UI was writing. Not a trading error.'
+    if 'insufficient balance' in low:
+        return 'Insufficient balance. Binance refused the order because available quote/base balance was too low or already reserved.'
+    if 'invalid_oco_price_order' in low:
+        return 'OCO rejected before submit: target/current/stop order is not valid anymore. Price moved after entry or stop is above current.'
+    if 'not all sent parameters were read' in low:
+        return 'Old OCO parameter format was rejected by Binance. This is from before the OCO parameter fix.'
+    if 'side=sell&type=market' in low:
+        return 'Old spot short attempt: SELL MARKET on Spot. Shorts are now blocked by ALLOW_SHORTS=false.'
+    if isinstance(payload, dict) and payload.get('error'):
+        return str(payload.get('error'))[:240]
+    if isinstance(payload, dict) and isinstance(payload.get('candidate'), dict):
+        cand = payload.get('candidate')
+        return '{} {} stop={} target={}'.format(cand.get('symbol',''), cand.get('side',''), cand.get('stop_price','-'), cand.get('target_price','-'))
+    return text[:240]
 
 
 def events_page():
     rows = list(reversed(StateStore().events()[-200:]))
     if not rows:
         return '<h1>Local Events</h1><div class="box"><p>No local events.</p></div>'
-    html = '<h1>Local Events</h1><div class="box"><p class="muted">Readable history. BrokenPipe = browser disconnected, not a trade failure.</p><table><tr><th>Level</th><th>Time</th><th>Candidate</th><th>Event</th><th>Message</th></tr>'
+    html = '<h1>Local Events</h1><div class="box"><p class="muted">Readable history. BrokenPipe = browser disconnected, not a trade failure. Old errors may be from previous code versions.</p><table><tr><th>Level</th><th>Time</th><th>Candidate</th><th>Event</th><th>Message</th></tr>'
     for row in rows:
         klass, label = event_level(row)
         html += '<tr><td><span class="pill {}">{}</span></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(klass, c(label), c(row.get('timestamp')), c(row.get('candidate_id')), c(row.get('event_type')), c(event_message(row)))
