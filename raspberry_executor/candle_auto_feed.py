@@ -1,7 +1,8 @@
 import json
 import os
+import threading
 import time
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -13,6 +14,22 @@ from raspberry_executor.signalmaker_client import SignalMakerClient
 
 logger = setup_logging("raspberry-candle-feed")
 RETRY_PATH = ROOT / "raspberry_executor" / "candle_retry_queue.json"
+
+
+class RateLimiter:
+    def __init__(self, calls_per_minute: int) -> None:
+        self.calls_per_minute = max(1, int(calls_per_minute))
+        self.min_interval = 60.0 / float(self.calls_per_minute)
+        self.lock = threading.Lock()
+        self.next_allowed_at = 0.0
+
+    def wait(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            if now < self.next_allowed_at:
+                time.sleep(self.next_allowed_at - now)
+                now = time.monotonic()
+            self.next_allowed_at = now + self.min_interval
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
@@ -114,8 +131,31 @@ def _start_time_from_latest(latest: dict | None) -> int | None:
     return int(close_time) + 1
 
 
+def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, symbol: str, interval: str, limit: int) -> dict:
+    latest = client.latest_candle(symbol, interval)
+    start_time = _start_time_from_latest(latest)
+    limiter.wait()
+    candles = fetch_klines(settings.binance_base_url, symbol, interval, limit, start_time=start_time)
+    if not candles:
+        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_close_time": latest.get("close_time") if latest else None}
+    if start_time is not None:
+        candles = [candle for candle in candles if int(candle["open_time"]) > int(latest["open_time"])]
+    if not candles:
+        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "already_up_to_date", "latest_close_time": latest.get("close_time") if latest else None}
+    response = client.post_candles(symbol, interval, candles, source=settings.gateway_id)
+    return {
+        "kind": "pushed",
+        "symbol": symbol,
+        "interval": interval,
+        "count": len(candles),
+        "start_time": start_time,
+        "upserted": response.get("upserted"),
+    }
+
+
 def run_once() -> dict:
     ensure_env()
+    env = read_env()
     settings = load_settings()
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     endpoint_check = client.check_candle_ingest_endpoint()
@@ -123,8 +163,10 @@ def run_once() -> dict:
         return {"status": "blocked", "endpoint_check": endpoint_check, "pushed": [], "skipped": [], "errors": []}
 
     symbols, quote_assets = resolve_feed_symbols(settings)
-    intervals = _csv(os.getenv("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
-    limit = int(os.getenv("CANDLE_FEED_LIMIT", "120"))
+    intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
+    limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
+    max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
+    requests_per_minute = max(1, int(env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "300") or "300"))
     retry_queue = _load_retry_queue()
 
     if not symbols:
@@ -133,36 +175,34 @@ def run_once() -> dict:
     pushed = []
     skipped = []
     errors = []
+    limiter = RateLimiter(requests_per_minute)
     processed_pairs = _retry_items_first(symbols, intervals, retry_queue)
+    worker_count = min(max_workers, max(1, len(processed_pairs)))
 
-    for symbol, interval in processed_pairs:
-        try:
-            latest = client.latest_candle(symbol, interval)
-            start_time = _start_time_from_latest(latest)
-            candles = fetch_klines(settings.binance_base_url, symbol, interval, limit, start_time=start_time)
-            if not candles:
-                skipped.append({"symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_close_time": latest.get("close_time") if latest else None})
-                _clear_retry(retry_queue, symbol, interval)
-                continue
-            if start_time is not None:
-                candles = [candle for candle in candles if int(candle["open_time"]) > int(latest["open_time"])]
-            if not candles:
-                skipped.append({"symbol": symbol, "interval": interval, "reason": "already_up_to_date", "latest_close_time": latest.get("close_time") if latest else None})
-                _clear_retry(retry_queue, symbol, interval)
-                continue
-            response = client.post_candles(symbol, interval, candles, source=settings.gateway_id)
-            pushed.append({
-                "symbol": symbol,
-                "interval": interval,
-                "count": len(candles),
-                "start_time": start_time,
-                "upserted": response.get("upserted"),
-                "was_retry": _pair_key(symbol, interval) in retry_queue,
-            })
-            _clear_retry(retry_queue, symbol, interval)
-        except Exception as exc:
-            _mark_retry(retry_queue, symbol, interval, str(exc))
-            errors.append({"symbol": symbol, "interval": interval, "error": str(exc), "retry_queued": True})
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {
+            pool.submit(_process_pair, settings, client, limiter, symbol, interval, limit): (symbol, interval)
+            for symbol, interval in processed_pairs
+        }
+        for future in as_completed(futures):
+            symbol, interval = futures[future]
+            try:
+                result = future.result()
+                if result.get("kind") == "pushed":
+                    result.pop("kind", None)
+                    result["was_retry"] = _pair_key(symbol, interval) in retry_queue
+                    pushed.append(result)
+                    _clear_retry(retry_queue, symbol, interval)
+                else:
+                    result.pop("kind", None)
+                    skipped.append(result)
+                    _clear_retry(retry_queue, symbol, interval)
+            except Exception as exc:
+                error_text = str(exc)
+                if "429" in error_text or "418" in error_text:
+                    logger.warning("Binance rate-limit response seen; reducing effective pressure is recommended error=%s", error_text)
+                _mark_retry(retry_queue, symbol, interval, error_text)
+                errors.append({"symbol": symbol, "interval": interval, "error": error_text, "retry_queued": True})
 
     _save_retry_queue(retry_queue)
     return {
@@ -170,6 +210,8 @@ def run_once() -> dict:
         "symbol_count": len(symbols),
         "quote_assets": quote_assets,
         "intervals": intervals,
+        "max_workers": worker_count,
+        "binance_requests_per_minute": requests_per_minute,
         "pushed": pushed,
         "skipped": skipped,
         "errors": errors,
@@ -180,17 +222,20 @@ def run_once() -> dict:
 
 def run_loop() -> None:
     ensure_env()
-    enabled = _bool(os.getenv("CANDLE_FEED_ENABLED"), default=True)
+    env = read_env()
+    enabled = _bool(env.get("CANDLE_FEED_ENABLED"), default=True)
     if not enabled:
         logger.info("candle feed disabled by CANDLE_FEED_ENABLED=false")
         return
 
-    poll_seconds = int(os.getenv("CANDLE_FEED_POLL_SECONDS", "60"))
+    poll_seconds = int(env.get("CANDLE_FEED_POLL_SECONDS", "60") or "60")
     logger.info(
-        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s",
-        os.getenv("QUOTE_ASSETS", "USDT"),
-        os.getenv("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
+        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_rpm=%s",
+        env.get("QUOTE_ASSETS", "USDT"),
+        env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
         poll_seconds,
+        env.get("CANDLE_FEED_MAX_WORKERS", "3"),
+        env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "300"),
     )
 
     while True:
