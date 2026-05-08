@@ -64,23 +64,15 @@ class SpotOrderManager:
             "newOrderRespType": "FULL",
         })
 
-    def open_long_with_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
+    def create_exit_oco_for_open_long(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
         current_price = self.binance.current_price(symbol)
-        quantity = self.rules.quantity_from_quote(symbol, quote_amount, current_price, market=True)
-        entry = self.binance.place_market_entry(symbol, "long", quantity)
-        entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
-        if entry_price is None:
-            raise RuntimeError("unable_to_determine_entry_fill_price")
-        executed_qty = self._executed_qty(entry, quantity)
-        exit_qty = self.rules.normalize_exit_quantity(symbol, executed_qty)
-
-        current_after_entry = self.binance.current_price(symbol)
-        if not (float(target_price) > current_after_entry > float(stop_price)):
-            raise RuntimeError(f"invalid_oco_price_order symbol={symbol} target={target_price} current={current_after_entry} stop={stop_price}")
+        if not (float(target_price) > current_price > float(stop_price)):
+            raise RuntimeError(f"invalid_oco_price_order symbol={symbol} target={target_price} current={current_price} stop={stop_price}")
         if not self.rules.oco_allowed(symbol):
             raise RuntimeError(f"oco_not_allowed_for_symbol:{symbol}")
 
+        exit_qty = self.rules.normalize_exit_quantity(symbol, quantity)
         tp = self.rules.normalize_exit_price(symbol, target_price)
         stop = self.rules.normalize_exit_price(symbol, stop_price)
         stop_limit = self.rules.normalize_exit_price(symbol, float(stop) * 0.999)
@@ -90,13 +82,37 @@ class SpotOrderManager:
         tp_order_id, sl_order_id = self._oco_order_ids(oco)
         return {
             "symbol": symbol,
-            "side": "long",
             "quantity": exit_qty,
-            "entry_price": float(entry_price),
-            "entry_order_id": self._order_id(entry),
             "oco_order_list_id": oco.get("orderListId"),
             "tp_order_id": tp_order_id,
             "sl_order_id": sl_order_id,
-            "entry_payload": entry,
             "oco_payload": oco,
+        }
+
+    def open_long_with_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
+        symbol = symbol.upper()
+        current_price = self.binance.current_price(symbol)
+        quantity = self.rules.quantity_from_quote(symbol, quote_amount, current_price, market=True)
+        entry = self.binance.place_market_entry(symbol, "long", quantity)
+        entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
+        if entry_price is None:
+            raise RuntimeError("unable_to_determine_entry_fill_price")
+        executed_qty = self._executed_qty(entry, quantity)
+        oco_result = self.create_exit_oco_for_open_long(
+            symbol=symbol,
+            quantity=executed_qty,
+            target_price=target_price,
+            stop_price=stop_price,
+        )
+        return {
+            "symbol": symbol,
+            "side": "long",
+            "quantity": oco_result["quantity"],
+            "entry_price": float(entry_price),
+            "entry_order_id": self._order_id(entry),
+            "oco_order_list_id": oco_result.get("oco_order_list_id"),
+            "tp_order_id": oco_result.get("tp_order_id"),
+            "sl_order_id": oco_result.get("sl_order_id"),
+            "entry_payload": entry,
+            "oco_payload": oco_result.get("oco_payload") or {},
         }
