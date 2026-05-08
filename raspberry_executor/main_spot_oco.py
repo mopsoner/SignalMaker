@@ -29,7 +29,7 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
             tp_status = binance.get_order(symbol, tp_order_id) if tp_order_id else None
             sl_status = binance.get_order(symbol, sl_order_id) if sl_order_id else None
         except Exception as exc:
-            logger.warning("order status failed candidate=%s error=%s", candidate_id, exc)
+            logger.warning("order status failed candidate=%s error=%s", candidate_id, str(exc))
             continue
 
         if tp_status and str(tp_status.get("status", "")).upper() == "FILLED":
@@ -91,8 +91,9 @@ def execute_candidate(settings, order_manager: SpotOrderManager, state: StateSto
             order_result.get("oco_order_list_id"),
         )
     except Exception as exc:
-        logger.exception("execution failed candidate=%s", candidate_id)
-        state.add_event(candidate_id, "execution_error", {"error": str(exc), "candidate": candidate})
+        error_text = str(exc)
+        logger.error("execution failed candidate=%s error=%s", candidate_id, error_text)
+        state.add_event(candidate_id, "execution_error", {"error": error_text, "candidate": candidate})
 
 
 def main() -> None:
@@ -121,8 +122,8 @@ def main() -> None:
             for candidate in candidates:
                 execute_candidate(settings, order_manager, state, guard, candidate)
             report_final_events(binance, state)
-        except Exception:
-            logger.exception("main loop error")
+        except Exception as exc:
+            logger.error("main loop error=%s", str(exc))
         time.sleep(settings.poll_seconds)
 
 
