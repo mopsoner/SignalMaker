@@ -13,27 +13,30 @@ class StateStore:
 
     def already_executed(self, candidate_id: str) -> bool:
         with connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM executed_candidates WHERE candidate_id=?",
-                (candidate_id,),
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM executed_candidates WHERE candidate_id=?", (candidate_id,)).fetchone()
             return row is not None
 
     def mark_executed(self, candidate_id: str) -> None:
         with connect() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO executed_candidates(candidate_id, executed_at) VALUES(?, ?)",
-                (candidate_id, self.now()),
-            )
+            conn.execute("INSERT OR IGNORE INTO executed_candidates(candidate_id, executed_at) VALUES(?, ?)", (candidate_id, self.now()))
 
     def add_open_position(self, candidate_id: str, payload: dict[str, Any]) -> None:
         payload = {**payload, "status": "open", "opened_at": payload.get("opened_at") or self.now()}
         with connect() as conn:
             upsert_position(conn, candidate_id, "open", payload)
-            conn.execute(
-                "INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)",
-                (candidate_id, "position_opened", self.now(), dumps(payload)),
-            )
+            conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, "position_opened", self.now(), dumps(payload)))
+
+    def update_open_position(self, candidate_id: str, updates: dict[str, Any], event_type: str | None = None) -> None:
+        with connect() as conn:
+            row = conn.execute("SELECT payload_json FROM positions WHERE candidate_id=? AND status='open'", (candidate_id,)).fetchone()
+            if row is None:
+                return
+            position = loads(row["payload_json"], {})
+            position.update(updates)
+            position["status"] = "open"
+            upsert_position(conn, candidate_id, "open", position)
+            if event_type:
+                conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, event_type, self.now(), dumps(updates)))
 
     def close_position(self, candidate_id: str, reason: str, payload: dict[str, Any] | None = None) -> None:
         with connect() as conn:
@@ -41,18 +44,9 @@ class StateStore:
             if row is None:
                 return
             position = loads(row["payload_json"], {})
-            position = {
-                **position,
-                "status": "closed",
-                "close_reason": reason,
-                "closed_at": self.now(),
-                "close_payload": payload or {},
-            }
+            position = {**position, "status": "closed", "close_reason": reason, "closed_at": self.now(), "close_payload": payload or {}}
             upsert_position(conn, candidate_id, "closed", position)
-            conn.execute(
-                "INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)",
-                (candidate_id, reason, self.now(), dumps(payload or {})),
-            )
+            conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, reason, self.now(), dumps(payload or {})))
 
     def remove_open_position(self, candidate_id: str) -> None:
         with connect() as conn:
@@ -93,20 +87,9 @@ class StateStore:
 
     def add_event(self, candidate_id: str, event_type: str, payload: dict[str, Any] | None = None, *, save: bool = True) -> None:
         with connect() as conn:
-            conn.execute(
-                "INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)",
-                (candidate_id, event_type, self.now(), dumps(payload or {})),
-            )
+            conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, event_type, self.now(), dumps(payload or {})))
 
     def events(self) -> list[dict[str, Any]]:
         with connect() as conn:
             rows = conn.execute("SELECT * FROM events ORDER BY id ASC LIMIT 1000").fetchall()
-            return [
-                {
-                    "candidate_id": row["candidate_id"],
-                    "event_type": row["event_type"],
-                    "timestamp": row["timestamp"],
-                    "payload": loads(row["payload_json"], {}),
-                }
-                for row in rows
-            ]
+            return [{"candidate_id": row["candidate_id"], "event_type": row["event_type"], "timestamp": row["timestamp"], "payload": loads(row["payload_json"], {})} for row in rows]
