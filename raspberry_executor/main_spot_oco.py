@@ -1,3 +1,4 @@
+import os
 import time
 
 from raspberry_executor.binance_client import BinanceClient
@@ -10,6 +11,13 @@ from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-executor")
+
+
+def candidate_fetch_limit() -> int:
+    try:
+        return max(10, int(os.getenv("CANDIDATE_FETCH_LIMIT", "100") or "100"))
+    except Exception:
+        return 100
 
 
 def report_final_events(binance: BinanceClient, state: StateStore) -> None:
@@ -37,12 +45,15 @@ def execute_candidate(settings, order_manager: SpotOrderManager, state: StateSto
     accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
     if not accepted:
         logger.info("skip candidate=%s reason=%s", candidate_id, reason)
+        state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
         return
 
     execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
     if side != "long":
-        logger.info("skip candidate=%s reason=spot_executor_only_supports_long_oco", candidate_id)
+        reason = "spot_executor_only_supports_long_oco"
+        logger.info("skip candidate=%s reason=%s", candidate_id, reason)
+        state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
         return
 
     try:
@@ -92,19 +103,21 @@ def main() -> None:
     order_manager = SpotOrderManager(binance, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds, allow_shorts=settings.allow_shorts)
+    fetch_limit = candidate_fetch_limit()
 
     logger.info(
-        "Raspberry spot OCO executor started gateway_id=%s dry_run=%s quote_assets=%s allow_shorts=%s order_quote_amount=%s exits=oco",
+        "Raspberry spot OCO executor started gateway_id=%s dry_run=%s quote_assets=%s allow_shorts=%s order_quote_amount=%s exits=oco candidate_fetch_limit=%s",
         settings.gateway_id,
         settings.dry_run,
         settings.quote_assets,
         settings.allow_shorts,
         settings.order_quote_amount,
+        fetch_limit,
     )
     while True:
         try:
-            candidates = signalmaker.get_open_candidates(limit=10)
-            logger.info("candidates fetched count=%s", len(candidates))
+            candidates = signalmaker.get_open_candidates(limit=fetch_limit)
+            logger.info("candidates fetched count=%s ids=%s", len(candidates), [c.get("candidate_id") for c in candidates])
             for candidate in candidates:
                 execute_candidate(settings, order_manager, state, guard, candidate)
             report_final_events(binance, state)
