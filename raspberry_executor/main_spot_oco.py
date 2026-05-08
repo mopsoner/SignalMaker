@@ -20,11 +20,52 @@ def candidate_fetch_limit() -> int:
         return 100
 
 
+def repair_missing_oco(order_manager: SpotOrderManager, state: StateStore) -> None:
+    for candidate_id, position in list(state.open_positions().items()):
+        side = str(position.get("side") or "").lower()
+        if side != "long":
+            continue
+        if position.get("oco_order_list_id") and position.get("tp_order_id") and position.get("sl_order_id"):
+            continue
+        symbol = position.get("execution_symbol") or position.get("signal_symbol")
+        quantity = position.get("quantity")
+        target_price = position.get("target_price")
+        stop_price = position.get("stop_price")
+        if not symbol or not quantity or not target_price or not stop_price:
+            reason = "missing_symbol_quantity_target_or_stop"
+            logger.warning("oco repair skipped candidate=%s reason=%s", candidate_id, reason)
+            state.add_event(candidate_id, "oco_repair_skipped", {"reason": reason, "position": position})
+            continue
+        try:
+            logger.warning("oco missing; repairing candidate=%s symbol=%s qty=%s target=%s stop=%s", candidate_id, symbol, quantity, target_price, stop_price)
+            result = order_manager.create_exit_oco_for_open_long(
+                symbol=str(symbol),
+                quantity=quantity,
+                target_price=float(target_price),
+                stop_price=float(stop_price),
+            )
+            updates = {
+                "quantity": result.get("quantity") or quantity,
+                "oco_order_list_id": result.get("oco_order_list_id"),
+                "tp_order_id": result.get("tp_order_id"),
+                "sl_order_id": result.get("sl_order_id"),
+                "oco_payload": result.get("oco_payload") or {},
+            }
+            state.update_open_position(candidate_id, updates, event_type="oco_repaired")
+            logger.info("oco repaired candidate=%s oco_order_list_id=%s tp=%s sl=%s", candidate_id, updates.get("oco_order_list_id"), updates.get("tp_order_id"), updates.get("sl_order_id"))
+        except Exception as exc:
+            error_text = str(exc)
+            logger.error("oco repair failed candidate=%s error=%s", candidate_id, error_text)
+            state.add_event(candidate_id, "oco_repair_failed", {"error": error_text, "position": position})
+
+
 def report_final_events(binance: BinanceClient, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         symbol = position["execution_symbol"]
         tp_order_id = position.get("tp_order_id")
         sl_order_id = position.get("sl_order_id")
+        if not tp_order_id or not sl_order_id:
+            continue
         try:
             tp_status = binance.get_order(symbol, tp_order_id) if tp_order_id else None
             sl_status = binance.get_order(symbol, sl_order_id) if sl_order_id else None
@@ -83,13 +124,7 @@ def execute_candidate(settings, order_manager: SpotOrderManager, state: StateSto
             "entry_payload": order_result.get("entry_payload") or {},
             "oco_payload": order_result.get("oco_payload") or {},
         })
-        logger.info(
-            "local position opened candidate=%s symbol=%s qty=%s oco_order_list_id=%s",
-            candidate_id,
-            execution_symbol,
-            order_result["quantity"],
-            order_result.get("oco_order_list_id"),
-        )
+        logger.info("local position opened candidate=%s symbol=%s qty=%s oco_order_list_id=%s", candidate_id, execution_symbol, order_result["quantity"], order_result.get("oco_order_list_id"))
     except Exception as exc:
         error_text = str(exc)
         logger.error("execution failed candidate=%s error=%s", candidate_id, error_text)
@@ -121,6 +156,7 @@ def main() -> None:
             logger.info("candidates fetched count=%s ids=%s", len(candidates), [c.get("candidate_id") for c in candidates])
             for candidate in candidates:
                 execute_candidate(settings, order_manager, state, guard, candidate)
+            repair_missing_oco(order_manager, state)
             report_final_events(binance, state)
         except Exception as exc:
             logger.error("main loop error=%s", str(exc))
