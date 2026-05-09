@@ -46,6 +46,18 @@ class BinanceClient:
         response.raise_for_status()
         return float(response.json()["price"])
 
+    def account(self) -> dict:
+        return self._signed("GET", "/api/v3/account")
+
+    def free_balance(self, asset: str) -> float:
+        if self.dry_run:
+            return 0.0
+        wanted = asset.upper()
+        for row in self.account().get("balances") or []:
+            if str(row.get("asset", "")).upper() == wanted:
+                return float(row.get("free", 0) or 0)
+        return 0.0
+
     @staticmethod
     def average_fill_price(order_payload: dict[str, Any], fallback: float | None = None) -> float | None:
         fills = order_payload.get("fills") or []
@@ -60,7 +72,7 @@ class BinanceClient:
             return quote_qty / executed_qty
         return fallback
 
-    def place_market_entry(self, symbol: str, side: str, quantity: float) -> dict:
+    def place_market_entry(self, symbol: str, side: str, quantity: float | str) -> dict:
         side_upper = "BUY" if side.lower() == "long" else "SELL"
         if self.dry_run:
             price = self.current_price(symbol)
