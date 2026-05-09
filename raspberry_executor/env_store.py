@@ -10,7 +10,6 @@ DEFAULTS = {
     "POLL_SECONDS": "15",
     "DRY_RUN": "true",
     "QUOTE_ASSETS": "USDT",
-    "ALLOW_SHORTS": "false",
     "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "900",
     "BINANCE_BASE_URL": "https://api.binance.com",
@@ -35,6 +34,7 @@ LEGACY_KEYS = {
     "CANDLE_FEED_QUOTES",
     "CANDLE_FEED_QUOTE_ASSETS",
     "CANDLE_FEED_SYMBOLS",
+    "ALLOW_SHORTS",
 }
 
 SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET_KEY", "ADMIN_PASSWORD"}
@@ -91,7 +91,6 @@ def write_env(values: dict[str, str]) -> None:
         f"POLL_SECONDS={merged['POLL_SECONDS']}",
         f"DRY_RUN={merged['DRY_RUN']}",
         f"QUOTE_ASSETS={merged['QUOTE_ASSETS']}",
-        f"ALLOW_SHORTS={merged['ALLOW_SHORTS']}",
         f"ORDER_QUOTE_AMOUNT={merged['ORDER_QUOTE_AMOUNT']}",
         f"MAX_CANDIDATE_AGE_SECONDS={merged['MAX_CANDIDATE_AGE_SECONDS']}",
         "",
