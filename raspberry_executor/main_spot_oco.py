@@ -92,7 +92,7 @@ def execute_candidate(settings, order_manager: SpotOrderManager, state: StateSto
     execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
     if side != "long":
-        reason = "spot_executor_only_supports_long_oco"
+        reason = "spot_short_signal_not_implemented_yet_sell_existing_balance_next"
         logger.info("skip candidate=%s reason=%s", candidate_id, reason)
         state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
         return
@@ -138,15 +138,14 @@ def main() -> None:
     rules = BinanceSymbolRules(settings.binance_base_url)
     order_manager = SpotOrderManager(binance, rules)
     state = StateStore()
-    guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds, allow_shorts=settings.allow_shorts)
+    guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     fetch_limit = candidate_fetch_limit()
 
     logger.info(
-        "Raspberry spot OCO executor started gateway_id=%s dry_run=%s quote_assets=%s allow_shorts=%s order_quote_amount=%s exits=oco candidate_fetch_limit=%s",
+        "Raspberry spot OCO executor started gateway_id=%s dry_run=%s quote_assets=%s order_quote_amount=%s exits=oco candidate_fetch_limit=%s",
         settings.gateway_id,
         settings.dry_run,
         settings.quote_assets,
-        settings.allow_shorts,
         settings.order_quote_amount,
         fetch_limit,
     )
