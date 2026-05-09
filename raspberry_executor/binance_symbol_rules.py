@@ -24,6 +24,9 @@ class BinanceSymbolRules:
         self._cache[symbol] = rows[0]
         return rows[0]
 
+    def base_asset(self, symbol: str) -> str:
+        return str(self.symbol_info(symbol).get("baseAsset") or "").upper()
+
     def quantity_from_quote(self, symbol: str, quote_amount: float, current_price: float, *, market: bool = True) -> str:
         info = self.symbol_info(symbol)
         quantity = normalize_quantity(symbol.upper(), info, float(quote_amount) / float(current_price), market=market)
@@ -33,6 +36,10 @@ class BinanceSymbolRules:
     def normalize_exit_quantity(self, symbol: str, quantity: float | str) -> str:
         info = self.symbol_info(symbol)
         return normalize_quantity(symbol.upper(), info, quantity, market=False)
+
+    def normalize_market_quantity(self, symbol: str, quantity: float | str) -> str:
+        info = self.symbol_info(symbol)
+        return normalize_quantity(symbol.upper(), info, quantity, market=True)
 
     def normalize_exit_price(self, symbol: str, price: float) -> str:
         info = self.symbol_info(symbol)
