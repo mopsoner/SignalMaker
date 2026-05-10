@@ -5,6 +5,7 @@ from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
+from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.spot_executor_v2 import main as executor_main
 from raspberry_executor.web_dashboard import run_web
 
@@ -22,6 +23,9 @@ def main() -> None:
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")
+
+    threading.Thread(target=order_monitor_loop, daemon=True).start()
+    logger.info("order monitor thread started for Binance position sync")
 
     executor_main()
 
