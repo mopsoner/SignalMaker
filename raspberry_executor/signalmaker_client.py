@@ -24,6 +24,25 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
         return data
 
+    def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
+        params = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        for status in ("all", "open"):
+            try:
+                response = self.session.get(
+                    self._url("/api/v1/trade-candidates"),
+                    params={**params, "status": status},
+                    timeout=15,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, list):
+                    return data
+            except Exception:
+                continue
+        return []
+
     def check_candle_ingest_endpoint(self) -> dict:
         probe = {
             "source": f"{self.gateway_id}-probe",
