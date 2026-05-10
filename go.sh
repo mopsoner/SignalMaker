@@ -36,4 +36,4 @@ echo "Admin:  http://$(hostname -I | awk '{print $1}'):8090/admin"
 echo "Logs:   http://$(hostname -I | awk '{print $1}'):8090/logs"
 echo ""
 
-python -m raspberry_executor.run_all
+python -m raspberry_executor.run_all_v2
