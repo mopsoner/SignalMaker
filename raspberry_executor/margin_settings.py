@@ -1,0 +1,85 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = ROOT / ".env"
+
+DEFAULT_MARGIN_SETTINGS = {
+    "MARGIN_MODE_ENABLED": "false",
+    "MARGIN_DRY_RUN": "true",
+    "MARGIN_ISOLATED": "true",
+    "MARGIN_MAX_MULTIPLIER": "5",
+    "MARGIN_TRANSFER_SPOT_BALANCE": "true",
+}
+
+
+def _parse_env_lines() -> tuple[list[str], dict[str, str]]:
+    if not ENV_PATH.exists():
+        ENV_PATH.write_text("")
+    lines = ENV_PATH.read_text().splitlines()
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip()
+    return lines, values
+
+
+def read_margin_settings() -> dict[str, str]:
+    _, values = _parse_env_lines()
+    out = DEFAULT_MARGIN_SETTINGS.copy()
+    out.update({key: values[key] for key in DEFAULT_MARGIN_SETTINGS if key in values})
+    return out
+
+
+def write_margin_settings(values: dict[str, str]) -> None:
+    lines, current = _parse_env_lines()
+    merged = read_margin_settings()
+    for key in DEFAULT_MARGIN_SETTINGS:
+        if key in values:
+            merged[key] = str(values[key]).strip()
+
+    existing_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in DEFAULT_MARGIN_SETTINGS:
+                new_lines.append(f"{key}={merged[key]}")
+                existing_keys.add(key)
+                continue
+        new_lines.append(line)
+
+    missing = [key for key in DEFAULT_MARGIN_SETTINGS if key not in existing_keys]
+    if missing:
+        if new_lines and new_lines[-1].strip():
+            new_lines.append("")
+        new_lines.append("# Margin mode")
+        for key in missing:
+            new_lines.append(f"{key}={merged[key]}")
+    ENV_PATH.write_text("\n".join(new_lines) + "\n")
+
+
+def margin_enabled() -> bool:
+    return read_margin_settings().get("MARGIN_MODE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def margin_dry_run() -> bool:
+    return read_margin_settings().get("MARGIN_DRY_RUN", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def margin_isolated() -> bool:
+    return read_margin_settings().get("MARGIN_ISOLATED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def margin_multiplier() -> float:
+    try:
+        return max(1.0, float(read_margin_settings().get("MARGIN_MAX_MULTIPLIER", "5") or "5"))
+    except Exception:
+        return 5.0
+
+
+def margin_transfer_spot_balance() -> bool:
+    return read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE", "true").lower() in {"1", "true", "yes", "on"}
