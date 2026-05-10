@@ -80,13 +80,7 @@ def _retry_items_first(symbols: list[str], intervals: list[str], queue: dict[str
 def _mark_retry(queue: dict[str, dict], symbol: str, interval: str, error: str) -> None:
     key = _pair_key(symbol, interval)
     current = queue.get(key, {})
-    queue[key] = {
-        "symbol": symbol.upper(),
-        "interval": interval,
-        "attempts": int(current.get("attempts", 0)) + 1,
-        "last_error": str(error)[-500:],
-        "last_error_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
+    queue[key] = {"symbol": symbol.upper(), "interval": interval, "attempts": int(current.get("attempts", 0)) + 1, "last_error": str(error)[-500:], "last_error_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
 def _clear_retry(queue: dict[str, dict], symbol: str, interval: str) -> None:
@@ -99,9 +93,11 @@ def _exchange_info(base_url: str) -> dict:
     return response.json()
 
 
-def _public_get(base_url: str, path: str, params: dict | None = None) -> dict | list:
-    response = requests.get(f"{base_url.rstrip('/')}{path}", params=params or {}, timeout=20)
-    response.raise_for_status()
+def _public_get(base_url: str, path: str, params: dict | None = None, api_key: str | None = None) -> dict | list:
+    headers = {"X-MBX-APIKEY": api_key} if api_key else {}
+    response = requests.get(f"{base_url.rstrip('/')}{path}", params=params or {}, headers=headers, timeout=20)
+    if not response.ok:
+        raise RuntimeError(f"Binance GET {path} failed status={response.status_code} body={response.text[:300]}")
     return response.json()
 
 
@@ -142,11 +138,11 @@ def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
-def discover_cross_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+def discover_cross_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0, api_key: str | None = None) -> list[str]:
     quotes = {quote.upper() for quote in quote_assets if quote.strip()}
     if not quotes:
         return []
-    data = _public_get(base_url, "/sapi/v1/margin/allPairs")
+    data = _public_get(base_url, "/sapi/v1/margin/allPairs", api_key=api_key)
     symbols = []
     for row in data if isinstance(data, list) else []:
         symbol = str(row.get("symbol", "")).upper()
@@ -162,11 +158,11 @@ def discover_cross_margin_symbols(base_url: str, quote_assets: list[str], limit:
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
-def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0, api_key: str | None = None) -> list[str]:
     quotes = {quote.upper() for quote in quote_assets if quote.strip()}
     if not quotes:
         return []
-    data = _public_get(base_url, "/sapi/v1/margin/isolated/allPairs")
+    data = _public_get(base_url, "/sapi/v1/margin/isolated/allPairs", api_key=api_key)
     symbols = []
     for row in data if isinstance(data, list) else []:
         symbol = str(row.get("symbol", "")).upper()
@@ -180,11 +176,11 @@ def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], lim
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
-def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0) -> list[str]:
+def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0, api_key: str | None = None) -> list[str]:
     if mode == "cross":
-        return discover_cross_margin_symbols(base_url, quote_assets, limit=limit)
+        return discover_cross_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key)
     if mode == "isolated":
-        return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit)
+        return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key)
     return discover_spot_symbols(base_url, quote_assets, limit=limit)
 
 
@@ -193,7 +189,11 @@ def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
     mode = execution_mode()
-    symbols = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols)
+    try:
+        symbols = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols, api_key=settings.binance_api_key)
+    except Exception as exc:
+        logger.error("symbol discovery failed mode=%s error=%s", mode, str(exc))
+        raise
     return symbols, quote_assets, mode
 
 
@@ -201,9 +201,7 @@ def _start_time_from_latest(latest: dict | None) -> int | None:
     if not latest:
         return None
     close_time = latest.get("close_time")
-    if close_time is None:
-        return None
-    return int(close_time) + 1
+    return None if close_time is None else int(close_time) + 1
 
 
 def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, symbol: str, interval: str, limit: int) -> dict:
@@ -270,22 +268,7 @@ def run_once() -> dict:
                 errors.append({"symbol": symbol, "interval": interval, "error": error_text, "retry_queued": True})
 
     _save_retry_queue(retry_queue)
-    return {
-        "status": "ok" if not errors else "partial",
-        "execution_mode": mode,
-        "symbol_count": len(symbols),
-        "quote_assets": quote_assets,
-        "intervals": intervals,
-        "max_workers": worker_count,
-        "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m,
-        "binance_request_weight_ratio": weight_ratio,
-        "binance_effective_requests_per_minute": requests_per_minute,
-        "pushed": pushed,
-        "skipped": skipped,
-        "errors": errors,
-        "retry_queue_size": len(retry_queue),
-        "retry_queue_path": str(RETRY_PATH),
-    }
+    return {"status": "ok" if not errors else "partial", "execution_mode": mode, "symbol_count": len(symbols), "quote_assets": quote_assets, "intervals": intervals, "max_workers": worker_count, "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m, "binance_request_weight_ratio": weight_ratio, "binance_effective_requests_per_minute": requests_per_minute, "pushed": pushed, "skipped": skipped, "errors": errors, "retry_queue_size": len(retry_queue), "retry_queue_path": str(RETRY_PATH)}
 
 
 def run_loop() -> None:
@@ -301,24 +284,14 @@ def run_loop() -> None:
         doc_limit = binance_request_weight_limit_per_minute(load_settings().binance_base_url)
     except Exception:
         doc_limit = 6000
-    logger.info(
-        "candle feed started execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s",
-        execution_mode(),
-        env.get("QUOTE_ASSETS", "USDT"),
-        env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
-        poll_seconds,
-        env.get("CANDLE_FEED_MAX_WORKERS", "3"),
-        doc_limit,
-        env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60"),
-        env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0"),
-    )
+    logger.info("candle feed started execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s", execution_mode(), env.get("QUOTE_ASSETS", "USDT"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60"), env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0"))
 
     while True:
         try:
             result = run_once()
             logger.info("candle feed result=%s", result)
-        except Exception:
-            logger.exception("candle feed loop error")
+        except Exception as exc:
+            logger.error("candle feed loop error=%s", str(exc))
         time.sleep(poll_seconds)
 
 
