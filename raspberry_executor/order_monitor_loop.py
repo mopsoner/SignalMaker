@@ -2,7 +2,7 @@ import os
 import time
 
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.position_sync import sync_open_positions
+from raspberry_executor.position_sync_v2 import sync_open_positions
 
 logger = setup_logging("raspberry-order-monitor")
 
