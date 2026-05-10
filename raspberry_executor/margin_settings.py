@@ -10,6 +10,7 @@ DEFAULT_MARGIN_SETTINGS = {
     "MARGIN_ISOLATED": "true",
     "MARGIN_MAX_MULTIPLIER": "5",
     "MARGIN_TRANSFER_SPOT_BALANCE": "true",
+    "SHORTS_ENABLED": "false",
 }
 
 
@@ -77,12 +78,22 @@ def write_margin_settings(values: dict[str, str]) -> None:
     ENV_PATH.write_text("\n".join(new_lines) + "\n")
 
 
+def _enabled(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def margin_enabled() -> bool:
-    return read_margin_settings().get("MARGIN_MODE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    return _enabled(read_margin_settings().get("MARGIN_MODE_ENABLED"), default=False)
 
 
 def margin_dry_run() -> bool:
-    return read_margin_settings().get("MARGIN_DRY_RUN", "true").lower() in {"1", "true", "yes", "on"}
+    return _enabled(read_margin_settings().get("MARGIN_DRY_RUN"), default=True)
+
+
+def shorts_enabled() -> bool:
+    return _enabled(read_margin_settings().get("SHORTS_ENABLED"), default=False)
 
 
 def margin_account_mode() -> str:
@@ -101,4 +112,4 @@ def margin_multiplier() -> float:
 
 
 def margin_transfer_spot_balance() -> bool:
-    return read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE", "true").lower() in {"1", "true", "yes", "on"}
+    return _enabled(read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE"), default=True)
