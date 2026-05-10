@@ -20,6 +20,38 @@ def candidate_fetch_limit() -> int:
         return 100
 
 
+def sell_spot_balance_for_short(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, candidate: dict, execution_symbol: str) -> None:
+    candidate_id = candidate["candidate_id"]
+    try:
+        base_asset = rules.base_asset(execution_symbol)
+        free_qty = binance.free_balance(base_asset)
+        if free_qty <= 0:
+            reason = f"no_free_balance:{base_asset}"
+            logger.info("skip candidate=%s reason=%s", candidate_id, reason)
+            state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
+            state.mark_executed(candidate_id)
+            return
+        price = binance.current_price(execution_symbol)
+        qty = rules.normalize_market_quantity(execution_symbol, free_qty)
+        rules.ensure_exit_notional(execution_symbol, qty, price, label="spot_sell_on_short")
+        logger.info("sell spot balance on short candidate=%s symbol=%s base=%s qty=%s", candidate_id, execution_symbol, base_asset, qty)
+        order = binance.place_market_entry(execution_symbol, "short", qty)
+        state.mark_executed(candidate_id)
+        state.add_event(candidate_id, "spot_balance_sold_on_short", {
+            "symbol": execution_symbol,
+            "base_asset": base_asset,
+            "quantity": qty,
+            "price": price,
+            "candidate": candidate,
+            "order": order,
+        })
+        logger.info("spot balance sold candidate=%s symbol=%s qty=%s", candidate_id, execution_symbol, qty)
+    except Exception as exc:
+        error_text = str(exc)
+        logger.error("spot short sell failed candidate=%s error=%s", candidate_id, error_text)
+        state.add_event(candidate_id, "spot_short_sell_error", {"error": error_text, "candidate": candidate})
+
+
 def repair_missing_oco(order_manager: SpotOrderManager, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         side = str(position.get("side") or "").lower()
@@ -81,7 +113,7 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
             logger.info("local position closed candidate=%s reason=stop_loss_filled", candidate_id)
 
 
-def execute_candidate(settings, order_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
+def execute_candidate(settings, binance: BinanceClient, rules: BinanceSymbolRules, order_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
     candidate_id = candidate["candidate_id"]
     accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
     if not accepted:
@@ -91,10 +123,8 @@ def execute_candidate(settings, order_manager: SpotOrderManager, state: StateSto
 
     execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
-    if side != "long":
-        reason = "spot_short_signal_not_implemented_yet_sell_existing_balance_next"
-        logger.info("skip candidate=%s reason=%s", candidate_id, reason)
-        state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
+    if side == "short":
+        sell_spot_balance_for_short(binance, rules, state, candidate, execution_symbol)
         return
 
     try:
@@ -154,7 +184,7 @@ def main() -> None:
             candidates = signalmaker.get_open_candidates(limit=fetch_limit)
             logger.info("candidates fetched count=%s ids=%s", len(candidates), [c.get("candidate_id") for c in candidates])
             for candidate in candidates:
-                execute_candidate(settings, order_manager, state, guard, candidate)
+                execute_candidate(settings, binance, rules, order_manager, state, guard, candidate)
             repair_missing_oco(order_manager, state)
             report_final_events(binance, state)
         except Exception as exc:
