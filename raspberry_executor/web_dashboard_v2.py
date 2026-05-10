@@ -1,7 +1,7 @@
 from html import escape
 from http.server import ThreadingHTTPServer
 
-from raspberry_executor.position_sync import sync_open_positions
+from raspberry_executor.position_sync_v2 import sync_open_positions
 from raspberry_executor.state import StateStore
 from raspberry_executor.web_dashboard import Handler as DashboardHandler, page
 
@@ -46,7 +46,7 @@ def synced_positions_table(rows):
 def positions_page_v2():
     try:
         sync = sync_open_positions()
-        sync_html = "<p class='muted'>Binance sync: checked={checked}, closed={closed}, missing_oco={missing_oco}</p>".format(**sync)
+        sync_html = "<p class='muted'>Binance sync: checked={checked}, closed={closed}, missing_oco={missing_oco}, repaired_oco={repaired_oco}</p>".format(**sync)
     except Exception as exc:
         sync_html = f"<p class='pill bad'>Binance sync unavailable: {cell(exc)}</p>"
 
