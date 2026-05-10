@@ -4,10 +4,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
 DEFAULT_MARGIN_SETTINGS = {
-    "MARGIN_MODE_ENABLED": "false",
+    "EXECUTION_MODE": "cross",
+    "MARGIN_MODE_ENABLED": "true",
     "MARGIN_DRY_RUN": "true",
-    "MARGIN_ACCOUNT_MODE": "isolated",
-    "MARGIN_ISOLATED": "true",
+    "MARGIN_ACCOUNT_MODE": "cross",
+    "MARGIN_ISOLATED": "false",
     "MARGIN_MAX_MULTIPLIER": "5",
     "MARGIN_TRANSFER_SPOT_BALANCE": "true",
     "SHORTS_ENABLED": "false",
@@ -28,22 +29,37 @@ def _parse_env_lines() -> tuple[list[str], dict[str, str]]:
     return lines, values
 
 
-def _normalized_account_mode(values: dict[str, str]) -> str:
-    mode = str(values.get("MARGIN_ACCOUNT_MODE") or "").strip().lower()
-    if mode in {"cross", "cross_margin", "croise", "croisée", "croisee"}:
-        return "cross"
+def _bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _execution_mode(values: dict[str, str]) -> str:
+    mode = str(values.get("EXECUTION_MODE") or "").strip().lower()
+    if mode in {"spot", "cash"}:
+        return "spot"
     if mode in {"isolated", "isolated_margin", "isole", "isolé", "isolee", "isolée"}:
         return "isolated"
-    legacy_isolated = str(values.get("MARGIN_ISOLATED", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    return "isolated" if legacy_isolated else "cross"
+    if mode in {"cross", "cross_margin", "croise", "croisée", "croisee"}:
+        return "cross"
+    if not _bool(values.get("MARGIN_MODE_ENABLED"), default=False):
+        return "spot"
+    account_mode = str(values.get("MARGIN_ACCOUNT_MODE") or "").strip().lower()
+    if account_mode in {"isolated", "isolated_margin", "isole", "isolé", "isolee", "isolée"}:
+        return "isolated"
+    return "cross"
 
 
 def read_margin_settings() -> dict[str, str]:
     _, values = _parse_env_lines()
     out = DEFAULT_MARGIN_SETTINGS.copy()
     out.update({key: values[key] for key in DEFAULT_MARGIN_SETTINGS if key in values})
-    out["MARGIN_ACCOUNT_MODE"] = _normalized_account_mode(out)
-    out["MARGIN_ISOLATED"] = "true" if out["MARGIN_ACCOUNT_MODE"] == "isolated" else "false"
+    mode = _execution_mode(out)
+    out["EXECUTION_MODE"] = mode
+    out["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
+    out["MARGIN_ACCOUNT_MODE"] = "isolated" if mode == "isolated" else "cross"
+    out["MARGIN_ISOLATED"] = "true" if mode == "isolated" else "false"
     return out
 
 
@@ -53,8 +69,11 @@ def write_margin_settings(values: dict[str, str]) -> None:
     for key in DEFAULT_MARGIN_SETTINGS:
         if key in values:
             merged[key] = str(values[key]).strip()
-    merged["MARGIN_ACCOUNT_MODE"] = _normalized_account_mode(merged)
-    merged["MARGIN_ISOLATED"] = "true" if merged["MARGIN_ACCOUNT_MODE"] == "isolated" else "false"
+    mode = _execution_mode(merged)
+    merged["EXECUTION_MODE"] = mode
+    merged["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
+    merged["MARGIN_ACCOUNT_MODE"] = "isolated" if mode == "isolated" else "cross"
+    merged["MARGIN_ISOLATED"] = "true" if mode == "isolated" else "false"
 
     existing_keys = set()
     new_lines = []
@@ -72,36 +91,35 @@ def write_margin_settings(values: dict[str, str]) -> None:
     if missing:
         if new_lines and new_lines[-1].strip():
             new_lines.append("")
-        new_lines.append("# Margin mode")
+        new_lines.append("# Execution mode: spot | isolated | cross")
         for key in missing:
             new_lines.append(f"{key}={merged[key]}")
     ENV_PATH.write_text("\n".join(new_lines) + "\n")
 
 
-def _enabled(value: str | None, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+def execution_mode() -> str:
+    return read_margin_settings().get("EXECUTION_MODE", "cross")
 
 
 def margin_enabled() -> bool:
-    return _enabled(read_margin_settings().get("MARGIN_MODE_ENABLED"), default=False)
+    return execution_mode() in {"isolated", "cross"}
 
 
 def margin_dry_run() -> bool:
-    return _enabled(read_margin_settings().get("MARGIN_DRY_RUN"), default=True)
+    return _bool(read_margin_settings().get("MARGIN_DRY_RUN"), default=True)
 
 
 def shorts_enabled() -> bool:
-    return _enabled(read_margin_settings().get("SHORTS_ENABLED"), default=False)
+    return _bool(read_margin_settings().get("SHORTS_ENABLED"), default=False)
 
 
 def margin_account_mode() -> str:
-    return read_margin_settings().get("MARGIN_ACCOUNT_MODE", "isolated")
+    mode = execution_mode()
+    return "isolated" if mode == "isolated" else "cross"
 
 
 def margin_isolated() -> bool:
-    return margin_account_mode() == "isolated"
+    return execution_mode() == "isolated"
 
 
 def margin_multiplier() -> float:
@@ -112,4 +130,4 @@ def margin_multiplier() -> float:
 
 
 def margin_transfer_spot_balance() -> bool:
-    return _enabled(read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE"), default=True)
+    return _bool(read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE"), default=True)
