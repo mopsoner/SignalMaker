@@ -10,6 +10,7 @@ from raspberry_executor.candle_push_once import fetch_klines
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ROOT, ensure_env, read_env
 from raspberry_executor.logging_setup import setup_logging
+from raspberry_executor.margin_settings import execution_mode
 from raspberry_executor.signalmaker_client import SignalMakerClient
 
 logger = setup_logging("raspberry-candle-feed")
@@ -71,7 +72,6 @@ def _retry_items_first(symbols: list[str], intervals: list[str], queue: dict[str
         interval = str(item.get("interval", ""))
         if symbol in allowed_symbols and interval in allowed_intervals:
             retry_pairs.append((symbol, interval))
-
     seen = set(retry_pairs)
     normal_pairs = [(symbol, interval) for symbol in symbols for interval in intervals if (symbol, interval) not in seen]
     return retry_pairs + normal_pairs
@@ -99,14 +99,16 @@ def _exchange_info(base_url: str) -> dict:
     return response.json()
 
 
+def _public_get(base_url: str, path: str, params: dict | None = None) -> dict | list:
+    response = requests.get(f"{base_url.rstrip('/')}{path}", params=params or {}, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
 def binance_request_weight_limit_per_minute(base_url: str) -> int:
     data = _exchange_info(base_url)
     for item in data.get("rateLimits", []):
-        if (
-            item.get("rateLimitType") == "REQUEST_WEIGHT"
-            and item.get("interval") == "MINUTE"
-            and int(item.get("intervalNum", 1)) == 1
-        ):
+        if item.get("rateLimitType") == "REQUEST_WEIGHT" and item.get("interval") == "MINUTE" and int(item.get("intervalNum", 1)) == 1:
             return int(item.get("limit"))
     return 6000
 
@@ -131,9 +133,7 @@ def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0
     for row in data.get("symbols", []):
         symbol = str(row.get("symbol", "")).upper()
         quote_asset = str(row.get("quoteAsset", "")).upper()
-        if row.get("status") != "TRADING":
-            continue
-        if quote_asset not in quotes:
+        if row.get("status") != "TRADING" or quote_asset not in quotes:
             continue
         if not row.get("isSpotTradingAllowed", False):
             continue
@@ -142,11 +142,59 @@ def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
-def resolve_feed_symbols(settings) -> tuple[list[str], list[str]]:
+def discover_cross_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
+    if not quotes:
+        return []
+    data = _public_get(base_url, "/sapi/v1/margin/allPairs")
+    symbols = []
+    for row in data if isinstance(data, list) else []:
+        symbol = str(row.get("symbol", "")).upper()
+        quote = str(row.get("quote", "")).upper()
+        if quote not in quotes:
+            continue
+        if row.get("isMarginTrade") is False:
+            continue
+        if row.get("isBuyAllowed") is False or row.get("isSellAllowed") is False:
+            continue
+        symbols.append(symbol)
+    symbols = sorted(set(symbols))
+    return symbols[:limit] if limit and limit > 0 else symbols
+
+
+def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
+    if not quotes:
+        return []
+    data = _public_get(base_url, "/sapi/v1/margin/isolated/allPairs")
+    symbols = []
+    for row in data if isinstance(data, list) else []:
+        symbol = str(row.get("symbol", "")).upper()
+        quote = str(row.get("quote", "")).upper()
+        if quote not in quotes:
+            continue
+        if row.get("isBuyAllowed") is False or row.get("isSellAllowed") is False:
+            continue
+        symbols.append(symbol)
+    symbols = sorted(set(symbols))
+    return symbols[:limit] if limit and limit > 0 else symbols
+
+
+def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0) -> list[str]:
+    if mode == "cross":
+        return discover_cross_margin_symbols(base_url, quote_assets, limit=limit)
+    if mode == "isolated":
+        return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit)
+    return discover_spot_symbols(base_url, quote_assets, limit=limit)
+
+
+def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     env = read_env()
     quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
-    return discover_spot_symbols(settings.binance_base_url, quote_assets, limit=max_symbols), quote_assets
+    mode = execution_mode()
+    symbols = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols)
+    return symbols, quote_assets, mode
 
 
 def _start_time_from_latest(latest: dict | None) -> int | None:
@@ -170,14 +218,7 @@ def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, sym
     if not candles:
         return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "already_up_to_date", "latest_close_time": latest.get("close_time") if latest else None}
     response = client.post_candles(symbol, interval, candles, source=settings.gateway_id)
-    return {
-        "kind": "pushed",
-        "symbol": symbol,
-        "interval": interval,
-        "count": len(candles),
-        "start_time": start_time,
-        "upserted": response.get("upserted"),
-    }
+    return {"kind": "pushed", "symbol": symbol, "interval": interval, "count": len(candles), "start_time": start_time, "upserted": response.get("upserted")}
 
 
 def run_once() -> dict:
@@ -189,7 +230,7 @@ def run_once() -> dict:
     if not endpoint_check.get("ok"):
         return {"status": "blocked", "endpoint_check": endpoint_check, "pushed": [], "skipped": [], "errors": []}
 
-    symbols, quote_assets = resolve_feed_symbols(settings)
+    symbols, quote_assets, mode = resolve_feed_symbols(settings)
     intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
     limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
     max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
@@ -197,7 +238,7 @@ def run_once() -> dict:
     retry_queue = _load_retry_queue()
 
     if not symbols:
-        return {"status": "skipped", "reason": "no_symbols_configured", "quote_assets": quote_assets, "intervals": intervals, "retry_queue_size": len(retry_queue)}
+        return {"status": "skipped", "reason": "no_symbols_for_execution_mode", "execution_mode": mode, "quote_assets": quote_assets, "intervals": intervals, "retry_queue_size": len(retry_queue)}
 
     pushed = []
     skipped = []
@@ -207,10 +248,7 @@ def run_once() -> dict:
     worker_count = min(max_workers, max(1, len(processed_pairs)))
 
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
-        futures = {
-            pool.submit(_process_pair, settings, client, limiter, symbol, interval, limit): (symbol, interval)
-            for symbol, interval in processed_pairs
-        }
+        futures = {pool.submit(_process_pair, settings, client, limiter, symbol, interval, limit): (symbol, interval) for symbol, interval in processed_pairs}
         for future in as_completed(futures):
             symbol, interval = futures[future]
             try:
@@ -227,13 +265,14 @@ def run_once() -> dict:
             except Exception as exc:
                 error_text = str(exc)
                 if "429" in error_text or "418" in error_text:
-                    logger.warning("Binance rate-limit response seen; reducing effective pressure is recommended error=%s", error_text)
+                    logger.warning("Binance rate-limit response seen; reduce pressure error=%s", error_text)
                 _mark_retry(retry_queue, symbol, interval, error_text)
                 errors.append({"symbol": symbol, "interval": interval, "error": error_text, "retry_queued": True})
 
     _save_retry_queue(retry_queue)
     return {
         "status": "ok" if not errors else "partial",
+        "execution_mode": mode,
         "symbol_count": len(symbols),
         "quote_assets": quote_assets,
         "intervals": intervals,
@@ -263,7 +302,8 @@ def run_loop() -> None:
     except Exception:
         doc_limit = 6000
     logger.info(
-        "candle feed started quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s",
+        "candle feed started execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s",
+        execution_mode(),
         env.get("QUOTE_ASSETS", "USDT"),
         env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"),
         poll_seconds,
