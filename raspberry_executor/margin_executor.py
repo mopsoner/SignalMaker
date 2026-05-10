@@ -33,6 +33,28 @@ def fallback_spot(settings, binance, rules, spot_manager, state, guard, candidat
     return process_spot_candidate(settings, binance, rules, spot_manager, state, guard, candidate)
 
 
+def save_cross_short_position(state: StateStore, candidate_id: str, candidate: dict, symbol: str, result: dict) -> None:
+    state.mark_executed(candidate_id)
+    state.add_open_position(candidate_id, {
+        "candidate_id": candidate_id,
+        "signal_symbol": candidate["symbol"],
+        "execution_symbol": symbol,
+        "side": "short",
+        "mode": "cross_margin",
+        "quantity": result.get("quantity"),
+        "entry_price": float(result.get("entry_price") or 0),
+        "stop_price": candidate.get("stop_price"),
+        "target_price": candidate.get("target_price"),
+        "entry_order_id": result.get("entry_order_id"),
+        "borrow_base_amount": result.get("borrow_base_amount"),
+        "base_asset": result.get("base_asset"),
+        "candidate": candidate,
+        "margin_payload": result,
+        "borrow_payload": result.get("borrow_payload") or {},
+        "entry_payload": result.get("entry_payload") or {},
+    })
+
+
 def process_candidate(settings, binance, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> str:
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
@@ -56,7 +78,18 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
 
     if side == "short":
         try:
-            result = manager.sell_all_margin_base(symbol=symbol)
+            if manager.margin.isolated:
+                result = manager.sell_all_margin_base(symbol=symbol)
+                if result.get("status") == "sold":
+                    state.mark_executed(candidate_id)
+                    state.add_event(candidate_id, "margin_base_sold_on_short", {"candidate": candidate, "result": result})
+                    logger.info("isolated margin base sold candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
+                    return "sold"
+                return str(result.get("reason") or "isolated_margin_short_no_asset")
+            result = manager.open_short_cross_margin(symbol=symbol, quote_amount=float(settings.order_quote_amount))
+            save_cross_short_position(state, candidate_id, candidate, symbol, result)
+            logger.info("cross margin short opened candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
+            return "opened"
         except Exception as exc:
             text = str(exc)
             if is_margin_unavailable(text):
@@ -64,12 +97,6 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
             state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
             logger.error("margin short failed candidate=%s error=%s", candidate_id, text)
             return "error"
-        if result.get("status") == "sold":
-            state.mark_executed(candidate_id)
-            state.add_event(candidate_id, "margin_base_sold_on_short", {"candidate": candidate, "result": result})
-            logger.info("margin base sold candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
-            return "sold"
-        return str(result.get("reason") or "margin_short_no_asset")
 
     try:
         result = manager.open_long_with_margin_oco(symbol=symbol, quote_amount=float(settings.order_quote_amount), target_price=float(candidate["target_price"]), stop_price=float(candidate["stop_price"]))
