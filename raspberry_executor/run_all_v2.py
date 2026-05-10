@@ -9,7 +9,7 @@ from raspberry_executor.margin_settings import margin_enabled
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
-from raspberry_executor.web_dashboard_candidates import run_web
+from raspberry_executor.web_dashboard_margin import run_web
 
 logger = setup_logging("raspberry-executor")
 
