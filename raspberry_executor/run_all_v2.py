@@ -7,7 +7,7 @@ from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.spot_executor_v2 import main as executor_main
-from raspberry_executor.web_dashboard import run_web
+from raspberry_executor.web_dashboard_v2 import run_web
 
 logger = setup_logging("raspberry-executor")
 
@@ -19,7 +19,7 @@ def main() -> None:
     port = int(os.getenv("WEB_PORT", "8090"))
 
     threading.Thread(target=run_web, kwargs={"host": host, "port": port}, daemon=True).start()
-    logger.info("local 360 dashboard started http://%s:%s", host, port)
+    logger.info("local 360 dashboard v2 started http://%s:%s", host, port)
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")
