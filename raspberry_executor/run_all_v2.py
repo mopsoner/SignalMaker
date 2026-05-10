@@ -8,7 +8,7 @@ from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.spot_executor_v2 import main as executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
-from raspberry_executor.web_dashboard_v2 import run_web
+from raspberry_executor.web_dashboard_candidates import run_web
 
 logger = setup_logging("raspberry-executor")
 
