@@ -5,7 +5,7 @@ from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.margin_settings import margin_enabled
+from raspberry_executor.margin_settings import execution_mode, margin_enabled
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
@@ -15,12 +15,13 @@ logger = setup_logging("raspberry-executor")
 
 
 def executor_main() -> None:
+    mode = execution_mode()
     if margin_enabled():
         from raspberry_executor.margin_executor import main as margin_executor_main
-        logger.warning("MARGIN MODE ENABLED: starting margin executor")
+        logger.warning("execution mode=%s primary=margin fallback=spot", mode)
         margin_executor_main()
         return
-    logger.info("spot mode enabled: starting spot executor")
+    logger.info("execution mode=spot primary=spot")
     spot_executor_main()
 
 
@@ -37,7 +38,7 @@ def main() -> None:
         logger.error("wallet bootstrap startup error=%s", str(exc))
 
     threading.Thread(target=run_web, kwargs={"host": host, "port": port}, daemon=True).start()
-    logger.info("local 360 dashboard v2 started http://%s:%s", host, port)
+    logger.info("local 360 dashboard started http://%s:%s execution_mode=%s", host, port, execution_mode())
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")
