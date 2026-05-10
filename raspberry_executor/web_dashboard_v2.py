@@ -2,6 +2,7 @@ from html import escape
 from http.server import ThreadingHTTPServer
 
 from raspberry_executor.position_sync_v2 import sync_open_positions
+from raspberry_executor.reset_positions_db import reset_positions_db
 from raspberry_executor.state import StateStore
 from raspberry_executor.web_dashboard import Handler as DashboardHandler, page
 
@@ -64,6 +65,18 @@ def positions_page_v2():
     )
 
 
+def admin_reset_box():
+    return """
+    <div class='box'>
+      <h2>Danger zone</h2>
+      <p class='muted'>Reset local tracking only: positions, executed candidates, events and pending queue. Binance assets and orders are not modified.</p>
+      <form method='post' action='/admin/reset-positions' onsubmit="return confirm('Reset local position tracking tables ?');">
+        <button class='danger' type='submit'>Reset positions tracking</button>
+      </form>
+    </div>
+    """
+
+
 class Handler(DashboardHandler):
     def do_GET(self):
         if self.path.startswith("/positions"):
@@ -77,7 +90,19 @@ class Handler(DashboardHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 return
             return
+        if self.path.startswith("/admin"):
+            super().do_GET()
+            return
         return super().do_GET()
+
+    def do_POST(self):
+        if self.path.startswith("/admin/reset-positions"):
+            reset_positions_db()
+            self.send_response(303)
+            self.send_header("Location", "/positions")
+            self.end_headers()
+            return
+        return super().do_POST()
 
 
 def run_web(host="0.0.0.0", port=8090):
