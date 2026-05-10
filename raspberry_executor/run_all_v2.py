@@ -6,7 +6,6 @@ from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
-from raspberry_executor.reset_positions_db import reset_positions_db
 from raspberry_executor.spot_executor_v2 import main as executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
 from raspberry_executor.web_dashboard_v2 import run_web
@@ -14,22 +13,11 @@ from raspberry_executor.web_dashboard_v2 import run_web
 logger = setup_logging("raspberry-executor")
 
 
-def _enabled(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def main() -> None:
     ensure_env()
     load_settings()
     host = os.getenv("WEB_HOST", "0.0.0.0")
     port = int(os.getenv("WEB_PORT", "8090"))
-
-    if _enabled(os.getenv("RESET_POSITIONS_ON_START")):
-        try:
-            summary = reset_positions_db()
-            logger.info("position tracking reset startup=%s", summary)
-        except Exception as exc:
-            logger.error("position tracking reset startup error=%s", str(exc))
 
     try:
         summary = bootstrap_wallet_positions()
