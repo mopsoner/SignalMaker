@@ -20,33 +20,25 @@ def safe(value, default="-"):
 
 def trunc(value, width):
     text = safe(value, "")
-    if len(text) <= width:
-        return text
-    return text[: max(0, width - 1)] + "…"
+    return text if len(text) <= width else text[: max(0, width - 1)] + "…"
 
 
 def add(stdscr, y, x, text, attr=0):
-    height, width = stdscr.getmaxyx()
-    if y < 0 or y >= height or x >= width:
+    h, w = stdscr.getmaxyx()
+    if y < 0 or y >= h or x >= w:
         return
     try:
-        stdscr.addstr(y, x, str(text)[: max(0, width - x - 1)], attr)
+        stdscr.addstr(y, x, str(text)[: max(0, w - x - 1)], attr)
     except curses.error:
         pass
 
 
 def box(stdscr, y, x, h, w, title=""):
-    height, width = stdscr.getmaxyx()
-    if y >= height or x >= width or h < 3 or w < 8:
+    max_h, max_w = stdscr.getmaxyx()
+    if y >= max_h or x >= max_w or h < 3 or w < 8:
         return
-    h = min(h, height - y)
-    w = min(w, width - x)
-    try:
-        stdscr.attron(curses.color_pair(4))
-        stdscr.border(0, 0, 0, 0)
-        stdscr.attroff(curses.color_pair(4))
-    except Exception:
-        pass
+    h = min(h, max_h - y)
+    w = min(w, max_w - x)
     add(stdscr, y, x, "┌" + "─" * (w - 2) + "┐", curses.color_pair(4))
     for row in range(y + 1, y + h - 1):
         add(stdscr, row, x, "│", curses.color_pair(4))
@@ -65,36 +57,52 @@ def fetch_candidates(limit=8):
         return [], str(exc)
 
 
-def render_header(stdscr, width):
-    mode = execution_mode()
-    dry = margin_dry_run()
-    shorts = shorts_enabled()
-    title = " SignalMaker Raspberry TUI "
-    add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
-    add(stdscr, 0, 2, title, curses.color_pair(1) | curses.A_BOLD)
-    add(stdscr, 0, max(2, width - 52), f"mode={mode} margin_dry={dry} shorts={shorts}", curses.color_pair(1))
-
-
-def render_status(stdscr, y, x, h, w):
-    box(stdscr, y, x, h, w, "Control")
+def snapshot():
+    state = StateStore()
+    candidates, candidate_error = fetch_candidates()
     settings = load_settings()
+    return {
+        "settings": settings,
+        "execution_mode": execution_mode(),
+        "margin_dry_run": margin_dry_run(),
+        "margin_multiplier": margin_multiplier(),
+        "shorts_enabled": shorts_enabled(),
+        "positions": list(state.open_positions().items()),
+        "events": list(reversed(state.events()[-80:])),
+        "logs": tail_logs(80),
+        "candidates": candidates,
+        "candidate_error": candidate_error,
+        "refreshed_at": datetime.now().strftime("%H:%M:%S"),
+    }
+
+
+def render_header(stdscr, width, data):
+    add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
+    add(stdscr, 0, 2, " SignalMaker Raspberry TUI ", curses.color_pair(1) | curses.A_BOLD)
+    right = f"mode={data['execution_mode']} margin_dry={data['margin_dry_run']} shorts={data['shorts_enabled']} data={data['refreshed_at']}"
+    add(stdscr, 0, max(2, width - len(right) - 2), right, curses.color_pair(1))
+
+
+def render_status(stdscr, y, x, h, w, data):
+    box(stdscr, y, x, h, w, "Control")
+    settings = data["settings"]
     rows = [
-        ("Execution", execution_mode()),
+        ("Execution", data["execution_mode"]),
         ("Order quote", settings.order_quote_amount),
         ("Quote assets", ",".join(settings.quote_assets)),
-        ("Multiplier", margin_multiplier()),
-        ("Dry run", f"global={settings.dry_run} margin={margin_dry_run()}"),
-        ("Shorts", shorts_enabled()),
-        ("Poll", f"{settings.poll_seconds}s"),
+        ("Multiplier", data["margin_multiplier"]),
+        ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
+        ("Shorts", data["shorts_enabled"]),
+        ("Data refresh", data["refreshed_at"]),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
         add(stdscr, y + 1 + i, x + 2, f"{k:<12}", curses.color_pair(3))
         add(stdscr, y + 1 + i, x + 15, trunc(v, w - 18))
 
 
-def render_positions(stdscr, y, x, h, w):
+def render_positions(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Open Positions")
-    rows = list(StateStore().open_positions().items())[: max(0, h - 4)]
+    rows = data["positions"][: max(0, h - 4)]
     add(stdscr, y + 1, x + 2, "Symbol     Side   Mode       Qty        Entry      TP/SL", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
@@ -106,12 +114,14 @@ def render_positions(stdscr, y, x, h, w):
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
 
-def render_candidates(stdscr, y, x, h, w, candidates, error):
+def render_candidates(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "SignalMaker Candidates")
+    candidates = data["candidates"]
+    error = data["candidate_error"]
     if error:
         add(stdscr, y + 1, x + 2, trunc(f"API error: {error}", w - 4), curses.color_pair(5))
         return
-    add(stdscr, y + 1, x + 2, f"received={len(candidates)}", curses.color_pair(3))
+    add(stdscr, y + 1, x + 2, f"received={len(candidates)} refreshed={data['refreshed_at']}", curses.color_pair(3))
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
@@ -121,50 +131,51 @@ def render_candidates(stdscr, y, x, h, w, candidates, error):
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
-def render_events(stdscr, y, x, h, w):
+def render_events(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Recent Events")
-    events = list(reversed(StateStore().events()[-max(1, h - 2):]))
+    events = data["events"][: max(0, h - 2)]
     if not events:
         add(stdscr, y + 1, x + 2, "No events", curses.color_pair(4))
         return
-    for idx, event in enumerate(events[: h - 2]):
-        level = curses.color_pair(5) if "error" in str(event.get("event_type", "")) or "failed" in str(event.get("event_type", "")) else curses.color_pair(4)
-        line = f"{safe(event.get('timestamp'))[-8:]} {safe(event.get('candidate_id'))} {safe(event.get('event_type'))}"
+    for idx, event in enumerate(events):
+        event_type = str(event.get("event_type", ""))
+        level = curses.color_pair(5) if "error" in event_type or "failed" in event_type else curses.color_pair(4)
+        line = f"{safe(event.get('timestamp'))[-8:]} {safe(event.get('candidate_id'))} {event_type}"
         add(stdscr, y + 1 + idx, x + 2, trunc(line, w - 4), level)
 
 
-def render_logs(stdscr, y, x, h, w):
+def render_logs(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Logs")
-    logs = tail_logs(max(1, h - 2))
-    for idx, line in enumerate(logs[-(h - 2):]):
+    logs = data["logs"][-max(1, h - 2):]
+    for idx, line in enumerate(logs):
         attr = curses.color_pair(5) if "ERROR" in line or "failed" in line.lower() else curses.color_pair(4)
         add(stdscr, y + 1 + idx, x + 2, trunc(line, w - 4), attr)
 
 
-def render_footer(stdscr, height, width):
-    text = " q quit | r refresh | auto-refresh 5s | no web/browser "
+def render_footer(stdscr, height, width, data):
+    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | data={data['refreshed_at']} | clock="
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text + datetime.now().strftime("%H:%M:%S"), curses.color_pair(1))
 
 
-def draw(stdscr, candidates, candidate_error):
+def draw(stdscr, data):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
-    render_header(stdscr, width)
+    render_header(stdscr, width, data)
     if height < 22 or width < 80:
         add(stdscr, 2, 2, "Terminal too small. Use at least 80x22.", curses.color_pair(5))
-        render_footer(stdscr, height, width)
+        render_footer(stdscr, height, width, data)
         stdscr.refresh()
         return
     top_h = 9
     mid_h = max(7, (height - top_h - 3) // 2)
     left_w = max(30, width // 3)
-    render_status(stdscr, 2, 1, top_h, left_w)
-    render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3)
-    render_candidates(stdscr, top_h + 3, 1, mid_h, width // 2 - 2, candidates, candidate_error)
-    render_events(stdscr, top_h + 3, width // 2, mid_h, width // 2 - 1)
-    render_logs(stdscr, top_h + mid_h + 4, 1, height - (top_h + mid_h + 5), width - 2)
-    render_footer(stdscr, height, width)
+    render_status(stdscr, 2, 1, top_h, left_w, data)
+    render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3, data)
+    render_candidates(stdscr, top_h + 3, 1, mid_h, width // 2 - 2, data)
+    render_events(stdscr, top_h + 3, width // 2, mid_h, width // 2 - 1, data)
+    render_logs(stdscr, top_h + mid_h + 4, 1, height - (top_h + mid_h + 5), width - 2, data)
+    render_footer(stdscr, height, width, data)
     stdscr.refresh()
 
 
@@ -178,17 +189,17 @@ def main_loop(stdscr):
     curses.init_pair(3, curses.COLOR_CYAN, -1)
     curses.init_pair(4, curses.COLOR_WHITE, -1)
     curses.init_pair(5, curses.COLOR_RED, -1)
-    candidates, error = fetch_candidates()
-    last_refresh = 0.0
+    data = snapshot()
+    last_refresh = time.monotonic()
     while True:
         now = time.monotonic()
         ch = stdscr.getch()
         if ch in (ord("q"), ord("Q")):
             break
         if ch in (ord("r"), ord("R")) or now - last_refresh >= REFRESH_SECONDS:
-            candidates, error = fetch_candidates()
+            data = snapshot()
             last_refresh = now
-        draw(stdscr, candidates, error)
+        draw(stdscr, data)
         time.sleep(0.2)
 
 
