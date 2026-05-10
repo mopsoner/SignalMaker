@@ -5,12 +5,23 @@ from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
+from raspberry_executor.margin_settings import margin_enabled
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
-from raspberry_executor.spot_executor_v2 import main as executor_main
+from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
 from raspberry_executor.web_dashboard_candidates import run_web
 
 logger = setup_logging("raspberry-executor")
+
+
+def executor_main() -> None:
+    if margin_enabled():
+        from raspberry_executor.margin_executor import main as margin_executor_main
+        logger.warning("MARGIN MODE ENABLED: starting margin executor")
+        margin_executor_main()
+        return
+    logger.info("spot mode enabled: starting spot executor")
+    spot_executor_main()
 
 
 def main() -> None:
