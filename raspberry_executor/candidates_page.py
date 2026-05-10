@@ -13,7 +13,6 @@ def candidates_page(limit: int = 100) -> str:
     settings = load_settings()
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     state = StateStore()
-    executed = set(state.executed_candidates())
     try:
         open_candidates = client.get_open_candidates(limit=limit)
         recent_candidates = client.get_recent_candidates(limit=limit)
@@ -33,23 +32,23 @@ def candidates_page(limit: int = 100) -> str:
     body += "</div>"
 
     body += "<div class='box'><h2>Open candidates used by executor</h2>"
-    body += candidates_table(open_candidates, executed)
+    body += candidates_table(open_candidates, state)
     body += "</div>"
 
     body += "<div class='box'><h2>Recent candidates fallback</h2>"
-    body += candidates_table(recent_candidates, executed)
+    body += candidates_table(recent_candidates, state)
     body += "</div>"
     return body
 
 
-def candidates_table(rows: list[dict], executed: set[str]) -> str:
+def candidates_table(rows: list[dict], state: StateStore) -> str:
     if not rows:
         return "<p class='muted'>No candidates returned.</p>"
     cols = ["Local", "Candidate", "Symbol", "Side", "Status", "Entry", "Stop", "Target", "Created", "Updated"]
     html = "<table><tr>" + "".join(f"<th>{c(col)}</th>" for col in cols) + "</tr>"
     for row in rows:
         cid = str(row.get("candidate_id") or "")
-        local = "executed" if cid in executed else "new"
+        local = "executed" if cid and state.already_executed(cid) else "new"
         values = [
             local,
             cid,
