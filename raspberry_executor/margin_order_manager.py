@@ -114,6 +114,41 @@ class MarginOrderManager:
             "oco_payload": oco_result.get("oco_payload") or {},
         }
 
+    def open_short_cross_margin(self, *, symbol: str, quote_amount: float) -> dict:
+        symbol = symbol.upper()
+        if self.margin.isolated:
+            raise RuntimeError("open_short_cross_margin_requires_cross_margin")
+        base = self.rules.base_asset(symbol)
+        current_price = self.binance.current_price(symbol)
+        multiplier = margin_multiplier()
+        short_quote = float(quote_amount) * max(1.0, multiplier)
+        borrow_qty = self.rules.quantity_from_quote(symbol, short_quote, current_price, market=True)
+        max_borrow = self.margin.max_borrowable(symbol, base)
+        if max_borrow > 0:
+            borrow_qty = self.rules.normalize_market_quantity(symbol, min(float(borrow_qty), max_borrow))
+        self.rules.ensure_exit_notional(symbol, borrow_qty, current_price, label="cross_margin_short_sell")
+        borrow_payload = self.margin.borrow(symbol, base, borrow_qty)
+        sell_order = self.margin.margin_order(symbol, "SELL", borrow_qty, "MARKET")
+        entry_price = BinanceClient.average_fill_price(sell_order, fallback=current_price)
+        if entry_price is None:
+            entry_price = current_price
+        sold_qty = self._executed_qty(sell_order, borrow_qty)
+        return {
+            "status": "sold",
+            "symbol": symbol,
+            "side": "short",
+            "mode": "cross_margin",
+            "base_asset": base,
+            "borrow_base_amount": borrow_qty,
+            "quantity": sold_qty,
+            "entry_price": float(entry_price),
+            "margin_multiplier": multiplier,
+            "borrow_payload": borrow_payload,
+            "entry_order_id": self._order_id(sell_order),
+            "entry_payload": sell_order,
+            "timestamp": int(time.time()),
+        }
+
     def sell_all_margin_base(self, *, symbol: str) -> dict:
         symbol = symbol.upper()
         self.margin.ensure_isolated_account(symbol)
