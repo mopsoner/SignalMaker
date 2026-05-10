@@ -25,21 +25,7 @@ def synced_positions_table(rows):
     cols = ["Status", "Candidate", "Symbol", "Side", "Qty", "Entry", "Stop", "Target", "TP", "TP status", "SL", "SL status", "Reason"]
     html = "<table><tr>" + "".join(f"<th>{cell(col)}</th>" for col in cols) + "</tr>"
     for candidate_id, row in rows:
-        values = [
-            row.get("status"),
-            candidate_id,
-            row.get("execution_symbol") or row.get("signal_symbol"),
-            row.get("side"),
-            row.get("quantity"),
-            row.get("entry_price"),
-            row.get("stop_price"),
-            row.get("target_price"),
-            row.get("tp_order_id"),
-            order_status(row.get("binance_tp_status")),
-            row.get("sl_order_id"),
-            order_status(row.get("binance_sl_status")),
-            row.get("close_reason"),
-        ]
+        values = [row.get("status"), candidate_id, row.get("execution_symbol") or row.get("signal_symbol"), row.get("side"), row.get("quantity"), row.get("entry_price"), row.get("stop_price"), row.get("target_price"), row.get("tp_order_id"), order_status(row.get("binance_tp_status")), row.get("sl_order_id"), order_status(row.get("binance_sl_status")), row.get("close_reason")]
         html += "<tr>" + "".join(f"<td>{cell(value)}</td>" for value in values) + "</tr>"
     return html + "</table>"
 
@@ -50,23 +36,15 @@ def positions_page_v2():
         sync_html = "<p class='muted'>Binance sync: checked={checked}, closed={closed}, missing_oco={missing_oco}, repaired_oco={repaired_oco}</p>".format(**sync)
     except Exception as exc:
         sync_html = f"<p class='pill bad'>Binance sync unavailable: {cell(exc)}</p>"
-
     state = StateStore()
     open_rows = list(state.open_positions().items())
     closed_rows = [(item.get("candidate_id", ""), item) for item in reversed(state.closed_positions()[-50:])]
-    return (
-        "<h1>Binance Synced Positions</h1>"
-        "<div class='box'><h2>Open positions</h2>"
-        + sync_html
-        + synced_positions_table(open_rows)
-        + "</div><div class='box'><h2>Closed positions</h2>"
-        + synced_positions_table(closed_rows)
-        + "</div>"
-    )
+    return "<h1>Binance Synced Positions</h1><div class='box'><h2>Open positions</h2>" + sync_html + synced_positions_table(open_rows) + "</div><div class='box'><h2>Closed positions</h2>" + synced_positions_table(closed_rows) + "</div>"
 
 
 def admin_reset_box():
     return """
+    <h1>Admin</h1>
     <div class='box'>
       <h2>Danger zone</h2>
       <p class='muted'>Reset local tracking only: positions, executed candidates, events and pending queue. Binance assets and orders are not modified.</p>
@@ -74,6 +52,7 @@ def admin_reset_box():
         <button class='danger' type='submit'>Reset positions tracking</button>
       </form>
     </div>
+    <div class='box'><p class='muted'>Use the legacy admin form from the main dashboard if you need to edit .env settings.</p></div>
     """
 
 
@@ -81,19 +60,18 @@ class Handler(DashboardHandler):
     def do_GET(self):
         if self.path.startswith("/positions"):
             data = page(positions_page_v2())
-            try:
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                return
+        elif self.path.startswith("/admin"):
+            data = page(admin_reset_box())
+        else:
+            return super().do_GET()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return
-        if self.path.startswith("/admin"):
-            super().do_GET()
-            return
-        return super().do_GET()
 
     def do_POST(self):
         if self.path.startswith("/admin/reset-positions"):
