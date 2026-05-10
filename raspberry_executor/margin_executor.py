@@ -7,7 +7,7 @@ from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, margin_isolated
+from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, margin_isolated, shorts_enabled
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.spot_executor_v2 import process_candidate as process_spot_candidate
@@ -66,6 +66,10 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
 
     symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate.get("side", "")))
+
+    if side == "short" and not shorts_enabled():
+        state.add_event(candidate_id, "short_skipped_disabled", {"symbol": symbol, "candidate": candidate})
+        return "shorts_disabled"
 
     try:
         manager.margin.ensure_isolated_account(symbol)
@@ -139,7 +143,7 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started dry_run=%s isolated=%s fallback=spot", margin.dry_run, margin.isolated)
+    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s fallback=spot", margin.dry_run, margin.isolated, shorts_enabled())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
