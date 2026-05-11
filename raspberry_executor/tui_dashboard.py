@@ -160,7 +160,7 @@ def draw(stdscr, data):
     top_h = 9
     remaining_h = height - top_h - 4
     left_w = max(30, width // 3)
-    render_status(stdscr, 2, 1, top_h, left_w)
+    render_status(stdscr, 2, 1, top_h, left_w, data)
     render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3, data)
     render_candidates(stdscr, top_h + 3, 1, remaining_h, width // 2 - 2, data)
     render_events(stdscr, top_h + 3, width // 2, remaining_h, width // 2 - 1, data)
