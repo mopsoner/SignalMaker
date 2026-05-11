@@ -38,22 +38,26 @@ EOF
 
 cat > "/etc/systemd/system/${TUI_SERVICE}" <<EOF
 [Unit]
-Description=SignalMaker Raspberry fullscreen TUI
-After=${BOT_SERVICE} network-online.target
+Description=SignalMaker Raspberry fullscreen TUI on ${TTY_NAME}
+After=${BOT_SERVICE} network-online.target systemd-user-sessions.service
 Wants=${BOT_SERVICE} network-online.target
 Conflicts=getty@${TTY_NAME}.service
-After=getty@${TTY_NAME}.service
 
 [Service]
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
-Environment=TERM=linux
+Environment=TERM=xterm-256color
+Environment=PYTHONUNBUFFERED=1
 TTYPath=/dev/${TTY_NAME}
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
 StandardInput=tty
 StandardOutput=tty
 StandardError=journal
-ExecStart=/bin/bash -lc 'clear; exec ${APP_DIR}/tui.sh'
+ExecStartPre=/bin/sleep 3
+ExecStart=/bin/bash -lc 'printf "\033c" > /dev/${TTY_NAME}; exec ${APP_DIR}/tui.sh'
 Restart=always
 RestartSec=5
 
@@ -65,10 +69,15 @@ systemctl daemon-reload
 systemctl enable "${BOT_SERVICE}"
 systemctl enable "${TUI_SERVICE}"
 
-# Stop login prompt on tty1 so the TUI owns the screen.
+# Stop login prompt on selected tty so the TUI owns the screen.
 systemctl disable "getty@${TTY_NAME}.service" >/dev/null 2>&1 || true
+systemctl stop "getty@${TTY_NAME}.service" >/dev/null 2>&1 || true
 
 echo "Installed and enabled: ${BOT_SERVICE}, ${TUI_SERVICE}"
+echo "TTY: /dev/${TTY_NAME}"
 echo "Reboot to start automatically, or run:"
-echo "  sudo systemctl start ${BOT_SERVICE}"
-echo "  sudo systemctl start ${TUI_SERVICE}"
+echo "  sudo systemctl restart ${BOT_SERVICE}"
+echo "  sudo systemctl restart ${TUI_SERVICE}"
+echo "Diagnostics:"
+echo "  systemctl status ${TUI_SERVICE}"
+echo "  journalctl -u ${TUI_SERVICE} -n 80 --no-pager"
