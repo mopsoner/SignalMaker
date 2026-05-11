@@ -3,7 +3,6 @@ import time
 from datetime import datetime
 
 from raspberry_executor.config import load_settings
-from raspberry_executor.logging_setup import tail_logs
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_multiplier, shorts_enabled
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
@@ -68,8 +67,7 @@ def snapshot():
         "margin_multiplier": margin_multiplier(),
         "shorts_enabled": shorts_enabled(),
         "positions": list(state.open_positions().items()),
-        "events": list(reversed(state.events()[-80:])),
-        "logs": tail_logs(80),
+        "events": list(reversed(state.events()[-120:])),
         "candidates": candidates,
         "candidate_error": candidate_error,
         "refreshed_at": datetime.now().strftime("%H:%M:%S"),
@@ -139,21 +137,13 @@ def render_events(stdscr, y, x, h, w, data):
         return
     for idx, event in enumerate(events):
         event_type = str(event.get("event_type", ""))
-        level = curses.color_pair(5) if "error" in event_type or "failed" in event_type else curses.color_pair(4)
+        level = curses.color_pair(5) if "error" in event_type or "failed" in event_type or "not_confirmed" in event_type else curses.color_pair(4)
         line = f"{safe(event.get('timestamp'))[-8:]} {safe(event.get('candidate_id'))} {event_type}"
         add(stdscr, y + 1 + idx, x + 2, trunc(line, w - 4), level)
 
 
-def render_logs(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "Logs")
-    logs = data["logs"][-max(1, h - 2):]
-    for idx, line in enumerate(logs):
-        attr = curses.color_pair(5) if "ERROR" in line or "failed" in line.lower() else curses.color_pair(4)
-        add(stdscr, y + 1 + idx, x + 2, trunc(line, w - 4), attr)
-
-
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | data={data['refreshed_at']} | clock="
+    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | logs hidden | data={data['refreshed_at']} | clock="
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text + datetime.now().strftime("%H:%M:%S"), curses.color_pair(1))
 
@@ -162,19 +152,18 @@ def draw(stdscr, data):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     render_header(stdscr, width, data)
-    if height < 22 or width < 80:
-        add(stdscr, 2, 2, "Terminal too small. Use at least 80x22.", curses.color_pair(5))
+    if height < 18 or width < 80:
+        add(stdscr, 2, 2, "Terminal too small. Use at least 80x18.", curses.color_pair(5))
         render_footer(stdscr, height, width, data)
         stdscr.refresh()
         return
     top_h = 9
-    mid_h = max(7, (height - top_h - 3) // 2)
+    remaining_h = height - top_h - 4
     left_w = max(30, width // 3)
-    render_status(stdscr, 2, 1, top_h, left_w, data)
+    render_status(stdscr, 2, 1, top_h, left_w)
     render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3, data)
-    render_candidates(stdscr, top_h + 3, 1, mid_h, width // 2 - 2, data)
-    render_events(stdscr, top_h + 3, width // 2, mid_h, width // 2 - 1, data)
-    render_logs(stdscr, top_h + mid_h + 4, 1, height - (top_h + mid_h + 5), width - 2, data)
+    render_candidates(stdscr, top_h + 3, 1, remaining_h, width // 2 - 2, data)
+    render_events(stdscr, top_h + 3, width // 2, remaining_h, width // 2 - 1, data)
     render_footer(stdscr, height, width, data)
     stdscr.refresh()
 
