@@ -40,6 +40,48 @@ class MarginOrderManager:
     def quote_asset(self, symbol: str) -> str:
         return str(self.rules.symbol_info(symbol).get("quoteAsset") or "").upper()
 
+    def _available_margin_quote(self, symbol: str, quote: str) -> float | None:
+        if self.margin.dry_run:
+            return None
+        try:
+            return float(self.margin.margin_free_balance(symbol, quote))
+        except Exception:
+            return None
+
+    def _clamp_own_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, reserve_pct: float = 0.02) -> tuple[float, dict]:
+        """Return a safe own-quote amount for a margin entry.
+
+        In cross margin we do not auto-transfer spot funds. Binance will reject a
+        market order if the configured ORDER_QUOTE_AMOUNT is greater than the
+        currently free quote balance, or if that balance is reserved by other
+        open orders/OCOs. Keep a small reserve and reduce the entry size instead
+        of submitting an impossible order.
+        """
+        requested_quote = max(0.0, float(requested_quote))
+        info = {
+            "requested_quote_amount": requested_quote,
+            "available_quote_amount": None,
+            "adjusted_quote_amount": requested_quote,
+            "quote_reserve_pct": reserve_pct,
+            "quote_balance_guard": "not_checked",
+        }
+        available = self._available_margin_quote(symbol, quote)
+        if available is None:
+            return requested_quote, info
+        usable = max(0.0, available * max(0.0, 1.0 - reserve_pct))
+        adjusted = min(requested_quote, usable)
+        info.update({
+            "available_quote_amount": available,
+            "adjusted_quote_amount": adjusted,
+            "quote_balance_guard": "clamped" if adjusted < requested_quote else "ok",
+        })
+        if adjusted <= 0:
+            raise RuntimeError(
+                f"margin_insufficient_quote_balance symbol={symbol.upper()} quote={quote.upper()} "
+                f"required={requested_quote} available={available} usable={usable}"
+            )
+        return adjusted, info
+
     def create_margin_oco_sell(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
         current_price = self.binance.current_price(symbol)
@@ -60,15 +102,31 @@ class MarginOrderManager:
         self.margin.ensure_isolated_account(symbol)
         quote = self.quote_asset(symbol)
         multiplier = margin_multiplier()
-        own_quote = float(quote_amount)
+        requested_own_quote = float(quote_amount)
+        balance_guard = {
+            "requested_quote_amount": requested_own_quote,
+            "quote_balance_guard": "not_applicable",
+        }
+
+        # Cross margin is the primary market. Do not transfer spot funds into cross before entry.
+        # Cross must already be funded in Binance; borrow is optional leverage on top.
+        # When not auto-transferring spot to isolated, clamp to the free quote balance to avoid
+        # Binance "Insufficient balance" rejections caused by an oversized ORDER_QUOTE_AMOUNT.
+        if not self.margin.isolated or not margin_transfer_spot_balance():
+            own_quote, balance_guard = self._clamp_own_quote_to_available(
+                symbol=symbol,
+                quote=quote,
+                requested_quote=requested_own_quote,
+            )
+        else:
+            own_quote = max(0.0, requested_own_quote)
+
         wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
         borrow_quote = 0.0
         transfer_payload = None
         borrow_payload = {}
         borrow_error = None
 
-        # Cross margin is the primary market. Do not transfer spot funds into cross before entry.
-        # Cross must already be funded in Binance; borrow is optional leverage on top.
         if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
             transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
 
@@ -87,7 +145,7 @@ class MarginOrderManager:
 
         total_quote = own_quote + borrow_quote
         if total_quote <= 0:
-            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error}")
+            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
 
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
@@ -105,6 +163,8 @@ class MarginOrderManager:
             "margin_multiplier": multiplier,
             "quote_asset": quote,
             "own_quote_amount": own_quote,
+            "requested_own_quote_amount": requested_own_quote,
+            "quote_balance_guard": balance_guard,
             "wanted_borrow_quote_amount": wanted_borrow_quote,
             "borrow_quote_amount": borrow_quote,
             "borrow_error": borrow_error,
