@@ -20,6 +20,21 @@ class StateStore:
         with connect() as conn:
             conn.execute("INSERT OR IGNORE INTO executed_candidates(candidate_id, executed_at) VALUES(?, ?)", (candidate_id, self.now()))
 
+    def has_open_position_for(self, symbol: str, side: str | None = None) -> bool:
+        wanted_symbol = str(symbol or "").upper()
+        wanted_side = str(side or "").lower()
+        if not wanted_symbol:
+            return False
+        for _, position in self.open_positions().items():
+            pos_symbol = str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
+            pos_side = str(position.get("side") or "").lower()
+            if pos_symbol != wanted_symbol:
+                continue
+            if wanted_side and pos_side != wanted_side:
+                continue
+            return True
+        return False
+
     def add_open_position(self, candidate_id: str, payload: dict[str, Any]) -> None:
         payload = {**payload, "status": "open", "opened_at": payload.get("opened_at") or self.now()}
         with connect() as conn:
