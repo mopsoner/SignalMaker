@@ -1,5 +1,6 @@
 import curses
 import json
+import os
 import time
 from datetime import datetime
 
@@ -9,6 +10,13 @@ from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
 
 REFRESH_SECONDS = 5
+
+
+def candidate_display_limit() -> int:
+    try:
+        return max(1, int(os.getenv("TUI_CANDIDATE_LIMIT", os.getenv("CANDIDATE_FETCH_LIMIT", "50")) or "50"))
+    except Exception:
+        return 50
 
 
 def safe(value, default="-"):
@@ -48,18 +56,19 @@ def box(stdscr, y, x, h, w, title=""):
         add(stdscr, y, x + 2, f" {title} ", curses.color_pair(3) | curses.A_BOLD)
 
 
-def fetch_candidates(limit=8):
+def fetch_candidates(limit: int | None = None):
     try:
         settings = load_settings()
         client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-        return client.get_open_candidates(limit=limit), None
+        return client.get_open_candidates(limit=limit or candidate_display_limit()), None
     except Exception as exc:
         return [], str(exc)
 
 
 def snapshot():
     state = StateStore()
-    candidates, candidate_error = fetch_candidates()
+    limit = candidate_display_limit()
+    candidates, candidate_error = fetch_candidates(limit=limit)
     settings = load_settings()
     return {
         "settings": settings,
@@ -71,6 +80,7 @@ def snapshot():
         "events": list(reversed(state.events()[-120:])),
         "candidates": candidates,
         "candidate_error": candidate_error,
+        "candidate_limit": limit,
         "refreshed_at": datetime.now().strftime("%H:%M:%S"),
     }
 
@@ -91,6 +101,7 @@ def render_status(stdscr, y, x, h, w, data):
         ("Quote assets", ",".join(settings.quote_assets)),
         ("Multiplier", data["margin_multiplier"]),
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
+        ("Candidates", f"limit={data.get('candidate_limit', '-')}") ,
         ("Shorts", data["shorts_enabled"]),
         ("Data refresh", data["refreshed_at"]),
     ]
@@ -121,7 +132,7 @@ def render_candidates(stdscr, y, x, h, w, data):
     if error:
         add(stdscr, y + 1, x + 2, trunc(f"API error: {error}", w - 4), curses.color_pair(5))
         return
-    add(stdscr, y + 1, x + 2, f"received={len(candidates)} refreshed={data['refreshed_at']}", curses.color_pair(3))
+    add(stdscr, y + 1, x + 2, f"received={len(candidates)} limit={data.get('candidate_limit', '-')} refreshed={data['refreshed_at']}", curses.color_pair(3))
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
@@ -142,39 +153,18 @@ def _event_details(event: dict) -> str:
     candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
     level_source = payload.get("oco_repair_level_source") or payload.get("levels") or {}
     parts = []
-
-    for key, label in [
-        ("symbol", "sym"),
-        ("execution_symbol", "sym"),
-        ("signal_symbol", "sig"),
-        ("side", "side"),
-        ("mode", "mode"),
-        ("reason", "reason"),
-        ("error", "err"),
-        ("quantity", "qty"),
-        ("entry_price", "entry"),
-        ("target_price", "tp"),
-        ("stop_price", "sl"),
-        ("oco_order_list_id", "oco"),
-        ("tp_order_id", "tp_id"),
-        ("sl_order_id", "sl_id"),
-        ("oco_repair_mode", "repair"),
-        ("order_monitor_mode", "monitor"),
-    ]:
+    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl"), ("oco_order_list_id", "oco"), ("tp_order_id", "tp_id"), ("sl_order_id", "sl_id"), ("oco_repair_mode", "repair"), ("order_monitor_mode", "monitor")]:
         value = payload.get(key)
         if value is not None and value != "":
             parts.append(f"{label}={value}")
-
     for key, label in [("symbol", "sym"), ("side", "side"), ("status", "status"), ("stop_price", "sl"), ("target_price", "tp")]:
         value = candidate.get(key)
         if value is not None and f"{label}=" not in " ".join(parts):
             parts.append(f"cand_{label}={value}")
-
     if isinstance(level_source, dict):
         source = level_source.get("source") or level_source.get("source_candidate_id")
         if source:
             parts.append(f"level_src={source}")
-
     if event_type == "position_opened" and not parts:
         parts.append(json.dumps(payload, ensure_ascii=False, sort_keys=True)[:180])
     if not parts:
@@ -201,7 +191,7 @@ def render_events(stdscr, y, x, h, w, data):
 
 
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | events show payload details | data={data['refreshed_at']} | clock="
+    text = f" q quit | r force refresh | candidates limit={data.get('candidate_limit', '-')} via TUI_CANDIDATE_LIMIT | auto-refresh {REFRESH_SECONDS}s | data={data['refreshed_at']} | clock="
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text + datetime.now().strftime("%H:%M:%S"), curses.color_pair(1))
 
