@@ -29,14 +29,8 @@ def is_margin_unavailable(text: str) -> bool:
 def is_insufficient_balance(text: str) -> bool:
     low = str(text or "").lower()
     return any(x in low for x in [
-        "insufficient balance",
-        "insufficient account balance",
-        "balance was too low",
-        "available balance was too low",
-        "margin_insufficient_quote_balance",
-        "margin_long_no_quote_available",
-        "-2010",
-        "-2019",
+        "insufficient balance", "insufficient account balance", "balance was too low", "available balance was too low",
+        "margin_insufficient_quote_balance", "margin_long_no_quote_available", "-2010", "-2019",
     ])
 
 
@@ -70,6 +64,32 @@ def save_short_position(state: StateStore, candidate_id: str, candidate: dict, s
     })
 
 
+def save_long_position(state: StateStore, candidate_id: str, candidate: dict, symbol: str, manager: MarginOrderManager, result: dict) -> None:
+    state.mark_executed(candidate_id)
+    state.add_open_position(candidate_id, {
+        "candidate_id": candidate_id,
+        "signal_symbol": candidate["symbol"],
+        "execution_symbol": symbol,
+        "side": "long",
+        "mode": "isolated_margin" if manager.margin.isolated else "cross_margin",
+        "margin_isolated": manager.margin.isolated,
+        "quantity": result["quantity"],
+        "entry_price": float(result["entry_price"]),
+        "stop_price": float(candidate["stop_price"]),
+        "target_price": float(candidate["target_price"]),
+        "entry_order_id": result.get("entry_order_id"),
+        "oco_order_list_id": result.get("oco_order_list_id"),
+        "tp_order_id": result.get("tp_order_id"),
+        "sl_order_id": result.get("sl_order_id"),
+        "candidate": candidate,
+        "margin_payload": result,
+        "entry_payload": result.get("entry_payload") or {},
+        "oco_payload": result.get("oco_payload") or {},
+        "needs_oco_repair": not bool(result.get("tp_order_id") and result.get("sl_order_id")),
+        "oco_error": result.get("oco_error"),
+    })
+
+
 def process_candidate(settings, binance, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> str:
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
@@ -80,6 +100,12 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
 
     symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate.get("side", "")))
+
+    if state.has_open_position_for(symbol, side):
+        state.mark_executed(candidate_id)
+        state.add_event(candidate_id, "candidate_skipped_open_position_exists", {"symbol": symbol, "side": side, "candidate": candidate})
+        logger.warning("candidate skipped because open position already exists candidate=%s symbol=%s side=%s", candidate_id, symbol, side)
+        return "open_position_exists"
 
     if side == "short" and not shorts_enabled():
         state.add_event(candidate_id, "short_skipped_disabled", {"symbol": symbol, "candidate": candidate})
@@ -127,27 +153,11 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         logger.error("margin long failed candidate=%s error=%s", candidate_id, text)
         return "error"
 
-    state.mark_executed(candidate_id)
-    state.add_open_position(candidate_id, {
-        "candidate_id": candidate_id,
-        "signal_symbol": candidate["symbol"],
-        "execution_symbol": symbol,
-        "side": "long",
-        "mode": "isolated_margin" if manager.margin.isolated else "cross_margin",
-        "margin_isolated": manager.margin.isolated,
-        "quantity": result["quantity"],
-        "entry_price": float(result["entry_price"]),
-        "stop_price": float(candidate["stop_price"]),
-        "target_price": float(candidate["target_price"]),
-        "entry_order_id": result.get("entry_order_id"),
-        "oco_order_list_id": result.get("oco_order_list_id"),
-        "tp_order_id": result.get("tp_order_id"),
-        "sl_order_id": result.get("sl_order_id"),
-        "candidate": candidate,
-        "margin_payload": result,
-        "entry_payload": result.get("entry_payload") or {},
-        "oco_payload": result.get("oco_payload") or {},
-    })
+    save_long_position(state, candidate_id, candidate, symbol, manager, result)
+    if result.get("oco_error"):
+        state.add_event(candidate_id, "position_opened_needs_oco_repair", {"symbol": symbol, "error": result.get("oco_error"), "result": result})
+        logger.warning("margin long opened without oco candidate=%s symbol=%s qty=%s error=%s", candidate_id, symbol, result.get("quantity"), result.get("oco_error"))
+        return "opened_needs_oco_repair"
     logger.info("margin long opened candidate=%s symbol=%s qty=%s oco=%s quote_guard=%s", candidate_id, symbol, result["quantity"], result.get("oco_order_list_id"), result.get("quote_balance_guard"))
     return "opened"
 
@@ -169,10 +179,11 @@ def main() -> None:
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "sold": 0, "errors": 0, "skipped": 0, "insufficient_balance": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "insufficient_balance": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
+                elif result == "opened_needs_oco_repair": stats["opened_needs_oco_repair"] += 1
                 elif result == "sold": stats["sold"] += 1
                 elif result == "error": stats["errors"] += 1
                 elif result == "insufficient_balance": stats["insufficient_balance"] += 1
