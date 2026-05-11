@@ -2,8 +2,9 @@ import curses
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
+from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.config import load_settings
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_multiplier, shorts_enabled
 from raspberry_executor.signalmaker_client import SignalMakerClient
@@ -29,6 +30,37 @@ def safe(value, default="-"):
 def trunc(value, width):
     text = safe(value, "")
     return text if len(text) <= width else text[: max(0, width - 1)] + "…"
+
+
+def _float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def parse_dt(value):
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def fr_datetime(value, *, with_date: bool = True) -> str:
+    dt = parse_dt(value)
+    if not dt:
+        return safe(value)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.strftime("%d/%m %H:%M:%S") if with_date else dt.strftime("%H:%M:%S")
+
+
+def candidate_received_at(candidate: dict) -> str:
+    # Prefer updated_at because SignalMaker refreshes candidates; fallback to created_at/exported time.
+    return fr_datetime(candidate.get("updated_at") or candidate.get("created_at") or candidate.get("timestamp") or candidate.get("exported_at"))
 
 
 def add(stdscr, y, x, text, attr=0):
@@ -65,63 +97,101 @@ def fetch_candidates(limit: int | None = None):
         return [], str(exc)
 
 
+def enrich_positions_with_pnl(positions, settings):
+    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run or margin_dry_run())
+    enriched = []
+    total_pnl = 0.0
+    total_ok = True
+    price_cache = {}
+    for candidate_id, row in positions:
+        pos = dict(row)
+        symbol = str(pos.get("execution_symbol") or pos.get("signal_symbol") or "").upper()
+        side = str(pos.get("side") or "").lower()
+        qty = _float(pos.get("quantity"))
+        entry = _float(pos.get("entry_price"))
+        try:
+            if symbol not in price_cache:
+                price_cache[symbol] = binance.current_price(symbol)
+            mark = price_cache[symbol]
+            pnl = (mark - entry) * qty if side == "long" else (entry - mark) * qty
+            pos["mark_price"] = mark
+            pos["pnl"] = pnl
+            total_pnl += pnl
+        except Exception as exc:
+            pos["mark_price"] = None
+            pos["pnl"] = None
+            pos["pnl_error"] = str(exc)
+            total_ok = False
+        enriched.append((candidate_id, pos))
+    return enriched, {"total_pnl": total_pnl, "total_ok": total_ok}
+
+
 def snapshot():
     state = StateStore()
     limit = candidate_display_limit()
     candidates, candidate_error = fetch_candidates(limit=limit)
     settings = load_settings()
+    positions, pnl_summary = enrich_positions_with_pnl(list(state.open_positions().items()), settings)
+    now = datetime.now().astimezone()
     return {
         "settings": settings,
         "execution_mode": execution_mode(),
         "margin_dry_run": margin_dry_run(),
         "margin_multiplier": margin_multiplier(),
         "shorts_enabled": shorts_enabled(),
-        "positions": list(state.open_positions().items()),
+        "positions": positions,
+        "pnl_summary": pnl_summary,
         "events": list(reversed(state.events()[-120:])),
         "candidates": candidates,
         "candidate_error": candidate_error,
         "candidate_limit": limit,
-        "refreshed_at": datetime.now().strftime("%H:%M:%S"),
+        "refreshed_at": now.strftime("%d/%m %H:%M:%S"),
     }
 
 
 def render_header(stdscr, width, data):
     add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, 0, 2, " SignalMaker Raspberry TUI ", curses.color_pair(1) | curses.A_BOLD)
-    right = f"mode={data['execution_mode']} margin_dry={data['margin_dry_run']} shorts={data['shorts_enabled']} data={data['refreshed_at']}"
+    right = f"mode={data['execution_mode']} dry={data['margin_dry_run']} shorts={data['shorts_enabled']} {data['refreshed_at']}"
     add(stdscr, 0, max(2, width - len(right) - 2), right, curses.color_pair(1))
 
 
 def render_status(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Control")
     settings = data["settings"]
+    total_pnl = data.get("pnl_summary", {}).get("total_pnl")
     rows = [
         ("Execution", data["execution_mode"]),
         ("Order quote", settings.order_quote_amount),
         ("Quote assets", ",".join(settings.quote_assets)),
         ("Multiplier", data["margin_multiplier"]),
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
+        ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
         ("Candidates", f"limit={data.get('candidate_limit', '-')}") ,
-        ("Shorts", data["shorts_enabled"]),
         ("Data refresh", data["refreshed_at"]),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
+        attr = curses.color_pair(2) if k == "PNL total" and _float(v, 0) >= 0 else curses.color_pair(5) if k == "PNL total" else curses.color_pair(3)
         add(stdscr, y + 1 + i, x + 2, f"{k:<12}", curses.color_pair(3))
-        add(stdscr, y + 1 + i, x + 15, trunc(v, w - 18))
+        add(stdscr, y + 1 + i, x + 15, trunc(v, w - 18), attr)
 
 
 def render_positions(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "Open Positions")
+    total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
+    box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl:+.4f}")
     rows = data["positions"][: max(0, h - 4)]
-    add(stdscr, y + 1, x + 2, "Symbol     Side   Mode       Qty        Entry      TP/SL", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Symbol     Side   Qty        Entry      Mark       PNL        TP/SL", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
         return
     for idx, (_, row) in enumerate(rows):
         symbol = row.get("execution_symbol") or row.get("signal_symbol")
-        oco = row.get("oco_order_list_id") or "no-oco"
-        line = f"{safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('mode')):<10} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))} oco={safe(oco)}"
-        color = curses.color_pair(2) if str(row.get("side")).lower() == "long" else curses.color_pair(5)
+        pnl = row.get("pnl")
+        mark = row.get("mark_price")
+        pnl_text = f"{pnl:+.4f}" if pnl is not None else "PNL?"
+        mark_text = f"{mark:.8g}" if mark is not None else "-"
+        line = f"{safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))}"
+        color = curses.color_pair(2) if pnl is not None and pnl >= 0 else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
 
@@ -132,13 +202,13 @@ def render_candidates(stdscr, y, x, h, w, data):
     if error:
         add(stdscr, y + 1, x + 2, trunc(f"API error: {error}", w - 4), curses.color_pair(5))
         return
-    add(stdscr, y + 1, x + 2, f"received={len(candidates)} limit={data.get('candidate_limit', '-')} refreshed={data['refreshed_at']}", curses.color_pair(3))
+    add(stdscr, y + 1, x + 2, f"received={len(candidates)} limit={data.get('candidate_limit', '-')} refresh={data['refreshed_at']}", curses.color_pair(3))
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Symbol     Side   Status    Stop        Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status    Stop        Target", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<9} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<9} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
@@ -179,21 +249,21 @@ def render_events(stdscr, y, x, h, w, data):
     if not events:
         add(stdscr, y + 1, x + 2, "No events", curses.color_pair(4))
         return
-    add(stdscr, y + 1, x + 2, "Time     Candidate                 Event / Details", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Date FR        Candidate                 Event / Details", curses.A_BOLD)
     for idx, event in enumerate(events):
         event_type = str(event.get("event_type", ""))
         text = (event_type + " " + _event_details(event)).lower()
         level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled"]) else curses.color_pair(4)
-        timestamp = safe(event.get("timestamp"))[-14:]
+        timestamp = fr_datetime(event.get("timestamp"))
         candidate_id = trunc(event.get("candidate_id"), 24)
         line = f"{timestamp:<14} {candidate_id:<24} {event_type} | {_event_details(event)}"
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), level)
 
 
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r force refresh | candidates limit={data.get('candidate_limit', '-')} via TUI_CANDIDATE_LIMIT | auto-refresh {REFRESH_SECONDS}s | data={data['refreshed_at']} | clock="
+    text = f" q quit | r force refresh | candidates limit={data.get('candidate_limit', '-')} | auto-refresh {REFRESH_SECONDS}s | refresh={data['refreshed_at']}"
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
-    add(stdscr, height - 1, 2, text + datetime.now().strftime("%H:%M:%S"), curses.color_pair(1))
+    add(stdscr, height - 1, 2, text, curses.color_pair(1))
 
 
 def draw(stdscr, data):
