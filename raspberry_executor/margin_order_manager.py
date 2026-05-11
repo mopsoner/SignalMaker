@@ -18,10 +18,58 @@ class MarginOrderManager:
 
     @staticmethod
     def _oco_order_ids(payload: dict | None) -> tuple[str | int | None, str | int | None]:
-        orders = (payload or {}).get("orders") or []
-        first = orders[0].get("orderId") if len(orders) > 0 and isinstance(orders[0], dict) else None
-        second = orders[1].get("orderId") if len(orders) > 1 and isinstance(orders[1], dict) else None
-        return first, second
+        """Return (take_profit_order_id, stop_loss_order_id).
+
+        Binance does not guarantee that `orders[0]` is the take-profit and
+        `orders[1]` is the stop-loss. In the mobile UI we saw the local bot mark
+        `take_profit_filled` while Binance showed `Stop loss Limit / Vendre`
+        executed and the `Limit Maker / Vendre` expired. That happens when the
+        IDs are stored swapped. Prefer `orderReports` because it contains order
+        types, and fall back to `orders` with type/stopPrice hints.
+        """
+        payload = payload or {}
+        tp_order_id = None
+        sl_order_id = None
+
+        def classify(row: dict) -> str | None:
+            order_type = str(row.get("type") or row.get("origType") or row.get("aboveType") or row.get("belowType") or "").upper()
+            if order_type in {"LIMIT_MAKER", "LIMIT"}:
+                return "tp"
+            if "STOP" in order_type:
+                return "sl"
+            if row.get("stopPrice") is not None or row.get("belowStopPrice") is not None:
+                return "sl"
+            return None
+
+        for row in payload.get("orderReports") or []:
+            if not isinstance(row, dict):
+                continue
+            oid = row.get("orderId")
+            kind = classify(row)
+            if kind == "tp" and tp_order_id is None:
+                tp_order_id = oid
+            elif kind == "sl" and sl_order_id is None:
+                sl_order_id = oid
+
+        for row in payload.get("orders") or []:
+            if not isinstance(row, dict):
+                continue
+            oid = row.get("orderId")
+            kind = classify(row)
+            if kind == "tp" and tp_order_id is None:
+                tp_order_id = oid
+            elif kind == "sl" and sl_order_id is None:
+                sl_order_id = oid
+
+        orders = [row for row in (payload.get("orders") or []) if isinstance(row, dict)]
+        if (tp_order_id is None or sl_order_id is None) and len(orders) >= 2:
+            # Last-resort fallback for dry-run or unusual Binance payloads.
+            # New OCO API shape normally uses above=TP and below=SL.
+            if tp_order_id is None:
+                tp_order_id = orders[0].get("orderId")
+            if sl_order_id is None:
+                sl_order_id = orders[1].get("orderId")
+        return tp_order_id, sl_order_id
 
     @staticmethod
     def _order_id(payload: dict | None):
@@ -49,14 +97,6 @@ class MarginOrderManager:
             return None
 
     def _clamp_own_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, reserve_pct: float = 0.02) -> tuple[float, dict]:
-        """Return a safe own-quote amount for a margin entry.
-
-        In cross margin we do not auto-transfer spot funds. Binance will reject a
-        market order if the configured ORDER_QUOTE_AMOUNT is greater than the
-        currently free quote balance, or if that balance is reserved by other
-        open orders/OCOs. Keep a small reserve and reduce the entry size instead
-        of submitting an impossible order.
-        """
         requested_quote = max(0.0, float(requested_quote))
         info = {
             "requested_quote_amount": requested_quote,
@@ -103,33 +143,18 @@ class MarginOrderManager:
         quote = self.quote_asset(symbol)
         multiplier = margin_multiplier()
         requested_own_quote = float(quote_amount)
-        balance_guard = {
-            "requested_quote_amount": requested_own_quote,
-            "quote_balance_guard": "not_applicable",
-        }
-
-        # Cross margin is the primary market. Do not transfer spot funds into cross before entry.
-        # Cross must already be funded in Binance; borrow is optional leverage on top.
-        # When not auto-transferring spot to isolated, clamp to the free quote balance to avoid
-        # Binance "Insufficient balance" rejections caused by an oversized ORDER_QUOTE_AMOUNT.
+        balance_guard = {"requested_quote_amount": requested_own_quote, "quote_balance_guard": "not_applicable"}
         if not self.margin.isolated or not margin_transfer_spot_balance():
-            own_quote, balance_guard = self._clamp_own_quote_to_available(
-                symbol=symbol,
-                quote=quote,
-                requested_quote=requested_own_quote,
-            )
+            own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
         else:
             own_quote = max(0.0, requested_own_quote)
-
         wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
         borrow_quote = 0.0
         transfer_payload = None
         borrow_payload = {}
         borrow_error = None
-
         if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
             transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
-
         if wanted_borrow_quote > 0:
             try:
                 max_borrow = self.margin.max_borrowable(symbol, quote)
@@ -137,16 +162,12 @@ class MarginOrderManager:
                 if borrow_quote > 0:
                     borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
             except Exception as exc:
-                # Borrow can fail for token/platform limits. Do not kill the whole flow.
-                # Continue with own_quote already available in the selected margin account.
                 borrow_quote = 0.0
                 borrow_error = str(exc)
                 borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
-
         total_quote = own_quote + borrow_quote
         if total_quote <= 0:
             raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
-
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
