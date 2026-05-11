@@ -21,6 +21,10 @@ def candidate_fetch_limit() -> int:
     return max(10, int(os.getenv("CANDIDATE_FETCH_LIMIT", "100") or "100"))
 
 
+def log_skipped_disabled_shorts() -> bool:
+    return str(os.getenv("LOG_SKIPPED_DISABLED_SHORTS", "false") or "false").lower() in {"1", "true", "yes", "on"}
+
+
 def is_margin_unavailable(text: str) -> bool:
     low = str(text or "").lower()
     return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account", "isolated", "invalid symbol", "-1121", "-11001", "-3028"])
@@ -108,7 +112,8 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         return "open_position_exists"
 
     if side == "short" and not shorts_enabled():
-        state.add_event(candidate_id, "short_skipped_disabled", {"symbol": symbol, "candidate": candidate})
+        if log_skipped_disabled_shorts():
+            state.add_event(candidate_id, "short_skipped_disabled", {"symbol": symbol, "candidate": candidate})
         return "shorts_disabled"
 
     try:
@@ -175,11 +180,11 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s fallback=spot", margin.dry_run, margin.isolated, shorts_enabled())
+    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s log_disabled_shorts=%s fallback=spot", margin.dry_run, margin.isolated, shorts_enabled(), log_skipped_disabled_shorts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "insufficient_balance": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
@@ -187,6 +192,7 @@ def main() -> None:
                 elif result == "sold": stats["sold"] += 1
                 elif result == "error": stats["errors"] += 1
                 elif result == "insufficient_balance": stats["insufficient_balance"] += 1
+                elif result == "shorts_disabled": stats["shorts_disabled"] += 1
                 else: stats["skipped"] += 1
             logger.info("margin executor summary=%s", stats)
         except Exception as exc:
