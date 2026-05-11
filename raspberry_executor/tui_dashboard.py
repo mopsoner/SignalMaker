@@ -1,4 +1,5 @@
 import curses
+import json
 import time
 from datetime import datetime
 
@@ -107,7 +108,8 @@ def render_positions(stdscr, y, x, h, w, data):
         return
     for idx, (_, row) in enumerate(rows):
         symbol = row.get("execution_symbol") or row.get("signal_symbol")
-        line = f"{safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('mode')):<10} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))}"
+        oco = row.get("oco_order_list_id") or "no-oco"
+        line = f"{safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('mode')):<10} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))} oco={safe(oco)}"
         color = curses.color_pair(2) if str(row.get("side")).lower() == "long" else curses.color_pair(5)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
@@ -129,21 +131,77 @@ def render_candidates(stdscr, y, x, h, w, data):
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
+def _payload(event: dict) -> dict:
+    payload = event.get("payload") or {}
+    return payload if isinstance(payload, dict) else {"payload": payload}
+
+
+def _event_details(event: dict) -> str:
+    payload = _payload(event)
+    event_type = str(event.get("event_type") or "")
+    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+    level_source = payload.get("oco_repair_level_source") or payload.get("levels") or {}
+    parts = []
+
+    for key, label in [
+        ("symbol", "sym"),
+        ("execution_symbol", "sym"),
+        ("signal_symbol", "sig"),
+        ("side", "side"),
+        ("mode", "mode"),
+        ("reason", "reason"),
+        ("error", "err"),
+        ("quantity", "qty"),
+        ("entry_price", "entry"),
+        ("target_price", "tp"),
+        ("stop_price", "sl"),
+        ("oco_order_list_id", "oco"),
+        ("tp_order_id", "tp_id"),
+        ("sl_order_id", "sl_id"),
+        ("oco_repair_mode", "repair"),
+        ("order_monitor_mode", "monitor"),
+    ]:
+        value = payload.get(key)
+        if value is not None and value != "":
+            parts.append(f"{label}={value}")
+
+    for key, label in [("symbol", "sym"), ("side", "side"), ("status", "status"), ("stop_price", "sl"), ("target_price", "tp")]:
+        value = candidate.get(key)
+        if value is not None and f"{label}=" not in " ".join(parts):
+            parts.append(f"cand_{label}={value}")
+
+    if isinstance(level_source, dict):
+        source = level_source.get("source") or level_source.get("source_candidate_id")
+        if source:
+            parts.append(f"level_src={source}")
+
+    if event_type == "position_opened" and not parts:
+        parts.append(json.dumps(payload, ensure_ascii=False, sort_keys=True)[:180])
+    if not parts:
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        parts.append(text[:180])
+    return " ".join(parts)
+
+
 def render_events(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Recent Events")
-    events = data["events"][: max(0, h - 2)]
+    events = data["events"][: max(0, h - 3)]
     if not events:
         add(stdscr, y + 1, x + 2, "No events", curses.color_pair(4))
         return
+    add(stdscr, y + 1, x + 2, "Time     Candidate                 Event / Details", curses.A_BOLD)
     for idx, event in enumerate(events):
         event_type = str(event.get("event_type", ""))
-        level = curses.color_pair(5) if "error" in event_type or "failed" in event_type or "not_confirmed" in event_type else curses.color_pair(4)
-        line = f"{safe(event.get('timestamp'))[-8:]} {safe(event.get('candidate_id'))} {event_type}"
-        add(stdscr, y + 1 + idx, x + 2, trunc(line, w - 4), level)
+        text = (event_type + " " + _event_details(event)).lower()
+        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled"]) else curses.color_pair(4)
+        timestamp = safe(event.get("timestamp"))[-14:]
+        candidate_id = trunc(event.get("candidate_id"), 24)
+        line = f"{timestamp:<14} {candidate_id:<24} {event_type} | {_event_details(event)}"
+        add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), level)
 
 
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | logs hidden | data={data['refreshed_at']} | clock="
+    text = f" q quit | r force refresh | auto-refresh {REFRESH_SECONDS}s | events show payload details | data={data['refreshed_at']} | clock="
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text + datetime.now().strftime("%H:%M:%S"), curses.color_pair(1))
 
