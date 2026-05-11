@@ -25,9 +25,23 @@ def log_skipped_disabled_shorts() -> bool:
     return str(os.getenv("LOG_SKIPPED_DISABLED_SHORTS", "false") or "false").lower() in {"1", "true", "yes", "on"}
 
 
+def fallback_spot_on_token_limit() -> bool:
+    return str(os.getenv("FALLBACK_SPOT_ON_MARGIN_TOKEN_LIMIT", "false") or "false").lower() in {"1", "true", "yes", "on"}
+
+
 def is_margin_unavailable(text: str) -> bool:
     low = str(text or "").lower()
     return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account", "isolated", "invalid symbol", "-1121", "-11001", "-3028"])
+
+
+def is_margin_token_collateral_limit(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in [
+        "-3087",
+        "platform max pledged collateral amount",
+        "max transfer in quantity is 0",
+        "reaches platform max pledged collateral",
+    ])
 
 
 def is_insufficient_balance(text: str) -> bool:
@@ -94,6 +108,13 @@ def save_long_position(state: StateStore, candidate_id: str, candidate: dict, sy
     })
 
 
+def skip_margin_token_limit(state: StateStore, candidate_id: str, candidate: dict, symbol: str, side: str, error: str) -> str:
+    state.mark_executed(candidate_id)
+    state.add_event(candidate_id, "margin_skipped_token_collateral_limit", {"error": error, "symbol": symbol, "side": side, "candidate": candidate})
+    logger.warning("margin skipped token collateral limit candidate=%s symbol=%s side=%s error=%s", candidate_id, symbol, side, error)
+    return "token_collateral_limit"
+
+
 def process_candidate(settings, binance, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> str:
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
@@ -120,6 +141,10 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         manager.margin.ensure_isolated_account(symbol)
     except Exception as exc:
         text = str(exc)
+        if is_margin_token_collateral_limit(text):
+            if fallback_spot_on_token_limit() and side == "long":
+                return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+            return skip_margin_token_limit(state, candidate_id, candidate, symbol, side, text)
         if is_margin_unavailable(text):
             return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
         state.add_event(candidate_id, "margin_setup_error", {"error": text, "candidate": candidate})
@@ -134,6 +159,8 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
             return "opened"
         except Exception as exc:
             text = str(exc)
+            if is_margin_token_collateral_limit(text):
+                return skip_margin_token_limit(state, candidate_id, candidate, symbol, side, text)
             if is_margin_unavailable(text):
                 return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
             if is_insufficient_balance(text):
@@ -148,6 +175,10 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         result = manager.open_long_with_margin_oco(symbol=symbol, quote_amount=float(settings.order_quote_amount), target_price=float(candidate["target_price"]), stop_price=float(candidate["stop_price"]))
     except Exception as exc:
         text = str(exc)
+        if is_margin_token_collateral_limit(text):
+            if fallback_spot_on_token_limit():
+                return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+            return skip_margin_token_limit(state, candidate_id, candidate, symbol, side, text)
         if is_margin_unavailable(text):
             return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
         if is_insufficient_balance(text):
@@ -157,6 +188,9 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
         logger.error("margin long failed candidate=%s error=%s", candidate_id, text)
         return "error"
+
+    if result.get("oco_error") and is_margin_token_collateral_limit(result.get("oco_error")):
+        return skip_margin_token_limit(state, candidate_id, candidate, symbol, side, result.get("oco_error"))
 
     save_long_position(state, candidate_id, candidate, symbol, manager, result)
     if result.get("oco_error"):
@@ -180,11 +214,11 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s log_disabled_shorts=%s fallback=spot", margin.dry_run, margin.isolated, shorts_enabled(), log_skipped_disabled_shorts())
+    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s log_disabled_shorts=%s fallback_spot_on_token_limit=%s fallback=spot", margin.dry_run, margin.isolated, shorts_enabled(), log_skipped_disabled_shorts(), fallback_spot_on_token_limit())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_limit": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
@@ -193,6 +227,7 @@ def main() -> None:
                 elif result == "error": stats["errors"] += 1
                 elif result == "insufficient_balance": stats["insufficient_balance"] += 1
                 elif result == "shorts_disabled": stats["shorts_disabled"] += 1
+                elif result == "token_collateral_limit": stats["token_collateral_limit"] += 1
                 else: stats["skipped"] += 1
             logger.info("margin executor summary=%s", stats)
         except Exception as exc:
