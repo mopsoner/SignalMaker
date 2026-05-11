@@ -71,13 +71,21 @@ class MarginOrderManager:
         borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
         transfer_payload = None
         borrow_payload = None
-        if margin_transfer_spot_balance() and own_quote > 0:
+
+        # Cross margin is now the primary market. Do not transfer spot funds into cross
+        # before entry: if the buy fails, this avoids useless SPOT -> MARGIN transfers.
+        # Cross should be funded directly in Binance, and the bot can borrow there.
+        if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
             transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
+
         if borrow_quote > 0:
             max_borrow = self.margin.max_borrowable(symbol, quote)
             if max_borrow > 0:
                 borrow_quote = min(borrow_quote, max_borrow)
             borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
+
+        # In cross mode, own_quote represents existing funds already available in cross.
+        # In isolated mode, own_quote may have been transferred above.
         total_quote = own_quote + borrow_quote
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
