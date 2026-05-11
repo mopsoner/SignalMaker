@@ -25,10 +25,48 @@ class SpotOrderManager:
 
     @staticmethod
     def _oco_order_ids(payload: dict | None) -> tuple[str | int | None, str | int | None]:
-        orders = (payload or {}).get("orders") or []
-        first = orders[0].get("orderId") if len(orders) > 0 and isinstance(orders[0], dict) else None
-        second = orders[1].get("orderId") if len(orders) > 1 and isinstance(orders[1], dict) else None
-        return first, second
+        """Return (take_profit_order_id, stop_loss_order_id) from Binance OCO payload."""
+        payload = payload or {}
+        tp_order_id = None
+        sl_order_id = None
+
+        def classify(row: dict) -> str | None:
+            order_type = str(row.get("type") or row.get("origType") or row.get("aboveType") or row.get("belowType") or "").upper()
+            if order_type in {"LIMIT_MAKER", "LIMIT"}:
+                return "tp"
+            if "STOP" in order_type:
+                return "sl"
+            if row.get("stopPrice") is not None or row.get("belowStopPrice") is not None:
+                return "sl"
+            return None
+
+        for row in payload.get("orderReports") or []:
+            if not isinstance(row, dict):
+                continue
+            oid = row.get("orderId")
+            kind = classify(row)
+            if kind == "tp" and tp_order_id is None:
+                tp_order_id = oid
+            elif kind == "sl" and sl_order_id is None:
+                sl_order_id = oid
+
+        for row in payload.get("orders") or []:
+            if not isinstance(row, dict):
+                continue
+            oid = row.get("orderId")
+            kind = classify(row)
+            if kind == "tp" and tp_order_id is None:
+                tp_order_id = oid
+            elif kind == "sl" and sl_order_id is None:
+                sl_order_id = oid
+
+        orders = [row for row in (payload.get("orders") or []) if isinstance(row, dict)]
+        if (tp_order_id is None or sl_order_id is None) and len(orders) >= 2:
+            if tp_order_id is None:
+                tp_order_id = orders[0].get("orderId")
+            if sl_order_id is None:
+                sl_order_id = orders[1].get("orderId")
+        return tp_order_id, sl_order_id
 
     def _submit_oco_sell(self, symbol: str, quantity: str, target_price: str, stop_price: str, stop_limit_price: str) -> dict:
         if self.binance.dry_run:
@@ -98,12 +136,7 @@ class SpotOrderManager:
         if entry_price is None:
             raise RuntimeError("unable_to_determine_entry_fill_price")
         executed_qty = self._executed_qty(entry, quantity)
-        oco_result = self.create_exit_oco_for_open_long(
-            symbol=symbol,
-            quantity=executed_qty,
-            target_price=target_price,
-            stop_price=stop_price,
-        )
+        oco_result = self.create_exit_oco_for_open_long(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
         return {
             "symbol": symbol,
             "side": "long",
