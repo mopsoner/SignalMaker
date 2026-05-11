@@ -18,15 +18,6 @@ class MarginOrderManager:
 
     @staticmethod
     def _oco_order_ids(payload: dict | None) -> tuple[str | int | None, str | int | None]:
-        """Return (take_profit_order_id, stop_loss_order_id).
-
-        Binance does not guarantee that `orders[0]` is the take-profit and
-        `orders[1]` is the stop-loss. In the mobile UI we saw the local bot mark
-        `take_profit_filled` while Binance showed `Stop loss Limit / Vendre`
-        executed and the `Limit Maker / Vendre` expired. That happens when the
-        IDs are stored swapped. Prefer `orderReports` because it contains order
-        types, and fall back to `orders` with type/stopPrice hints.
-        """
         payload = payload or {}
         tp_order_id = None
         sl_order_id = None
@@ -63,8 +54,6 @@ class MarginOrderManager:
 
         orders = [row for row in (payload.get("orders") or []) if isinstance(row, dict)]
         if (tp_order_id is None or sl_order_id is None) and len(orders) >= 2:
-            # Last-resort fallback for dry-run or unusual Binance payloads.
-            # New OCO API shape normally uses above=TP and below=SL.
             if tp_order_id is None:
                 tp_order_id = orders[0].get("orderId")
             if sl_order_id is None:
@@ -148,6 +137,7 @@ class MarginOrderManager:
             own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
         else:
             own_quote = max(0.0, requested_own_quote)
+
         wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
         borrow_quote = 0.0
         transfer_payload = None
@@ -165,9 +155,11 @@ class MarginOrderManager:
                 borrow_quote = 0.0
                 borrow_error = str(exc)
                 borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
+
         total_quote = own_quote + borrow_quote
         if total_quote <= 0:
             raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
+
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
@@ -175,8 +167,8 @@ class MarginOrderManager:
         if entry_price is None:
             entry_price = current_price
         executed_qty = self._executed_qty(entry, quantity)
-        oco_result = self.create_margin_oco_sell(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
-        return {
+
+        result = {
             "symbol": symbol,
             "side": "long",
             "mode": "margin",
@@ -190,17 +182,36 @@ class MarginOrderManager:
             "borrow_quote_amount": borrow_quote,
             "borrow_error": borrow_error,
             "total_quote_amount": total_quote,
-            "quantity": oco_result["quantity"],
+            "quantity": executed_qty,
             "entry_price": float(entry_price),
             "entry_order_id": self._order_id(entry),
-            "oco_order_list_id": oco_result.get("oco_order_list_id"),
-            "tp_order_id": oco_result.get("tp_order_id"),
-            "sl_order_id": oco_result.get("sl_order_id"),
             "transfer_payload": transfer_payload or {},
             "borrow_payload": borrow_payload or {},
             "entry_payload": entry,
-            "oco_payload": oco_result.get("oco_payload") or {},
         }
+
+        try:
+            oco_result = self.create_margin_oco_sell(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
+            result.update({
+                "quantity": oco_result["quantity"],
+                "oco_order_list_id": oco_result.get("oco_order_list_id"),
+                "tp_order_id": oco_result.get("tp_order_id"),
+                "sl_order_id": oco_result.get("sl_order_id"),
+                "oco_payload": oco_result.get("oco_payload") or {},
+            })
+        except Exception as exc:
+            # Critical anti-replay behavior: the entry market order may already be filled.
+            # Return the opened position without OCO so the executor can mark it executed
+            # and the monitor can repair OCO, instead of retrying and buying again.
+            result.update({
+                "oco_order_list_id": None,
+                "tp_order_id": None,
+                "sl_order_id": None,
+                "oco_payload": {},
+                "oco_error": str(exc),
+                "needs_oco_repair": True,
+            })
+        return result
 
     def open_short_with_margin_borrow_sell(self, *, symbol: str, quote_amount: float) -> dict:
         symbol = symbol.upper()
