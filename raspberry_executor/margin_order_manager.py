@@ -53,14 +53,7 @@ class MarginOrderManager:
         self.rules.ensure_exit_notional(symbol, exit_qty, stop_limit, label="margin_oco_stop_loss")
         oco = self.margin.margin_oco_sell(symbol, exit_qty, tp, stop, stop_limit)
         tp_order_id, sl_order_id = self._oco_order_ids(oco)
-        return {
-            "symbol": symbol,
-            "quantity": exit_qty,
-            "oco_order_list_id": oco.get("orderListId"),
-            "tp_order_id": tp_order_id,
-            "sl_order_id": sl_order_id,
-            "oco_payload": oco,
-        }
+        return {"symbol": symbol, "quantity": exit_qty, "oco_order_list_id": oco.get("orderListId"), "tp_order_id": tp_order_id, "sl_order_id": sl_order_id, "oco_payload": oco}
 
     def open_long_with_margin_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
@@ -68,25 +61,34 @@ class MarginOrderManager:
         quote = self.quote_asset(symbol)
         multiplier = margin_multiplier()
         own_quote = float(quote_amount)
-        borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
+        wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
+        borrow_quote = 0.0
         transfer_payload = None
-        borrow_payload = None
+        borrow_payload = {}
+        borrow_error = None
 
-        # Cross margin is now the primary market. Do not transfer spot funds into cross
-        # before entry: if the buy fails, this avoids useless SPOT -> MARGIN transfers.
-        # Cross should be funded directly in Binance, and the bot can borrow there.
+        # Cross margin is the primary market. Do not transfer spot funds into cross before entry.
+        # Cross must already be funded in Binance; borrow is optional leverage on top.
         if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
             transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
 
-        if borrow_quote > 0:
-            max_borrow = self.margin.max_borrowable(symbol, quote)
-            if max_borrow > 0:
-                borrow_quote = min(borrow_quote, max_borrow)
-            borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
+        if wanted_borrow_quote > 0:
+            try:
+                max_borrow = self.margin.max_borrowable(symbol, quote)
+                borrow_quote = min(wanted_borrow_quote, max_borrow) if max_borrow > 0 else wanted_borrow_quote
+                if borrow_quote > 0:
+                    borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
+            except Exception as exc:
+                # Borrow can fail for token/platform limits. Do not kill the whole flow.
+                # Continue with own_quote already available in the selected margin account.
+                borrow_quote = 0.0
+                borrow_error = str(exc)
+                borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
 
-        # In cross mode, own_quote represents existing funds already available in cross.
-        # In isolated mode, own_quote may have been transferred above.
         total_quote = own_quote + borrow_quote
+        if total_quote <= 0:
+            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error}")
+
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
@@ -94,12 +96,7 @@ class MarginOrderManager:
         if entry_price is None:
             entry_price = current_price
         executed_qty = self._executed_qty(entry, quantity)
-        oco_result = self.create_margin_oco_sell(
-            symbol=symbol,
-            quantity=executed_qty,
-            target_price=target_price,
-            stop_price=stop_price,
-        )
+        oco_result = self.create_margin_oco_sell(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
         return {
             "symbol": symbol,
             "side": "long",
@@ -108,7 +105,9 @@ class MarginOrderManager:
             "margin_multiplier": multiplier,
             "quote_asset": quote,
             "own_quote_amount": own_quote,
+            "wanted_borrow_quote_amount": wanted_borrow_quote,
             "borrow_quote_amount": borrow_quote,
+            "borrow_error": borrow_error,
             "total_quote_amount": total_quote,
             "quantity": oco_result["quantity"],
             "entry_price": float(entry_price),
@@ -132,7 +131,10 @@ class MarginOrderManager:
         if max_borrow > 0:
             qty = self.rules.normalize_market_quantity(symbol, min(float(qty), max_borrow))
         self.rules.ensure_exit_notional(symbol, qty, price, label="margin_short_sell")
-        borrow = self.margin.borrow(symbol, base, qty)
+        try:
+            borrow = self.margin.borrow(symbol, base, qty)
+        except Exception as exc:
+            return {"status": "skipped", "reason": "borrow_failed", "error": str(exc), "symbol": symbol, "side": "short", "base_asset": base, "borrow_base_amount": qty, "timestamp": int(time.time())}
         sell = self.margin.margin_order(symbol, "SELL", qty, "MARKET")
         entry_price = BinanceClient.average_fill_price(sell, fallback=price) or price
         sold_qty = self._executed_qty(sell, qty)
@@ -167,12 +169,4 @@ class MarginOrderManager:
         qty = self.rules.normalize_market_quantity(symbol, free_qty)
         self.rules.ensure_exit_notional(symbol, qty, price, label="margin_sell_on_short")
         order = self.margin.margin_order(symbol, "SELL", qty, "MARKET")
-        return {
-            "status": "sold",
-            "symbol": symbol,
-            "base_asset": base,
-            "quantity": qty,
-            "price": price,
-            "order": order,
-            "timestamp": int(time.time()),
-        }
+        return {"status": "sold", "symbol": symbol, "base_asset": base, "quantity": qty, "price": price, "order": order, "timestamp": int(time.time())}
