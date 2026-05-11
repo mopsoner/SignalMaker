@@ -49,6 +49,7 @@ User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
 Environment=TERM=xterm-256color
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=
 TTYPath=/dev/${TTY_NAME}
 TTYReset=yes
 TTYVHangup=yes
@@ -56,8 +57,13 @@ TTYVTDisallocate=yes
 StandardInput=tty
 StandardOutput=tty
 StandardError=journal
-ExecStartPre=/bin/sleep 3
-ExecStart=/bin/bash -lc 'printf "\033c" > /dev/${TTY_NAME}; exec ${APP_DIR}/tui.sh'
+# ExecStartPre prefixed with + runs as root even though the service runs as RUN_USER.
+# This is needed to switch the physical HDMI console to tty1 on boot.
+ExecStartPre=+/bin/sleep 5
+ExecStartPre=+/usr/bin/chvt ${TTY_NAME#tty}
+ExecStartPre=+/usr/bin/setterm -blank 0 -powerdown 0 -powersave off -term linux -store
+ExecStartPre=+/bin/sh -c 'printf "\033c" > /dev/${TTY_NAME}'
+ExecStart=/bin/bash -lc 'exec ${APP_DIR}/tui.sh'
 Restart=always
 RestartSec=5
 
@@ -80,4 +86,5 @@ echo "  sudo systemctl restart ${BOT_SERVICE}"
 echo "  sudo systemctl restart ${TUI_SERVICE}"
 echo "Diagnostics:"
 echo "  systemctl status ${TUI_SERVICE}"
-echo "  journalctl -u ${TUI_SERVICE} -n 80 --no-pager"
+echo "  journalctl -u ${TUI_SERVICE} -n 120 --no-pager"
+echo "  sudo chvt ${TTY_NAME#tty}"
