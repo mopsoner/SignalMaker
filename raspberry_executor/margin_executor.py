@@ -26,6 +26,20 @@ def is_margin_unavailable(text: str) -> bool:
     return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account", "isolated", "invalid symbol", "-1121", "-11001", "-3028"])
 
 
+def is_insufficient_balance(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in [
+        "insufficient balance",
+        "insufficient account balance",
+        "balance was too low",
+        "available balance was too low",
+        "margin_insufficient_quote_balance",
+        "margin_long_no_quote_available",
+        "-2010",
+        "-2019",
+    ])
+
+
 def fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, reason: str) -> str:
     cid = str(candidate.get("candidate_id") or "")
     logger.warning("margin unavailable fallback spot candidate=%s reason=%s", cid, reason)
@@ -91,6 +105,10 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
             text = str(exc)
             if is_margin_unavailable(text):
                 return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+            if is_insufficient_balance(text):
+                state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
+                logger.warning("margin short skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
+                return "insufficient_balance"
             state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
             logger.error("margin short failed candidate=%s error=%s", candidate_id, text)
             return "error"
@@ -101,6 +119,10 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         text = str(exc)
         if is_margin_unavailable(text):
             return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+        if is_insufficient_balance(text):
+            state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
+            logger.warning("margin long skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
+            return "insufficient_balance"
         state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
         logger.error("margin long failed candidate=%s error=%s", candidate_id, text)
         return "error"
@@ -126,7 +148,7 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         "entry_payload": result.get("entry_payload") or {},
         "oco_payload": result.get("oco_payload") or {},
     })
-    logger.info("margin long opened candidate=%s symbol=%s qty=%s oco=%s", candidate_id, symbol, result["quantity"], result.get("oco_order_list_id"))
+    logger.info("margin long opened candidate=%s symbol=%s qty=%s oco=%s quote_guard=%s", candidate_id, symbol, result["quantity"], result.get("oco_order_list_id"), result.get("quote_balance_guard"))
     return "opened"
 
 
@@ -147,12 +169,13 @@ def main() -> None:
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "sold": 0, "errors": 0, "skipped": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "sold": 0, "errors": 0, "skipped": 0, "insufficient_balance": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
                 elif result == "sold": stats["sold"] += 1
                 elif result == "error": stats["errors"] += 1
+                elif result == "insufficient_balance": stats["insufficient_balance"] += 1
                 else: stats["skipped"] += 1
             logger.info("margin executor summary=%s", stats)
         except Exception as exc:
