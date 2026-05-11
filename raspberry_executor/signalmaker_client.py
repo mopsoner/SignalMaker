@@ -25,22 +25,42 @@ class SignalMakerClient:
         return data
 
     def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
+        """Return recent candidates for repair/reconciliation flows.
+
+        Important: the SignalMaker API does not implement a special
+        `status=all` value. Passing `status=all` makes the backend filter for
+        rows whose status is literally "all", which returns an empty list and
+        prevents the Raspberry OCO repair from seeing live `status=open`
+        candidates such as `ENJUSDC-open`.
+        """
         params = {"limit": limit}
         if symbol:
             params["symbol"] = symbol.upper()
-        for status in ("all", "open"):
+
+        attempts = [
+            params,  # no status filter = all candidates supported by backend
+            {**params, "status": "open"},
+            {**params, "status": "new"},
+        ]
+        last_error: Exception | None = None
+        for attempt_params in attempts:
             try:
                 response = self.session.get(
                     self._url("/api/v1/trade-candidates"),
-                    params={**params, "status": status},
+                    params=attempt_params,
                     timeout=15,
                 )
                 response.raise_for_status()
                 data = response.json()
-                if isinstance(data, list):
+                if not isinstance(data, list):
+                    raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
+                if data:
                     return data
-            except Exception:
+            except Exception as exc:
+                last_error = exc
                 continue
+        if last_error:
+            raise RuntimeError(f"Unable to fetch recent SignalMaker candidates: {last_error}")
         return []
 
     def check_candle_ingest_endpoint(self) -> dict:
@@ -75,7 +95,7 @@ class SignalMakerClient:
                 "status_code": 405,
                 "url": url,
                 "reason": "method_not_allowed_post_endpoint_missing",
-                "message": "SignalMaker is reachable, but the deployed backend does not accept POST /api/v1/market-data/candles. Pull/redeploy main and restart Replit.",
+                "message": "SignalMaker is reachable, but the deployed backend does not accept POST /api/v1/market-data/candles. Pull/redeploy main, restart Replit, or reduce Replit load before enabling the candle feed.",
             }
         if response.status_code == 404:
             return {
