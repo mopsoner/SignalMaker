@@ -18,7 +18,7 @@ class BinanceClient:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.secret_key)
 
-    def _signed(self, method: str, path: str, params: dict[str, Any] | None = None) -> dict:
+    def _signed(self, method: str, path: str, params: dict[str, Any] | None = None):
         if not self.is_configured():
             raise RuntimeError("Binance API credentials are missing")
         payload = dict(params or {})
@@ -27,22 +27,13 @@ class BinanceClient:
         query = urlencode(payload, doseq=True)
         signature = hmac.new(self.secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
         headers = {"X-MBX-APIKEY": self.api_key}
-        response = self.session.request(
-            method.upper(),
-            f"{self.base_url}{path}?{query}&signature={signature}",
-            headers=headers,
-            timeout=20,
-        )
+        response = self.session.request(method.upper(), f"{self.base_url}{path}?{query}&signature={signature}", headers=headers, timeout=20)
         if not response.ok:
             raise RuntimeError(f"Binance {method.upper()} {path} failed status={response.status_code} body={response.text}")
         return response.json()
 
     def current_price(self, symbol: str) -> float:
-        response = self.session.get(
-            f"{self.base_url}/api/v3/ticker/price",
-            params={"symbol": symbol.upper()},
-            timeout=10,
-        )
+        response = self.session.get(f"{self.base_url}/api/v3/ticker/price", params={"symbol": symbol.upper()}, timeout=10)
         response.raise_for_status()
         return float(response.json()["price"])
 
@@ -76,51 +67,28 @@ class BinanceClient:
         side_upper = "BUY" if side.lower() == "long" else "SELL"
         if self.dry_run:
             price = self.current_price(symbol)
-            return {
-                "orderId": f"dry-entry-{int(time.time())}",
-                "status": "FILLED",
-                "symbol": symbol.upper(),
-                "side": side_upper,
-                "executedQty": str(quantity),
-                "fills": [{"price": str(price), "qty": str(quantity)}],
-                "dry_run": True,
-            }
-        return self._signed("POST", "/api/v3/order", {
-            "symbol": symbol.upper(),
-            "side": side_upper,
-            "type": "MARKET",
-            "quantity": quantity,
-            "newOrderRespType": "FULL",
-        })
+            return {"orderId": f"dry-entry-{int(time.time())}", "status": "FILLED", "symbol": symbol.upper(), "side": side_upper, "executedQty": str(quantity), "fills": [{"price": str(price), "qty": str(quantity)}], "dry_run": True}
+        return self._signed("POST", "/api/v3/order", {"symbol": symbol.upper(), "side": side_upper, "type": "MARKET", "quantity": quantity, "newOrderRespType": "FULL"})
 
     def place_exit_limit(self, symbol: str, side: str, quantity: float, price: float) -> dict:
         exit_side = "SELL" if side.lower() == "long" else "BUY"
         if self.dry_run:
             return {"orderId": f"dry-tp-{int(time.time())}", "status": "NEW", "price": str(price), "dry_run": True}
-        return self._signed("POST", "/api/v3/order", {
-            "symbol": symbol.upper(),
-            "side": exit_side,
-            "type": "LIMIT",
-            "timeInForce": "GTC",
-            "quantity": quantity,
-            "price": price,
-        })
+        return self._signed("POST", "/api/v3/order", {"symbol": symbol.upper(), "side": exit_side, "type": "LIMIT", "timeInForce": "GTC", "quantity": quantity, "price": price})
 
     def place_stop_loss(self, symbol: str, side: str, quantity: float, stop_price: float) -> dict:
         exit_side = "SELL" if side.lower() == "long" else "BUY"
         if self.dry_run:
             return {"orderId": f"dry-sl-{int(time.time())}", "status": "NEW", "stopPrice": str(stop_price), "dry_run": True}
-        return self._signed("POST", "/api/v3/order", {
-            "symbol": symbol.upper(),
-            "side": exit_side,
-            "type": "STOP_LOSS_LIMIT",
-            "timeInForce": "GTC",
-            "quantity": quantity,
-            "price": stop_price,
-            "stopPrice": stop_price,
-        })
+        return self._signed("POST", "/api/v3/order", {"symbol": symbol.upper(), "side": exit_side, "type": "STOP_LOSS_LIMIT", "timeInForce": "GTC", "quantity": quantity, "price": stop_price, "stopPrice": stop_price})
 
     def get_order(self, symbol: str, order_id: str | int) -> dict:
         if str(order_id).startswith("dry-"):
             return {"orderId": order_id, "status": "NEW", "dry_run": True}
         return self._signed("GET", "/api/v3/order", {"symbol": symbol.upper(), "orderId": int(order_id)})
+
+    def open_orders(self, symbol: str) -> list[dict]:
+        if self.dry_run:
+            return []
+        data = self._signed("GET", "/api/v3/openOrders", {"symbol": symbol.upper()})
+        return data if isinstance(data, list) else []
