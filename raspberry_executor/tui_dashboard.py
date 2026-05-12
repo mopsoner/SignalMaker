@@ -2,7 +2,7 @@ import curses
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.config import load_settings
@@ -43,8 +43,7 @@ def parse_dt(value):
     if not value:
         return None
     try:
-        text = str(value).replace("Z", "+00:00")
-        return datetime.fromisoformat(text)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except Exception:
         return None
 
@@ -59,7 +58,6 @@ def fr_datetime(value, *, with_date: bool = True) -> str:
 
 
 def candidate_received_at(candidate: dict) -> str:
-    # Prefer updated_at because SignalMaker refreshes candidates; fallback to created_at/exported time.
     return fr_datetime(candidate.get("updated_at") or candidate.get("created_at") or candidate.get("timestamp") or candidate.get("exported_at"))
 
 
@@ -141,7 +139,7 @@ def snapshot():
         "shorts_enabled": shorts_enabled(),
         "positions": positions,
         "pnl_summary": pnl_summary,
-        "events": list(reversed(state.events()[-120:])),
+        "events": list(reversed(state.events()[-160:])),
         "candidates": candidates,
         "candidate_error": candidate_error,
         "candidate_limit": limit,
@@ -168,7 +166,7 @@ def render_status(stdscr, y, x, h, w, data):
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
         ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
         ("Candidates", f"limit={data.get('candidate_limit', '-')}") ,
-        ("Data refresh", data["refreshed_at"]),
+        ("Refresh", data["refreshed_at"]),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
         attr = curses.color_pair(2) if k == "PNL total" and _float(v, 0) >= 0 else curses.color_pair(5) if k == "PNL total" else curses.color_pair(3)
@@ -206,9 +204,9 @@ def render_candidates(stdscr, y, x, h, w, data):
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status    Stop        Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   St     Stop        Target", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<9} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<6} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
@@ -223,7 +221,7 @@ def _event_details(event: dict) -> str:
     candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
     level_source = payload.get("oco_repair_level_source") or payload.get("levels") or {}
     parts = []
-    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl"), ("oco_order_list_id", "oco"), ("tp_order_id", "tp_id"), ("sl_order_id", "sl_id"), ("oco_repair_mode", "repair"), ("order_monitor_mode", "monitor")]:
+    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl"), ("expected_quantity", "exp_qty"), ("available_base", "avail"), ("oco_order_list_id", "oco"), ("tp_order_id", "tp_id"), ("sl_order_id", "sl_id"), ("oco_repair_mode", "repair"), ("order_monitor_mode", "monitor")]:
         value = payload.get(key)
         if value is not None and value != "":
             parts.append(f"{label}={value}")
@@ -235,11 +233,8 @@ def _event_details(event: dict) -> str:
         source = level_source.get("source") or level_source.get("source_candidate_id")
         if source:
             parts.append(f"level_src={source}")
-    if event_type == "position_opened" and not parts:
-        parts.append(json.dumps(payload, ensure_ascii=False, sort_keys=True)[:180])
     if not parts:
-        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        parts.append(text[:180])
+        parts.append(json.dumps(payload, ensure_ascii=False, sort_keys=True)[:300])
     return " ".join(parts)
 
 
@@ -249,19 +244,20 @@ def render_events(stdscr, y, x, h, w, data):
     if not events:
         add(stdscr, y + 1, x + 2, "No events", curses.color_pair(4))
         return
-    add(stdscr, y + 1, x + 2, "Date FR        Candidate                 Event / Details", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Date FR        Candidate              Event / Details", curses.A_BOLD)
     for idx, event in enumerate(events):
         event_type = str(event.get("event_type", ""))
-        text = (event_type + " " + _event_details(event)).lower()
-        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled"]) else curses.color_pair(4)
+        details = _event_details(event)
+        text = (event_type + " " + details).lower()
+        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected", "mismatch"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled"]) else curses.color_pair(4)
         timestamp = fr_datetime(event.get("timestamp"))
-        candidate_id = trunc(event.get("candidate_id"), 24)
-        line = f"{timestamp:<14} {candidate_id:<24} {event_type} | {_event_details(event)}"
+        candidate_id = trunc(event.get("candidate_id"), 21)
+        line = f"{timestamp:<14} {candidate_id:<21} {event_type} | {details}"
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), level)
 
 
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r force refresh | candidates limit={data.get('candidate_limit', '-')} | auto-refresh {REFRESH_SECONDS}s | refresh={data['refreshed_at']}"
+    text = f" q quit | r refresh | candidates={data.get('candidate_limit', '-')} | auto {REFRESH_SECONDS}s | refresh={data['refreshed_at']}"
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text, curses.color_pair(1))
 
@@ -275,13 +271,19 @@ def draw(stdscr, data):
         render_footer(stdscr, height, width, data)
         stdscr.refresh()
         return
-    top_h = 9
-    remaining_h = height - top_h - 4
-    left_w = max(30, width // 3)
+
+    top_h = min(max(12, height // 3), 16)
+    bottom_y = top_h + 3
+    bottom_h = height - bottom_y - 1
+    left_w = max(28, min(width // 3, 46))
+    candidates_w = max(46, int(width * 0.42))
+    events_x = candidates_w + 2
+    events_w = width - events_x - 1
+
     render_status(stdscr, 2, 1, top_h, left_w, data)
     render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3, data)
-    render_candidates(stdscr, top_h + 3, 1, remaining_h, width // 2 - 2, data)
-    render_events(stdscr, top_h + 3, width // 2, remaining_h, width // 2 - 1, data)
+    render_candidates(stdscr, bottom_y, 1, bottom_h, candidates_w, data)
+    render_events(stdscr, bottom_y, events_x, bottom_h, events_w, data)
     render_footer(stdscr, height, width, data)
     stdscr.refresh()
 
