@@ -1,3 +1,4 @@
+import os
 import time
 
 from raspberry_executor.binance_client import BinanceClient
@@ -16,6 +17,13 @@ logger = setup_logging("raspberry-position-sync")
 OCO_SKIP_EVENT_COOLDOWN_SECONDS = 300
 
 
+def max_oco_repair_attempts() -> int:
+    try:
+        return max(1, int(os.getenv("MAX_OCO_REPAIR_ATTEMPTS", "5") or "5"))
+    except Exception:
+        return 5
+
+
 def _status(payload):
     return str((payload or {}).get("status") or "").upper()
 
@@ -23,6 +31,13 @@ def _status(payload):
 def _float(value, default=0.0):
     try:
         return float(value)
+    except Exception:
+        return default
+
+
+def _int(value, default=0):
+    try:
+        return int(value)
     except Exception:
         return default
 
@@ -142,6 +157,10 @@ def _attach_existing_exit_orders(candidate_id, position, symbol, binance, margin
         "oco_repair_mode": "attached_existing_orders",
         "attached_existing_tp_order": tp,
         "attached_existing_sl_order": sl,
+        "oco_repair_blocked": False,
+        "oco_repair_attempts": 0,
+        "last_oco_repair_skip_reason": None,
+        "last_oco_repair_skip_ts": None,
     }
     state.update_open_position(candidate_id, updates, event_type="oco_existing_orders_attached")
     logger.info("attached existing exit orders candidate=%s symbol=%s tp=%s sl=%s", candidate_id, symbol, tp.get("orderId"), sl.get("orderId"))
@@ -154,8 +173,34 @@ def _should_emit_skip_event(position: dict, reason: str) -> bool:
     return reason != last_reason or (time.time() - last_ts) >= OCO_SKIP_EVENT_COOLDOWN_SECONDS
 
 
+def _block_repair_if_needed(state, candidate_id: str, position: dict, reason: str, payload: dict) -> bool:
+    attempts = _int(position.get("oco_repair_attempts"), 0) + 1
+    updates = {
+        "oco_repair_attempts": attempts,
+        "last_oco_repair_attempt_ts": time.time(),
+        "last_oco_repair_reason": reason,
+    }
+    if attempts >= max_oco_repair_attempts():
+        updates.update({
+            "oco_repair_blocked": True,
+            "oco_repair_blocked_reason": reason,
+            "oco_repair_blocked_payload": payload,
+            "oco_repair_blocked_ts": time.time(),
+        })
+        state.update_open_position(candidate_id, updates, event_type="oco_repair_blocked")
+        logger.error("oco repair blocked candidate=%s attempts=%s reason=%s", candidate_id, attempts, reason)
+        return True
+    state.update_open_position(candidate_id, updates)
+    return False
+
+
 def _mark_repair_skip(state, candidate_id: str, position: dict, event_type: str, payload: dict) -> None:
     reason = str(payload.get("reason") or event_type)
+    blocked = _block_repair_if_needed(state, candidate_id, position, reason, payload)
+    if blocked:
+        return
+    refreshed_position = dict(position)
+    refreshed_position["oco_repair_attempts"] = _int(position.get("oco_repair_attempts"), 0) + 1
     updates = {
         "last_oco_repair_skip_reason": reason,
         "last_oco_repair_skip_ts": time.time(),
@@ -168,7 +213,13 @@ def _mark_repair_skip(state, candidate_id: str, position: dict, event_type: str,
         state.update_open_position(candidate_id, updates)
 
 
+def _is_repair_blocked(position: dict) -> bool:
+    return bool(position.get("oco_repair_blocked"))
+
+
 def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=None, rules=None):
+    if _is_repair_blocked(position):
+        return "blocked"
     levels = _levels(position, symbol)
     if not levels:
         payload = {"symbol": symbol, "reason": "no_recent_candidate_levels"}
@@ -193,14 +244,34 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state,
             return "quantity_mismatch"
         quantity = repair_qty
 
-    if use_margin:
-        result = margin_manager.create_margin_oco_sell(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
-        repair_mode = "margin"
-    else:
-        result = spot_manager.create_exit_oco_for_open_long(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
-        repair_mode = "spot"
+    try:
+        if use_margin:
+            result = margin_manager.create_margin_oco_sell(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
+            repair_mode = "margin"
+        else:
+            result = spot_manager.create_exit_oco_for_open_long(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
+            repair_mode = "spot"
+    except Exception as exc:
+        payload = {"symbol": symbol, "mode": position.get("mode"), "reason": str(exc), "quantity": quantity, "levels": levels}
+        _mark_repair_skip(state, candidate_id, position, "oco_repair_failed", payload)
+        raise
 
-    updates = {"target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "quantity": result.get("quantity") or quantity, "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"), "oco_payload": result.get("oco_payload") or {}, "oco_repair_level_source": levels, "oco_repair_mode": repair_mode, "oco_repair_validated_quantity": quantity, "last_oco_repair_skip_reason": None, "last_oco_repair_skip_ts": None}
+    updates = {
+        "target_price": float(levels["target_price"]),
+        "stop_price": float(levels["stop_price"]),
+        "quantity": result.get("quantity") or quantity,
+        "oco_order_list_id": result.get("oco_order_list_id"),
+        "tp_order_id": result.get("tp_order_id"),
+        "sl_order_id": result.get("sl_order_id"),
+        "oco_payload": result.get("oco_payload") or {},
+        "oco_repair_level_source": levels,
+        "oco_repair_mode": repair_mode,
+        "oco_repair_validated_quantity": quantity,
+        "oco_repair_attempts": 0,
+        "oco_repair_blocked": False,
+        "last_oco_repair_skip_reason": None,
+        "last_oco_repair_skip_ts": None,
+    }
     state.update_open_position(candidate_id, updates, event_type="oco_repaired")
     logger.info("oco repaired candidate=%s symbol=%s mode=%s qty=%s source=%s", candidate_id, symbol, repair_mode, quantity, levels.get("source"))
     return "repaired"
@@ -218,6 +289,7 @@ def sync_open_positions():
     repaired_oco = 0
     attached_existing = 0
     repair_skipped = 0
+    repair_blocked = 0
 
     for candidate_id, position in list(state.open_positions().items()):
         checked += 1
@@ -239,11 +311,11 @@ def sync_open_positions():
                     repaired_oco += 1
                 elif repair_result == "attached_existing_orders":
                     attached_existing += 1
+                elif repair_result == "blocked":
+                    repair_blocked += 1
                 elif repair_result in {"quantity_mismatch", "waiting_levels", "missing_quantity"}:
                     repair_skipped += 1
             except Exception as exc:
-                payload = {"symbol": symbol, "mode": position.get("mode"), "error": str(exc), "position": position}
-                _mark_repair_skip(state, candidate_id, position, "oco_repair_failed", payload)
                 logger.error("oco repair failed candidate=%s symbol=%s mode=%s error=%s", candidate_id, symbol, position.get("mode"), str(exc))
             continue
 
@@ -257,8 +329,8 @@ def sync_open_positions():
             state.close_position(candidate_id, "stop_loss_filled", sl)
             closed += 1
 
-    summary = {"checked": checked, "closed": closed, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped}
-    if closed or repaired_oco or missing_oco or attached_existing or repair_skipped:
+    summary = {"checked": checked, "closed": closed, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped, "repair_blocked": repair_blocked}
+    if closed or repaired_oco or missing_oco or attached_existing or repair_skipped or repair_blocked:
         logger.info("position sync summary=%s", summary)
     return summary
 
