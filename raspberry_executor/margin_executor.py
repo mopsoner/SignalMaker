@@ -12,7 +12,6 @@ from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, m
 from raspberry_executor.pending_trade_queue import add_pending, bump_pending, list_pending, remove_pending
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
-from raspberry_executor.spot_executor_v2 import process_candidate as process_spot_candidate
 from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
 
@@ -37,10 +36,6 @@ def pending_retry_limit() -> int:
 
 def log_skipped_disabled_shorts() -> bool:
     return str(os.getenv("LOG_SKIPPED_DISABLED_SHORTS", "false") or "false").lower() in {"1", "true", "yes", "on"}
-
-
-def fallback_spot_on_token_limit() -> bool:
-    return str(os.getenv("FALLBACK_SPOT_ON_MARGIN_TOKEN_LIMIT", "false") or "false").lower() in {"1", "true", "yes", "on"}
 
 
 def is_margin_unavailable(text: str) -> bool:
@@ -70,11 +65,12 @@ def _age_seconds(iso_value: str | None) -> float:
         return 10**9
 
 
-def fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, reason: str) -> str:
-    cid = str(candidate.get("candidate_id") or "")
-    logger.warning("margin unavailable fallback spot candidate=%s reason=%s", cid, reason)
-    state.add_event(cid, "margin_fallback_spot", {"reason": reason, "candidate": candidate})
-    return process_spot_candidate(settings, binance, rules, spot_manager, state, guard, candidate)
+def margin_unavailable_error(state: StateStore, candidate_id: str, candidate: dict, symbol: str, side: str, error: str) -> str:
+    state.mark_executed(candidate_id)
+    remove_pending(candidate_id)
+    state.add_event(candidate_id, "margin_unavailable_error", {"error": error, "symbol": symbol, "side": side, "candidate": candidate})
+    logger.error("margin unavailable candidate=%s symbol=%s side=%s error=%s", candidate_id, symbol, side, error)
+    return "margin_unavailable_error"
 
 
 def save_short_position(state: StateStore, candidate_id: str, candidate: dict, symbol: str, result: dict) -> None:
@@ -131,11 +127,9 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
     except Exception as exc:
         text = str(exc)
         if is_margin_token_collateral_limit(text):
-            if fallback_spot_on_token_limit() and side == "long":
-                return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
             return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
         if is_margin_unavailable(text):
-            return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+            return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
         state.add_event(candidate_id, "margin_setup_error", {"error": text, "candidate": candidate})
         logger.error("margin setup failed candidate=%s error=%s", candidate_id, text)
         return "error"
@@ -151,7 +145,7 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
             if is_margin_token_collateral_limit(text):
                 return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
             if is_margin_unavailable(text):
-                return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+                return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
             if is_insufficient_balance(text):
                 state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
                 logger.warning("margin short skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
@@ -165,11 +159,9 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
     except Exception as exc:
         text = str(exc)
         if is_margin_token_collateral_limit(text):
-            if fallback_spot_on_token_limit():
-                return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
             return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
         if is_margin_unavailable(text):
-            return fallback_spot(settings, binance, rules, spot_manager, state, guard, candidate, text)
+            return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
         if is_insufficient_balance(text):
             state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
             logger.warning("margin long skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
@@ -233,17 +225,18 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s token_retry_seconds=%s token_max_attempts=%s fallback_spot_on_token_limit=%s", margin.dry_run, margin.isolated, shorts_enabled(), token_limit_retry_seconds(), token_limit_max_attempts(), fallback_spot_on_token_limit())
+    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", margin.dry_run, margin.isolated, shorts_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "margin_unavailable": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
                 elif result == "opened_needs_oco_repair": stats["opened_needs_oco_repair"] += 1
                 elif result == "sold": stats["sold"] += 1
                 elif result == "error": stats["errors"] += 1
+                elif result == "margin_unavailable_error": stats["margin_unavailable"] += 1
                 elif result == "insufficient_balance": stats["insufficient_balance"] += 1
                 elif result == "shorts_disabled": stats["shorts_disabled"] += 1
                 elif result == "token_collateral_retry_scheduled": stats["token_collateral_retry_scheduled"] += 1
