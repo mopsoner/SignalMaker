@@ -83,12 +83,15 @@ class MarginClient:
     def get_margin_order(self, symbol: str, order_id: str | int) -> dict:
         if str(order_id).startswith("dry-") or str(order_id).startswith("dry_"):
             return {"orderId": order_id, "status": "NEW", "dry_run": True}
-        payload: dict[str, Any] = {
-            "symbol": symbol.upper(),
-            "orderId": int(order_id),
-            "isIsolated": self.is_isolated_value(),
-        }
+        payload: dict[str, Any] = {"symbol": symbol.upper(), "orderId": int(order_id), "isIsolated": self.is_isolated_value()}
         return self.binance._signed("GET", "/sapi/v1/margin/order", payload)
+
+    def open_margin_orders(self, symbol: str) -> list[dict]:
+        if self.dry_run:
+            return []
+        payload: dict[str, Any] = {"symbol": symbol.upper(), "isIsolated": self.is_isolated_value()}
+        data = self.binance._signed("GET", "/sapi/v1/margin/openOrders", payload)
+        return data if isinstance(data, list) else []
 
     def margin_oco_sell(self, symbol: str, quantity: str, target_price: str, stop_price: str, stop_limit_price: str) -> dict:
         payload = {"symbol": symbol.upper(), "side": "SELL", "quantity": quantity, "price": target_price, "stopPrice": stop_price, "stopLimitPrice": stop_limit_price, "stopLimitTimeInForce": "GTC", "isIsolated": self.is_isolated_value(), "newOrderRespType": "FULL"}
