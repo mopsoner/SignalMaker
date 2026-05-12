@@ -16,6 +16,13 @@ def _status(payload):
     return str((payload or {}).get("status") or "").upper()
 
 
+def _float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 def _is_margin_position(position: dict) -> bool:
     mode = str(position.get("mode") or "").lower()
     return "margin" in mode
@@ -45,15 +52,33 @@ def _order(binance, margin, symbol, order_id, *, use_margin: bool):
 
 def _levels(position, symbol):
     if position.get("target_price") is not None and position.get("stop_price") is not None:
-        return {
-            "target_price": position.get("target_price"),
-            "stop_price": position.get("stop_price"),
-            "source": "local_position",
-        }
+        return {"target_price": position.get("target_price"), "stop_price": position.get("stop_price"), "source": "local_position"}
     return latest_levels_for_symbol(symbol)
 
 
-def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state):
+def _available_base_balance(binance, margin, rules, symbol: str, *, use_margin: bool) -> float | None:
+    base = rules.base_asset(symbol)
+    try:
+        if use_margin:
+            return float(margin.margin_free_balance(symbol, base))
+        return float(binance.free_balance(base))
+    except Exception:
+        return None
+
+
+def _repair_quantity(position: dict, available_base: float | None) -> tuple[bool, float, str]:
+    expected_qty = _float(position.get("quantity"))
+    if expected_qty <= 0:
+        return False, 0.0, "missing_quantity"
+    if available_base is None:
+        return True, expected_qty, "balance_unchecked"
+    min_required = expected_qty * 0.98
+    if available_base < min_required:
+        return False, expected_qty, f"base_balance_mismatch expected={expected_qty} available={available_base} min_required={min_required}"
+    return True, min(expected_qty, available_base), "ok"
+
+
+def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=None, rules=None):
     levels = _levels(position, symbol)
     if not levels:
         state.add_event(candidate_id, "oco_repair_waiting_levels", {"symbol": symbol, "reason": "no_recent_candidate_levels"})
@@ -63,21 +88,28 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state)
         state.add_event(candidate_id, "oco_repair_failed", {"symbol": symbol, "reason": "missing_quantity", "levels": levels})
         return "missing_quantity"
 
-    if _is_margin_position(position):
-        result = margin_manager.create_margin_oco_sell(
-            symbol=symbol,
-            quantity=quantity,
-            target_price=float(levels["target_price"]),
-            stop_price=float(levels["stop_price"]),
-        )
+    use_margin = _is_margin_position(position)
+    if binance is not None and rules is not None:
+        available = _available_base_balance(binance, margin_manager.margin, rules, symbol, use_margin=use_margin)
+        qty_ok, repair_qty, qty_reason = _repair_quantity(position, available)
+        if not qty_ok:
+            state.add_event(candidate_id, "oco_repair_skipped_quantity_mismatch", {
+                "symbol": symbol,
+                "mode": position.get("mode"),
+                "reason": qty_reason,
+                "expected_quantity": position.get("quantity"),
+                "available_base": available,
+                "levels": levels,
+            })
+            logger.warning("oco repair skipped quantity mismatch candidate=%s symbol=%s reason=%s", candidate_id, symbol, qty_reason)
+            return "quantity_mismatch"
+        quantity = repair_qty
+
+    if use_margin:
+        result = margin_manager.create_margin_oco_sell(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
         repair_mode = "margin"
     else:
-        result = spot_manager.create_exit_oco_for_open_long(
-            symbol=symbol,
-            quantity=quantity,
-            target_price=float(levels["target_price"]),
-            stop_price=float(levels["stop_price"]),
-        )
+        result = spot_manager.create_exit_oco_for_open_long(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
         repair_mode = "spot"
 
     updates = {
@@ -90,9 +122,10 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state)
         "oco_payload": result.get("oco_payload") or {},
         "oco_repair_level_source": levels,
         "oco_repair_mode": repair_mode,
+        "oco_repair_validated_quantity": quantity,
     }
     state.update_open_position(candidate_id, updates, event_type="oco_repaired")
-    logger.info("oco repaired candidate=%s symbol=%s mode=%s source=%s", candidate_id, symbol, repair_mode, levels.get("source"))
+    logger.info("oco repaired candidate=%s symbol=%s mode=%s qty=%s source=%s", candidate_id, symbol, repair_mode, quantity, levels.get("source"))
     return "repaired"
 
 
@@ -122,7 +155,7 @@ def sync_open_positions():
         if not tp_id or not sl_id:
             missing_oco += 1
             try:
-                if _repair(candidate_id, position, symbol, spot_manager, margin_manager, state) == "repaired":
+                if _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=binance, rules=rules) == "repaired":
                     repaired_oco += 1
             except Exception as exc:
                 state.add_event(candidate_id, "oco_repair_failed", {"symbol": symbol, "mode": position.get("mode"), "error": str(exc), "position": position})
