@@ -1,3 +1,4 @@
+import os
 import time
 
 from raspberry_executor.binance_client import BinanceClient
@@ -67,12 +68,88 @@ class MarginOrderManager:
         return payload.get("orderId") or payload.get("order_id")
 
     @staticmethod
-    def _executed_qty(payload: dict, fallback: str) -> str:
+    def _executed_qty(payload: dict, fallback: str | None = None) -> str:
         try:
             value = float(payload.get("executedQty") or 0)
-            return str(value) if value > 0 else str(fallback)
+            if value > 0:
+                return str(value)
         except Exception:
-            return str(fallback)
+            pass
+        return str(fallback or "0")
+
+    @staticmethod
+    def _avg_price_from_order(payload: dict, fallback: float) -> float:
+        avg = BinanceClient.average_fill_price(payload, fallback=None)
+        if avg is not None:
+            return float(avg)
+        try:
+            qty = float(payload.get("executedQty") or 0)
+            quote_qty = float(payload.get("cummulativeQuoteQty") or payload.get("cumulativeQuoteQty") or 0)
+            if qty > 0 and quote_qty > 0:
+                return quote_qty / qty
+        except Exception:
+            pass
+        return float(fallback)
+
+    def _entry_confirm_timeout_seconds(self) -> float:
+        try:
+            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_TIMEOUT_SECONDS", "8") or "8"))
+        except Exception:
+            return 8.0
+
+    def _entry_confirm_poll_seconds(self) -> float:
+        try:
+            return max(0.2, float(os.getenv("MARGIN_ENTRY_CONFIRM_POLL_SECONDS", "0.5") or "0.5"))
+        except Exception:
+            return 0.5
+
+    def confirm_margin_entry_order(self, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float) -> dict:
+        """Confirm a submitted margin entry before OCO creation.
+
+        A POST /sapi/v1/margin/order response is not enough to declare a
+        protected position. Query the order back until Binance confirms FILLED,
+        then use the confirmed executed quantity and entry price for OCO.
+        """
+        symbol = symbol.upper()
+        if not entry_order_id:
+            raise RuntimeError(f"margin_entry_missing_order_id symbol={symbol} payload={submitted_payload}")
+
+        if self.margin.dry_run:
+            payload = {**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}
+            return {
+                "entry_confirmed": True,
+                "entry_confirm_status": "FILLED",
+                "entry_confirm_payload": payload,
+                "entry_price": self._avg_price_from_order(payload, fallback_price),
+                "executed_qty": self._executed_qty(payload, submitted_payload.get("quantity")),
+            }
+
+        deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
+        last_payload = submitted_payload
+        while time.monotonic() <= deadline:
+            payload = self.margin.get_margin_order(symbol, entry_order_id)
+            last_payload = payload
+            status = str(payload.get("status") or "").upper()
+            side = str(payload.get("side") or "").upper()
+            order_symbol = str(payload.get("symbol") or symbol).upper()
+            executed_qty = float(payload.get("executedQty") or 0)
+            if order_symbol != symbol:
+                raise RuntimeError(f"margin_entry_symbol_mismatch expected={symbol} got={order_symbol} order_id={entry_order_id}")
+            if side and side != "BUY":
+                raise RuntimeError(f"margin_entry_side_mismatch expected=BUY got={side} symbol={symbol} order_id={entry_order_id}")
+            if status == "FILLED" and executed_qty > 0:
+                return {
+                    "entry_confirmed": True,
+                    "entry_confirm_status": status,
+                    "entry_confirm_payload": payload,
+                    "entry_price": self._avg_price_from_order(payload, fallback_price),
+                    "executed_qty": self._executed_qty(payload),
+                }
+            if status in {"CANCELED", "REJECTED", "EXPIRED"}:
+                raise RuntimeError(f"margin_entry_not_filled symbol={symbol} order_id={entry_order_id} status={status} payload={payload}")
+            time.sleep(self._entry_confirm_poll_seconds())
+
+        raise RuntimeError(f"margin_entry_confirmation_timeout symbol={symbol} order_id={entry_order_id} last_payload={last_payload}")
 
     def quote_asset(self, symbol: str) -> str:
         return str(self.rules.symbol_info(symbol).get("quoteAsset") or "").upper()
@@ -87,28 +164,15 @@ class MarginOrderManager:
 
     def _clamp_own_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, reserve_pct: float = 0.02) -> tuple[float, dict]:
         requested_quote = max(0.0, float(requested_quote))
-        info = {
-            "requested_quote_amount": requested_quote,
-            "available_quote_amount": None,
-            "adjusted_quote_amount": requested_quote,
-            "quote_reserve_pct": reserve_pct,
-            "quote_balance_guard": "not_checked",
-        }
+        info = {"requested_quote_amount": requested_quote, "available_quote_amount": None, "adjusted_quote_amount": requested_quote, "quote_reserve_pct": reserve_pct, "quote_balance_guard": "not_checked"}
         available = self._available_margin_quote(symbol, quote)
         if available is None:
             return requested_quote, info
         usable = max(0.0, available * max(0.0, 1.0 - reserve_pct))
         adjusted = min(requested_quote, usable)
-        info.update({
-            "available_quote_amount": available,
-            "adjusted_quote_amount": adjusted,
-            "quote_balance_guard": "clamped" if adjusted < requested_quote else "ok",
-        })
+        info.update({"available_quote_amount": available, "adjusted_quote_amount": adjusted, "quote_balance_guard": "clamped" if adjusted < requested_quote else "ok"})
         if adjusted <= 0:
-            raise RuntimeError(
-                f"margin_insufficient_quote_balance symbol={symbol.upper()} quote={quote.upper()} "
-                f"required={requested_quote} available={available} usable={usable}"
-            )
+            raise RuntimeError(f"margin_insufficient_quote_balance symbol={symbol.upper()} quote={quote.upper()} required={requested_quote} available={available} usable={usable}")
         return adjusted, info
 
     def create_margin_oco_sell(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
@@ -163,10 +227,10 @@ class MarginOrderManager:
         current_price = self.binance.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
-        entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
-        if entry_price is None:
-            entry_price = current_price
-        executed_qty = self._executed_qty(entry, quantity)
+        entry_order_id = self._order_id(entry)
+        confirm = self.confirm_margin_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
+        entry_price = float(confirm["entry_price"])
+        executed_qty = confirm["executed_qty"]
 
         result = {
             "symbol": symbol,
@@ -183,8 +247,11 @@ class MarginOrderManager:
             "borrow_error": borrow_error,
             "total_quote_amount": total_quote,
             "quantity": executed_qty,
-            "entry_price": float(entry_price),
-            "entry_order_id": self._order_id(entry),
+            "entry_price": entry_price,
+            "entry_order_id": entry_order_id,
+            "entry_confirmed": confirm.get("entry_confirmed"),
+            "entry_confirm_status": confirm.get("entry_confirm_status"),
+            "entry_confirm_payload": confirm.get("entry_confirm_payload") or {},
             "transfer_payload": transfer_payload or {},
             "borrow_payload": borrow_payload or {},
             "entry_payload": entry,
@@ -192,25 +259,9 @@ class MarginOrderManager:
 
         try:
             oco_result = self.create_margin_oco_sell(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
-            result.update({
-                "quantity": oco_result["quantity"],
-                "oco_order_list_id": oco_result.get("oco_order_list_id"),
-                "tp_order_id": oco_result.get("tp_order_id"),
-                "sl_order_id": oco_result.get("sl_order_id"),
-                "oco_payload": oco_result.get("oco_payload") or {},
-            })
+            result.update({"quantity": oco_result["quantity"], "oco_order_list_id": oco_result.get("oco_order_list_id"), "tp_order_id": oco_result.get("tp_order_id"), "sl_order_id": oco_result.get("sl_order_id"), "oco_payload": oco_result.get("oco_payload") or {}})
         except Exception as exc:
-            # Critical anti-replay behavior: the entry market order may already be filled.
-            # Return the opened position without OCO so the executor can mark it executed
-            # and the monitor can repair OCO, instead of retrying and buying again.
-            result.update({
-                "oco_order_list_id": None,
-                "tp_order_id": None,
-                "sl_order_id": None,
-                "oco_payload": {},
-                "oco_error": str(exc),
-                "needs_oco_repair": True,
-            })
+            result.update({"oco_order_list_id": None, "tp_order_id": None, "sl_order_id": None, "oco_payload": {}, "oco_error": str(exc), "needs_oco_repair": True})
         return result
 
     def open_short_with_margin_borrow_sell(self, *, symbol: str, quote_amount: float) -> dict:
@@ -230,22 +281,7 @@ class MarginOrderManager:
         sell = self.margin.margin_order(symbol, "SELL", qty, "MARKET")
         entry_price = BinanceClient.average_fill_price(sell, fallback=price) or price
         sold_qty = self._executed_qty(sell, qty)
-        return {
-            "status": "sold",
-            "symbol": symbol,
-            "side": "short",
-            "mode": "isolated_margin" if self.margin.isolated else "cross_margin",
-            "margin_isolated": self.margin.isolated,
-            "base_asset": base,
-            "borrow_base_amount": qty,
-            "quantity": sold_qty,
-            "entry_price": float(entry_price),
-            "margin_multiplier": margin_multiplier(),
-            "borrow_payload": borrow,
-            "entry_order_id": self._order_id(sell),
-            "entry_payload": sell,
-            "timestamp": int(time.time()),
-        }
+        return {"status": "sold", "symbol": symbol, "side": "short", "mode": "isolated_margin" if self.margin.isolated else "cross_margin", "margin_isolated": self.margin.isolated, "base_asset": base, "borrow_base_amount": qty, "quantity": sold_qty, "entry_price": float(entry_price), "margin_multiplier": margin_multiplier(), "borrow_payload": borrow, "entry_order_id": self._order_id(sell), "entry_payload": sell, "timestamp": int(time.time())}
 
     def open_short_cross_margin(self, *, symbol: str, quote_amount: float) -> dict:
         return self.open_short_with_margin_borrow_sell(symbol=symbol, quote_amount=quote_amount)
