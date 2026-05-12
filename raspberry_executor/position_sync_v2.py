@@ -1,3 +1,5 @@
+import time
+
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
 from raspberry_executor.candidate_levels import latest_levels_for_symbol
@@ -10,6 +12,8 @@ from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-position-sync")
+
+OCO_SKIP_EVENT_COOLDOWN_SECONDS = 300
 
 
 def _status(payload):
@@ -144,14 +148,36 @@ def _attach_existing_exit_orders(candidate_id, position, symbol, binance, margin
     return True
 
 
+def _should_emit_skip_event(position: dict, reason: str) -> bool:
+    last_reason = str(position.get("last_oco_repair_skip_reason") or "")
+    last_ts = _float(position.get("last_oco_repair_skip_ts"), 0.0)
+    return reason != last_reason or (time.time() - last_ts) >= OCO_SKIP_EVENT_COOLDOWN_SECONDS
+
+
+def _mark_repair_skip(state, candidate_id: str, position: dict, event_type: str, payload: dict) -> None:
+    reason = str(payload.get("reason") or event_type)
+    updates = {
+        "last_oco_repair_skip_reason": reason,
+        "last_oco_repair_skip_ts": time.time(),
+        "last_oco_repair_skip_event": event_type,
+        "last_oco_repair_skip_payload": payload,
+    }
+    if _should_emit_skip_event(position, reason):
+        state.update_open_position(candidate_id, updates, event_type=event_type)
+    else:
+        state.update_open_position(candidate_id, updates)
+
+
 def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=None, rules=None):
     levels = _levels(position, symbol)
     if not levels:
-        state.add_event(candidate_id, "oco_repair_waiting_levels", {"symbol": symbol, "reason": "no_recent_candidate_levels"})
+        payload = {"symbol": symbol, "reason": "no_recent_candidate_levels"}
+        _mark_repair_skip(state, candidate_id, position, "oco_repair_waiting_levels", payload)
         return "waiting_levels"
     quantity = position.get("quantity")
     if not quantity:
-        state.add_event(candidate_id, "oco_repair_failed", {"symbol": symbol, "reason": "missing_quantity", "levels": levels})
+        payload = {"symbol": symbol, "reason": "missing_quantity", "levels": levels}
+        _mark_repair_skip(state, candidate_id, position, "oco_repair_failed", payload)
         return "missing_quantity"
 
     use_margin = _is_margin_position(position)
@@ -161,7 +187,8 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state,
         available = _available_base_balance(binance, margin_manager.margin, rules, symbol, use_margin=use_margin)
         qty_ok, repair_qty, qty_reason = _repair_quantity(position, available)
         if not qty_ok:
-            state.add_event(candidate_id, "oco_repair_skipped_quantity_mismatch", {"symbol": symbol, "mode": position.get("mode"), "reason": qty_reason, "expected_quantity": position.get("quantity"), "available_base": available, "levels": levels})
+            payload = {"symbol": symbol, "mode": position.get("mode"), "reason": qty_reason, "expected_quantity": position.get("quantity"), "available_base": available, "levels": levels}
+            _mark_repair_skip(state, candidate_id, position, "oco_repair_skipped_quantity_mismatch", payload)
             logger.warning("oco repair skipped quantity mismatch candidate=%s symbol=%s reason=%s", candidate_id, symbol, qty_reason)
             return "quantity_mismatch"
         quantity = repair_qty
@@ -173,7 +200,7 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state,
         result = spot_manager.create_exit_oco_for_open_long(symbol=symbol, quantity=quantity, target_price=float(levels["target_price"]), stop_price=float(levels["stop_price"]))
         repair_mode = "spot"
 
-    updates = {"target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "quantity": result.get("quantity") or quantity, "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"), "oco_payload": result.get("oco_payload") or {}, "oco_repair_level_source": levels, "oco_repair_mode": repair_mode, "oco_repair_validated_quantity": quantity}
+    updates = {"target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "quantity": result.get("quantity") or quantity, "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"), "oco_payload": result.get("oco_payload") or {}, "oco_repair_level_source": levels, "oco_repair_mode": repair_mode, "oco_repair_validated_quantity": quantity, "last_oco_repair_skip_reason": None, "last_oco_repair_skip_ts": None}
     state.update_open_position(candidate_id, updates, event_type="oco_repaired")
     logger.info("oco repaired candidate=%s symbol=%s mode=%s qty=%s source=%s", candidate_id, symbol, repair_mode, quantity, levels.get("source"))
     return "repaired"
@@ -190,6 +217,7 @@ def sync_open_positions():
     missing_oco = 0
     repaired_oco = 0
     attached_existing = 0
+    repair_skipped = 0
 
     for candidate_id, position in list(state.open_positions().items()):
         checked += 1
@@ -211,8 +239,11 @@ def sync_open_positions():
                     repaired_oco += 1
                 elif repair_result == "attached_existing_orders":
                     attached_existing += 1
+                elif repair_result in {"quantity_mismatch", "waiting_levels", "missing_quantity"}:
+                    repair_skipped += 1
             except Exception as exc:
-                state.add_event(candidate_id, "oco_repair_failed", {"symbol": symbol, "mode": position.get("mode"), "error": str(exc), "position": position})
+                payload = {"symbol": symbol, "mode": position.get("mode"), "error": str(exc), "position": position}
+                _mark_repair_skip(state, candidate_id, position, "oco_repair_failed", payload)
                 logger.error("oco repair failed candidate=%s symbol=%s mode=%s error=%s", candidate_id, symbol, position.get("mode"), str(exc))
             continue
 
@@ -226,8 +257,8 @@ def sync_open_positions():
             state.close_position(candidate_id, "stop_loss_filled", sl)
             closed += 1
 
-    summary = {"checked": checked, "closed": closed, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing}
-    if closed or repaired_oco or missing_oco or attached_existing:
+    summary = {"checked": checked, "closed": closed, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped}
+    if closed or repaired_oco or missing_oco or attached_existing or repair_skipped:
         logger.info("position sync summary=%s", summary)
     return summary
 
