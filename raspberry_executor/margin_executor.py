@@ -60,7 +60,21 @@ def signal_fingerprint(symbol: str, side: str, candidate: dict) -> str:
 
 def is_margin_unavailable(text: str) -> bool:
     low = str(text or "").lower()
-    return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account", "isolated", "invalid symbol", "-1121", "-11001", "-3028"])
+    # Keep this list focused on real Binance/account availability errors.
+    # Do not match generic words such as "isolated" because payload dumps include
+    # isIsolated=FALSE/TRUE and that caused dry-run/configuration errors to be
+    # misclassified as margin_unavailable_error.
+    return any(x in low for x in [
+        "not support",
+        "not supported",
+        "not exist",
+        "does not exist",
+        "margin account does not exist",
+        "invalid symbol",
+        "-1121",
+        "-11001",
+        "-3028",
+    ])
 
 
 def is_margin_token_collateral_limit(text: str) -> bool:
