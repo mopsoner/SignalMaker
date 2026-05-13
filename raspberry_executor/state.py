@@ -20,6 +20,18 @@ class StateStore:
         with connect() as conn:
             conn.execute("INSERT OR IGNORE INTO executed_candidates(candidate_id, executed_at) VALUES(?, ?)", (candidate_id, self.now()))
 
+    def _fingerprint_key(self, fingerprint: str) -> str:
+        return f"signal-fingerprint:{fingerprint}"
+
+    def already_executed_fingerprint(self, fingerprint: str) -> bool:
+        if not fingerprint:
+            return False
+        return self.already_executed(self._fingerprint_key(fingerprint))
+
+    def mark_executed_fingerprint(self, fingerprint: str) -> None:
+        if fingerprint:
+            self.mark_executed(self._fingerprint_key(fingerprint))
+
     def has_open_position_for(self, symbol: str, side: str | None = None) -> bool:
         wanted_symbol = str(symbol or "").upper()
         wanted_side = str(side or "").lower()
