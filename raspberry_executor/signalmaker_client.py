@@ -32,6 +32,17 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
         return data
 
+    def mark_candidate_executed(self, candidate_id: str) -> dict:
+        response = self.session.post(
+            self._url(f"/api/v1/trade-candidates/{candidate_id}/executed"),
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected SignalMaker executed response: {type(data).__name__}")
+        return data
+
     def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
         """Return recent candidates for repair/reconciliation flows.
 
