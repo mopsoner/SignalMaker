@@ -1,14 +1,23 @@
 """Raspberry executor package.
 
 The Raspberry process still boots from a local .env for connection basics, but
-runtime switches are mirrored from the SignalMaker Admin page when reachable.
-This keeps Admin as the source of truth for dry-run/live, quote assets, sizing,
-shorts, and Binance base URL.
+runtime switches are mirrored from the existing SignalMaker Admin fields when
+reachable. This keeps Admin as the source of truth for live/dry-run, quote
+assets, sizing, shorts, and Binance base URL without adding duplicate settings.
 """
 
 from __future__ import annotations
 
 import os
+
+
+def _load_local_env_once() -> None:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        pass
 
 
 def _bool(value, default: bool = False) -> bool:
@@ -31,6 +40,7 @@ def _admin_settings_url(base_url: str) -> str:
 
 
 def _bootstrap_runtime_from_admin() -> None:
+    _load_local_env_once()
     base_url = os.getenv("SIGNALMAKER_BASE_URL", "")
     url = _admin_settings_url(base_url)
     if not url:
