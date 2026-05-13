@@ -1,3 +1,4 @@
+import time
 from typing import Any
 
 from raspberry_executor.binance_client import BinanceClient
@@ -77,7 +78,13 @@ class MarginClient:
     def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET") -> dict:
         payload = {"symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "isIsolated": self.is_isolated_value(), "newOrderRespType": "FULL"}
         if self.dry_run:
-            return {"status": "FILLED", "dry_run": True, **payload}
+            return {
+                "orderId": f"dry-margin-entry-{int(time.time())}",
+                "status": "FILLED",
+                "executedQty": str(quantity),
+                "dry_run": True,
+                **payload,
+            }
         return self.binance._signed("POST", "/sapi/v1/margin/order", payload)
 
     def get_margin_order(self, symbol: str, order_id: str | int) -> dict:
