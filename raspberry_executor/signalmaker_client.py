@@ -12,6 +12,14 @@ class SignalMakerClient:
             return f"{self.base_url}{path[len('/api/v1'):] }"
         return f"{self.base_url}{path}"
 
+    def get_admin_settings(self) -> dict:
+        response = self.session.get(self._url("/api/v1/admin/settings"), timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected SignalMaker admin settings response: {type(data).__name__}")
+        return data
+
     def get_open_candidates(self, limit: int = 10) -> list[dict]:
         response = self.session.get(
             self._url("/api/v1/trade-candidates"),
