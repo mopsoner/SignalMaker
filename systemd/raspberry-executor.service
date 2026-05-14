@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/pi/SignalMaker
-EnvironmentFile=/home/pi/SignalMaker/.env
-ExecStart=/home/pi/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+EnvironmentFile=/home/pi/Desktop/SignalMaker/.env
+ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
 Restart=always
 RestartSec=10
 User=pi
