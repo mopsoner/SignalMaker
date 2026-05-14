@@ -1,9 +1,7 @@
 import os
 import time
 
-from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-candidate-status-sync")
@@ -20,13 +18,19 @@ def _protected(position: dict) -> bool:
     return bool(position.get("tp_order_id") and position.get("sl_order_id"))
 
 
-def _already_marked(position: dict) -> bool:
-    return str(position.get("remote_candidate_status") or "").lower() == "executed"
+def _already_marked_local(state: StateStore, candidate_id: str, position: dict) -> bool:
+    if state.already_executed(candidate_id):
+        return True
+    return str(position.get("local_candidate_status") or "").lower() == "executed"
 
 
 def sync_executed_candidates() -> dict:
-    settings = load_settings()
-    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
+    """Mark protected candidates as executed in the local Raspberry SQLite DB only.
+
+    This does not call the remote SignalMaker server. The remote candidate can
+    remain open for history/back-office visibility, while the Raspberry local DB
+    prevents re-execution once a local position has TP and SL/OCO protection.
+    """
     state = StateStore()
     checked = protected = marked = skipped = errors = 0
 
@@ -37,25 +41,25 @@ def sync_executed_candidates() -> dict:
             skipped += 1
             continue
         protected += 1
-        if _already_marked(position):
+        if _already_marked_local(state, candidate_id, position):
             skipped += 1
             continue
         try:
-            response = client.mark_candidate_executed(candidate_id)
+            state.mark_executed(candidate_id)
             state.update_open_position(candidate_id, {
-                "remote_candidate_status": "executed",
-                "remote_candidate_executed_source": "candidate_status_sync",
-                "remote_candidate_executed_response": response,
-            }, event_type="candidate_marked_executed")
-            logger.info("candidate marked executed after OCO protection candidate=%s symbol=%s", candidate_id, symbol)
+                "local_candidate_status": "executed",
+                "local_candidate_executed_source": "candidate_status_sync",
+                "local_candidate_executed_reason": "position_has_tp_and_sl",
+            }, event_type="candidate_marked_executed_local")
+            logger.info("candidate marked executed locally after OCO protection candidate=%s symbol=%s", candidate_id, symbol)
             marked += 1
         except Exception as exc:
             errors += 1
             state.update_open_position(candidate_id, {
-                "remote_candidate_mark_error": str(exc),
-                "remote_candidate_mark_error_source": "candidate_status_sync",
-            }, event_type="candidate_mark_executed_failed")
-            logger.warning("candidate executed mark failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
+                "local_candidate_mark_error": str(exc),
+                "local_candidate_mark_error_source": "candidate_status_sync",
+            }, event_type="candidate_mark_executed_local_failed")
+            logger.warning("candidate local executed mark failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
 
     summary = {"checked": checked, "protected": protected, "marked": marked, "skipped": skipped, "errors": errors}
     if marked or errors:
