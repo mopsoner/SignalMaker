@@ -1,6 +1,7 @@
 import os
 import threading
 
+from raspberry_executor.candidate_status_sync import run_loop as candidate_status_sync_loop
 from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
@@ -45,6 +46,9 @@ def main() -> None:
 
     threading.Thread(target=order_monitor_loop, daemon=True).start()
     logger.info("order monitor thread started for Binance position sync")
+
+    threading.Thread(target=candidate_status_sync_loop, daemon=True).start()
+    logger.info("candidate status sync thread started for protected OCO positions")
 
     executor_main()
 
