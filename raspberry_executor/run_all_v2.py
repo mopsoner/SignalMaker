@@ -8,6 +8,7 @@ from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import execution_mode, margin_enabled
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
+from raspberry_executor.settings_bootstrap import bootstrap_settings
 from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
 from raspberry_executor.web_dashboard_margin import run_web
@@ -28,6 +29,11 @@ def executor_main() -> None:
 
 def main() -> None:
     ensure_env()
+    try:
+        settings_summary = bootstrap_settings()
+        logger.info("settings bootstrap startup=%s", settings_summary)
+    except Exception as exc:
+        logger.error("settings bootstrap startup error=%s", str(exc))
     load_settings()
     host = os.getenv("WEB_HOST", "0.0.0.0")
     port = int(os.getenv("WEB_PORT", "8090"))
