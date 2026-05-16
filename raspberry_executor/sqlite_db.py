@@ -42,6 +42,11 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS executed_candidates (
                 candidate_id TEXT PRIMARY KEY,
                 executed_at TEXT NOT NULL
@@ -101,7 +106,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_feed_runs_timestamp ON feed_runs(timestamp);
             """
         )
-        conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')")
+        conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '2')")
 
 
 def migrate_state_json_once() -> dict[str, Any]:
