@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from raspberry_executor.sqlite_db import connect, init_db
+from raspberry_executor.sqlite_db import connect, init_db, now_iso
 
-# The reset button must clear every local runtime/tracking table, including any
-# future "received" table, while preserving persistent configuration.
+# Admin reset deletes local runtime data only.
+# It preserves persistent configuration/settings.
 PRESERVED_TABLES = {"settings", "meta", "sqlite_sequence"}
 PRESERVED_PREFIXES = {"sqlite_"}
 LOCAL_FILES_TO_CLEAR = [
@@ -13,7 +13,7 @@ LOCAL_FILES_TO_CLEAR = [
 ]
 
 
-def _all_user_tables(conn) -> list[str]:
+def _runtime_tables(conn) -> list[str]:
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     tables = []
     for row in rows:
@@ -38,13 +38,15 @@ def _delete_file(path: Path) -> tuple[bool, str | None]:
 
 def reset_positions_db() -> dict:
     init_db()
+    reset_at = now_iso()
     counts = {}
     errors = {}
     preserved = {}
     deleted_files = {}
 
     with connect() as conn:
-        for table in _all_user_tables(conn):
+        runtime_tables = _runtime_tables(conn)
+        for table in runtime_tables:
             try:
                 row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
                 counts[table] = int(row["count"] if row else 0)
@@ -52,6 +54,9 @@ def reset_positions_db() -> dict:
             except Exception as exc:
                 counts[table] = None
                 errors[table] = str(exc)
+
+        # Store the reset moment so diagnostics can show when the local data was cleared.
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('local_runtime_data_reset_at', ?)", (reset_at,))
 
         for table in sorted(PRESERVED_TABLES - {"sqlite_sequence"}):
             try:
@@ -68,14 +73,10 @@ def reset_positions_db() -> dict:
         if error:
             errors[f"file_{path}"] = error
 
-    try:
-        with connect() as conn:
-            conn.execute("VACUUM")
-    except Exception as exc:
-        errors["vacuum"] = str(exc)
-
     return {
         "status": "ok" if not errors else "partial",
+        "mode": "delete_runtime_data_only_preserve_settings",
+        "reset_at": reset_at,
         "deleted": counts,
         "deleted_files": deleted_files,
         "preserved": preserved,
