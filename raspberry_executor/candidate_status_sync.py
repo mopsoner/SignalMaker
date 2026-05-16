@@ -1,6 +1,7 @@
 import os
 import time
 
+from raspberry_executor.local_candidate_store import mark_candidate_executed
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.state import StateStore
 
@@ -25,12 +26,7 @@ def _already_marked_local(state: StateStore, candidate_id: str, position: dict) 
 
 
 def sync_executed_candidates() -> dict:
-    """Mark protected candidates as executed in the local Raspberry SQLite DB only.
-
-    This does not call the remote SignalMaker server. The remote candidate can
-    remain open for history/back-office visibility, while the Raspberry local DB
-    prevents re-execution once a local position has TP and SL/OCO protection.
-    """
+    """Mark protected candidates as executed in local Raspberry SQLite only."""
     state = StateStore()
     checked = protected = marked = skipped = errors = 0
 
@@ -46,6 +42,10 @@ def sync_executed_candidates() -> dict:
             continue
         try:
             state.mark_executed(candidate_id)
+            mark_candidate_executed(candidate_id)
+            remote_candidate_id = position.get("remote_candidate_id") or position.get("candidate", {}).get("remote_candidate_id")
+            if remote_candidate_id:
+                mark_candidate_executed(str(remote_candidate_id))
             state.update_open_position(candidate_id, {
                 "local_candidate_status": "executed",
                 "local_candidate_executed_source": "candidate_status_sync",
