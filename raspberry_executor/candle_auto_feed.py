@@ -177,12 +177,20 @@ def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], lim
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
-def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0, api_key: str | None = None) -> list[str]:
+def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0, api_key: str | None = None) -> tuple[list[str], str]:
     if mode == "cross":
-        return discover_cross_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key)
+        try:
+            return discover_cross_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key), "cross_margin"
+        except Exception as exc:
+            logger.warning("cross margin symbol discovery failed; falling back to spot candle symbols error=%s", str(exc))
+            return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot_fallback_for_cross"
     if mode == "isolated":
-        return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key)
-    return discover_spot_symbols(base_url, quote_assets, limit=limit)
+        try:
+            return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key), "isolated_margin"
+        except Exception as exc:
+            logger.warning("isolated margin symbol discovery failed; falling back to spot candle symbols error=%s", str(exc))
+            return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot_fallback_for_isolated"
+    return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot"
 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
@@ -190,12 +198,8 @@ def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
     mode = execution_mode()
-    try:
-        symbols = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols, api_key=settings.binance_api_key)
-    except Exception as exc:
-        logger.error("symbol discovery failed mode=%s error=%s", mode, str(exc))
-        raise
-    return symbols, quote_assets, mode
+    symbols, source = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols, api_key=settings.binance_api_key)
+    return symbols, quote_assets, f"{mode}:{source}"
 
 
 def _start_time_from_latest(latest: dict | None) -> int | None:
