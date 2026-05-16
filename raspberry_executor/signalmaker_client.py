@@ -1,5 +1,7 @@
 import requests
 
+from raspberry_executor.local_candidate_store import list_local_candidates, upsert_remote_candidates
+
 
 class SignalMakerClient:
     def __init__(self, base_url: str, gateway_id: str) -> None:
@@ -9,7 +11,7 @@ class SignalMakerClient:
 
     def _url(self, path: str) -> str:
         if self.base_url.endswith("/api/v1") and path.startswith("/api/v1"):
-            return f"{self.base_url}{path[len('/api/v1'):] }"
+            return f"{self.base_url}{path[len('/api/v1'):]}"
         return f"{self.base_url}{path}"
 
     def get_admin_settings(self) -> dict:
@@ -30,34 +32,27 @@ class SignalMakerClient:
         data = response.json()
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
-        return data
+        upsert_remote_candidates(data)
+        return list_local_candidates(limit=limit, include_executed=False)
 
     def mark_candidate_executed(self, candidate_id: str) -> dict:
-        response = self.session.post(
-            self._url(f"/api/v1/trade-candidates/{candidate_id}/executed"),
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise RuntimeError(f"Unexpected SignalMaker executed response: {type(data).__name__}")
-        return data
+        # Deprecated for Raspberry local execution tracking. Kept for backwards
+        # compatibility but intentionally does not call the remote server.
+        return {"status": "skipped", "reason": "local_execution_tracking_only", "candidate_id": candidate_id}
 
     def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
-        """Return recent candidates for repair/reconciliation flows.
+        """Return local candidates refreshed from SignalMaker.
 
-        Important: the SignalMaker API does not implement a special
-        `status=all` value. Passing `status=all` makes the backend filter for
-        rows whose status is literally "all", which returns an empty list and
-        prevents the Raspberry OCO repair from seeing live `status=open`
-        candidates such as `ENJUSDC-open`.
+        Remote SignalMaker may keep ids such as SYMBOL-open. The Raspberry stores
+        each received signal once using symbol+side+entry+target+stop, then uses
+        the local id for execution/dedupe.
         """
         params = {"limit": limit}
         if symbol:
             params["symbol"] = symbol.upper()
 
         attempts = [
-            params,  # no status filter = all candidates supported by backend
+            params,
             {**params, "status": "open"},
             {**params, "status": "new"},
         ]
@@ -74,13 +69,22 @@ class SignalMakerClient:
                 if not isinstance(data, list):
                     raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
                 if data:
-                    return data
+                    upsert_remote_candidates(data)
+                    rows = list_local_candidates(limit=limit, include_executed=False)
+                    if symbol:
+                        wanted = symbol.upper()
+                        rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
+                    return rows
             except Exception as exc:
                 last_error = exc
                 continue
         if last_error:
             raise RuntimeError(f"Unable to fetch recent SignalMaker candidates: {last_error}")
-        return []
+        rows = list_local_candidates(limit=limit, include_executed=False)
+        if symbol:
+            wanted = symbol.upper()
+            rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
+        return rows
 
     def check_candle_ingest_endpoint(self) -> dict:
         probe = {
