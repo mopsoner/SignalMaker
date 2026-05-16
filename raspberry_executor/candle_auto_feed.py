@@ -9,6 +9,7 @@ import requests
 from raspberry_executor.candle_push_once import fetch_klines
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ROOT, ensure_env, read_env
+from raspberry_executor.feed_run_store import record_feed_run
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import execution_mode
 from raspberry_executor.signalmaker_client import SignalMakerClient
@@ -226,7 +227,9 @@ def run_once() -> dict:
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     endpoint_check = client.check_candle_ingest_endpoint()
     if not endpoint_check.get("ok"):
-        return {"status": "blocked", "endpoint_check": endpoint_check, "pushed": [], "skipped": [], "errors": []}
+        result = {"status": "blocked", "endpoint_check": endpoint_check, "pushed": [], "skipped": [], "errors": []}
+        record_feed_run(result)
+        return result
 
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
@@ -236,7 +239,9 @@ def run_once() -> dict:
     retry_queue = _load_retry_queue()
 
     if not symbols:
-        return {"status": "skipped", "reason": "no_symbols_for_execution_mode", "execution_mode": mode, "quote_assets": quote_assets, "intervals": intervals, "retry_queue_size": len(retry_queue)}
+        result = {"status": "skipped", "reason": "no_symbols_for_execution_mode", "execution_mode": mode, "quote_assets": quote_assets, "intervals": intervals, "retry_queue_size": len(retry_queue), "pushed": [], "skipped": [], "errors": []}
+        record_feed_run(result)
+        return result
 
     pushed = []
     skipped = []
@@ -268,7 +273,9 @@ def run_once() -> dict:
                 errors.append({"symbol": symbol, "interval": interval, "error": error_text, "retry_queued": True})
 
     _save_retry_queue(retry_queue)
-    return {"status": "ok" if not errors else "partial", "execution_mode": mode, "symbol_count": len(symbols), "quote_assets": quote_assets, "intervals": intervals, "max_workers": worker_count, "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m, "binance_request_weight_ratio": weight_ratio, "binance_effective_requests_per_minute": requests_per_minute, "pushed": pushed, "skipped": skipped, "errors": errors, "retry_queue_size": len(retry_queue), "retry_queue_path": str(RETRY_PATH)}
+    result = {"status": "ok" if not errors else "partial", "execution_mode": mode, "symbol_count": len(symbols), "quote_assets": quote_assets, "intervals": intervals, "max_workers": worker_count, "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m, "binance_request_weight_ratio": weight_ratio, "binance_effective_requests_per_minute": requests_per_minute, "pushed": pushed, "skipped": skipped, "errors": errors, "retry_queue_size": len(retry_queue), "retry_queue_path": str(RETRY_PATH)}
+    record_feed_run(result)
+    return result
 
 
 def run_loop() -> None:
@@ -292,6 +299,10 @@ def run_loop() -> None:
             logger.info("candle feed result=%s", result)
         except Exception as exc:
             logger.error("candle feed loop error=%s", str(exc))
+            try:
+                record_feed_run({"status": "error", "pushed": [], "skipped": [], "errors": [{"error": str(exc)}]})
+            except Exception:
+                pass
         time.sleep(poll_seconds)
 
 
