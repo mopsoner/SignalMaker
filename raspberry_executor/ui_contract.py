@@ -1,7 +1,10 @@
 from typing import Any
 
+from raspberry_executor.candidate_cursor_store import read_candidate_cursor
 from raspberry_executor.candidate_view_store import candidate_status_summary, local_candidate_rows
 from raspberry_executor.env_store import public_env
+from raspberry_executor.position_sync_v2 import sync_open_positions
+from raspberry_executor.sqlite_db import connect
 from raspberry_executor.state import StateStore
 
 CANDIDATE_LABELS = [
@@ -81,6 +84,15 @@ def _string(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _meta_value(key: str) -> str:
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return _string(row["value"] if row else "")
+    except Exception:
+        return ""
+
+
 def order_status(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -115,6 +127,9 @@ def candidates_view(limit: int = 100) -> dict[str, Any]:
         "rows": rows,
         "empty_message": "No local candidates.",
         "help": "Local SQLite candidates only. Unique signal = symbol + side + entry + target + stop.",
+        "cursor": read_candidate_cursor(),
+        "last_runtime_reset_at": _meta_value("local_runtime_data_reset_at"),
+        "ignored_old_after_reset": _meta_value("local_candidates_ignored_old_after_reset"),
     }
 
 
@@ -136,7 +151,14 @@ def position_row(candidate_id: str, row: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def positions_view(limit: int = 50) -> dict[str, Any]:
+def positions_view(limit: int = 50, sync: bool = True) -> dict[str, Any]:
+    sync_result: dict[str, Any] | None = None
+    sync_error = ""
+    if sync:
+        try:
+            sync_result = sync_open_positions()
+        except Exception as exc:
+            sync_error = str(exc)
     state = StateStore()
     open_rows = [position_row(candidate_id, row) for candidate_id, row in state.open_positions().items()]
     closed_items = [(item.get("candidate_id", ""), item) for item in reversed(state.closed_positions()[-limit:])]
@@ -148,6 +170,8 @@ def positions_view(limit: int = 50) -> dict[str, Any]:
         "open_rows": open_rows,
         "closed_rows": closed_rows,
         "empty_message": "No positions.",
+        "sync": sync_result or {},
+        "sync_error": sync_error,
     }
 
 
@@ -156,4 +180,6 @@ def status_view() -> dict[str, Any]:
     rows = []
     for key, label in STATUS_LABELS.items():
         rows.append({"key": key, "label": label, "value": _string(env.get(key))})
+    rows.append({"key": "candidate_cursor", "label": "Candidate cursor", "value": _string(read_candidate_cursor())})
+    rows.append({"key": "last_runtime_reset_at", "label": "Last local reset", "value": _meta_value("local_runtime_data_reset_at")})
     return {"title": "Raspberry Executor Status", "rows": rows}
