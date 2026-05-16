@@ -8,7 +8,7 @@ DEFAULTS = {
     "SIGNALMAKER_BASE_URL": "https://your-signalmaker-app.replit.app",
     "GATEWAY_ID": "raspberry-fr-1",
     "POLL_SECONDS": "15",
-    "DRY_RUN": "true",
+    "DRY_RUN": "false",
     "QUOTE_ASSETS": "USDT",
     "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "900",
