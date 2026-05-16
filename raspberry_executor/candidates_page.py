@@ -28,7 +28,7 @@ def candidates_page(limit: int = 100) -> str:
     body = "<h1>SignalMaker Trade Candidates</h1>"
     body += "<div class='box'>"
     body += f"<p><b>Local total:</b> {summary['total']} | <b>received:</b> {summary['received']} | <b>executed:</b> {summary['executed']} | <b>other:</b> {summary['other']}</p>"
-    body += "<p class='muted'>Web and TUI must use this same local SQLite view. Unique signal = symbol + side + entry + target + stop.</p>"
+    body += "<p class='muted'>Web and TUI use the same local SQLite view. Unique signal = symbol + side + entry + target + stop.</p>"
     if error:
         body += f"<p class='pill bad'>Remote refresh error: {c(error)}</p>"
     body += "</div>"
@@ -42,7 +42,7 @@ def candidates_page(limit: int = 100) -> str:
 def candidates_table(rows: list[dict]) -> str:
     if not rows:
         return "<p class='muted'>No local candidates.</p>"
-    cols = ["Local", "Candidate", "Remote", "Symbol", "Side", "Remote status", "Entry", "Stop", "Target", "First seen", "Last seen", "Fingerprint"]
+    cols = ["Local state", "Candidate", "Remote", "Symbol", "Side", "Entry", "Stop", "Target", "First seen", "Last seen", "Fingerprint"]
     html = "<table><tr>" + "".join(f"<th>{c(col)}</th>" for col in cols) + "</tr>"
     for row in rows:
         local = row.get("local_status")
@@ -53,7 +53,6 @@ def candidates_table(rows: list[dict]) -> str:
             c(row.get("remote_candidate_id")),
             c(row.get("symbol")),
             c(row.get("side")),
-            c(row.get("remote_status")),
             c(row.get("entry_price")),
             c(row.get("stop_price")),
             c(row.get("target_price")),
