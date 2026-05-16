@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
 from raspberry_executor.config import load_settings
+from raspberry_executor.local_candidate_store import mark_candidate_executed, upsert_remote_candidates
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
@@ -58,6 +59,20 @@ def signal_fingerprint(symbol: str, side: str, candidate: dict) -> str:
     ])
 
 
+def ensure_candidate_visible(candidate: dict) -> None:
+    try:
+        upsert_remote_candidates([candidate])
+    except Exception as exc:
+        logger.warning("failed to upsert candidate locally candidate=%s error=%s", candidate.get("candidate_id"), exc)
+
+
+def set_candidate_executed(candidate_id: str) -> None:
+    try:
+        mark_candidate_executed(candidate_id)
+    except Exception as exc:
+        logger.warning("failed to mark local candidate executed candidate=%s error=%s", candidate_id, exc)
+
+
 def is_margin_unavailable(text: str) -> bool:
     low = str(text or "").lower()
     return any(x in low for x in [
@@ -108,7 +123,9 @@ def result_is_dry_run(result: dict) -> bool:
 
 
 def margin_unavailable_error(state: StateStore, candidate_id: str, candidate: dict, symbol: str, side: str, error: str) -> str:
+    ensure_candidate_visible(candidate)
     state.mark_executed(candidate_id)
+    set_candidate_executed(candidate_id)
     remove_pending(candidate_id)
     state.add_event(candidate_id, "margin_unavailable_error", {"error": error, "symbol": symbol, "side": side, "candidate": candidate})
     logger.error("margin unavailable candidate=%s symbol=%s side=%s error=%s", candidate_id, symbol, side, error)
@@ -117,17 +134,20 @@ def margin_unavailable_error(state: StateStore, candidate_id: str, candidate: di
 
 def mark_signal_done(state: StateStore, candidate_id: str, fingerprint: str) -> None:
     state.mark_executed(candidate_id)
+    set_candidate_executed(candidate_id)
     if signal_fingerprint_enabled():
         state.mark_executed_fingerprint(fingerprint)
 
 
 def save_dry_run_simulation(state: StateStore, candidate_id: str, fingerprint: str, candidate: dict, symbol: str, side: str, result: dict) -> None:
+    ensure_candidate_visible(candidate)
     mark_signal_done(state, candidate_id, fingerprint)
     remove_pending(candidate_id)
     state.add_event(candidate_id, "position_simulated_dry_run", {"symbol": symbol, "side": side, "quantity": result.get("quantity"), "entry_price": result.get("entry_price"), "target_price": candidate.get("target_price"), "stop_price": candidate.get("stop_price"), "entry_order_id": result.get("entry_order_id"), "dry_run": True, "candidate": candidate, "margin_payload": result})
 
 
 def save_short_position(state: StateStore, candidate_id: str, fingerprint: str, candidate: dict, symbol: str, result: dict) -> None:
+    ensure_candidate_visible(candidate)
     if result_is_dry_run(result):
         save_dry_run_simulation(state, candidate_id, fingerprint, candidate, symbol, "short", result)
         return
@@ -137,6 +157,7 @@ def save_short_position(state: StateStore, candidate_id: str, fingerprint: str, 
 
 
 def save_long_position(state: StateStore, candidate_id: str, fingerprint: str, candidate: dict, symbol: str, manager: MarginOrderManager, result: dict) -> None:
+    ensure_candidate_visible(candidate)
     if result_is_dry_run(result):
         save_dry_run_simulation(state, candidate_id, fingerprint, candidate, symbol, "long", result)
         return
@@ -146,6 +167,7 @@ def save_long_position(state: StateStore, candidate_id: str, fingerprint: str, c
 
 
 def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: dict, symbol: str, side: str, error: str, *, from_queue: bool = False) -> str:
+    ensure_candidate_visible(candidate)
     if from_queue:
         bump_pending(candidate_id, f"token_collateral_limit_retry:{error}")
     else:
@@ -156,6 +178,7 @@ def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: di
 
 
 def process_candidate(settings, binance, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict, *, from_queue: bool = False) -> str:
+    ensure_candidate_visible(candidate)
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
         return "missing_candidate_id"
@@ -171,6 +194,7 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
 
     if signal_fingerprint_enabled() and state.already_executed_fingerprint(fingerprint):
         state.mark_executed(candidate_id)
+        set_candidate_executed(candidate_id)
         remove_pending(candidate_id)
         state.add_event(candidate_id, "candidate_skipped_duplicate_signal", {"symbol": symbol, "side": side, "signal_fingerprint": fingerprint, "candidate": candidate})
         logger.warning("candidate skipped duplicate signal candidate=%s fingerprint=%s", candidate_id, fingerprint)
@@ -270,6 +294,7 @@ def process_pending(settings, binance, rules, manager, spot_manager, state, guar
         if attempts >= max_attempts:
             remove_pending(candidate_id)
             state.mark_executed(candidate_id)
+            set_candidate_executed(candidate_id)
             state.add_event(candidate_id, "margin_token_collateral_limit_retry_exhausted", {"symbol": item.get("symbol"), "side": item.get("side"), "attempts": attempts, "reason": reason})
             stats["pending_dropped"] += 1
             continue
