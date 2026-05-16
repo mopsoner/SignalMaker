@@ -6,7 +6,6 @@ ENV_PATH = ROOT / ".env"
 DEFAULT_MARGIN_SETTINGS = {
     "EXECUTION_MODE": "cross",
     "MARGIN_MODE_ENABLED": "true",
-    "MARGIN_DRY_RUN": "true",
     "MARGIN_ACCOUNT_MODE": "cross",
     "MARGIN_ISOLATED": "false",
     "MARGIN_MAX_MULTIPLIER": "5",
@@ -60,6 +59,8 @@ def read_margin_settings() -> dict[str, str]:
     out["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
     out["MARGIN_ACCOUNT_MODE"] = "isolated" if mode == "isolated" else "cross"
     out["MARGIN_ISOLATED"] = "true" if mode == "isolated" else "false"
+    # DRY_RUN is the only source of truth. Keep a display-only compatibility field.
+    out["MARGIN_DRY_RUN"] = values.get("DRY_RUN", "true")
     return out
 
 
@@ -69,6 +70,9 @@ def write_margin_settings(values: dict[str, str]) -> None:
     for key in DEFAULT_MARGIN_SETTINGS:
         if key in values:
             merged[key] = str(values[key]).strip()
+    # Backward compatibility: if an old form posts MARGIN_DRY_RUN, mirror it to DRY_RUN.
+    if "MARGIN_DRY_RUN" in values:
+        current["DRY_RUN"] = str(values["MARGIN_DRY_RUN"]).strip()
     mode = _execution_mode(merged)
     merged["EXECUTION_MODE"] = mode
     merged["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
@@ -81,6 +85,12 @@ def write_margin_settings(values: dict[str, str]) -> None:
         stripped = line.strip()
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key = stripped.split("=", 1)[0].strip()
+            if key == "MARGIN_DRY_RUN":
+                continue
+            if key == "DRY_RUN" and "DRY_RUN" in current:
+                new_lines.append(f"DRY_RUN={current['DRY_RUN']}")
+                existing_keys.add("DRY_RUN")
+                continue
             if key in DEFAULT_MARGIN_SETTINGS:
                 new_lines.append(f"{key}={merged[key]}")
                 existing_keys.add(key)
@@ -106,7 +116,8 @@ def margin_enabled() -> bool:
 
 
 def margin_dry_run() -> bool:
-    return _bool(read_margin_settings().get("MARGIN_DRY_RUN"), default=True)
+    _, values = _parse_env_lines()
+    return _bool(values.get("DRY_RUN"), default=True)
 
 
 def shorts_enabled() -> bool:
