@@ -28,43 +28,56 @@ git checkout "$BRANCH"
 info "3) Pull latest commits"
 git pull origin "$BRANCH"
 
-info "4) Verify systemd service file"
+info "4) Apply local persistent settings patch"
+if [ -f scripts/patch_persistent_settings.py ]; then
+  python3 scripts/patch_persistent_settings.py
+else
+  warn "scripts/patch_persistent_settings.py not found"
+fi
+
+info "5) Verify systemd service file"
 [ -f "$SERVICE_FILE" ] || fail "Missing $SERVICE_FILE after pull"
 
 if ! grep -q "raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
   fail "$SERVICE_FILE does not point to raspberry_executor.run_all_v2"
 fi
 
-info "5) Install updated systemd service"
+info "6) Install updated systemd service"
 sudo cp "$SERVICE_FILE" "$SYSTEMD_TARGET"
 sudo chmod 644 "$SYSTEMD_TARGET"
 
-info "6) Reload systemd"
+info "7) Reload systemd"
 sudo systemctl daemon-reload
 
-info "7) Enable service on boot"
+info "8) Enable service on boot"
 sudo systemctl enable "$SERVICE_NAME"
 
-info "8) Restart service"
+info "9) Restart service"
 sudo systemctl restart "$SERVICE_NAME"
 
-info "9) Wait for startup"
+info "10) Wait for startup"
 sleep 4
 
-info "10) Service status"
+info "11) Service status"
 sudo systemctl status "$SERVICE_NAME" --no-pager || true
 
-info "11) ExecStart check"
+info "12) ExecStart check"
 sudo systemctl cat "$SERVICE_NAME" | grep ExecStart || true
 
-info "12) Recent relevant logs"
-journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|order monitor|Raspberry margin executor started|raspberry_executor.run_all_v2" || true
+info "13) Recent relevant logs"
+journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|order monitor|Raspberry margin executor started|raspberry_executor.run_all_v2" || true
 
-info "13) Quick runtime checks"
+info "14) Quick runtime checks"
 if sudo systemctl cat "$SERVICE_NAME" | grep -q "raspberry_executor.run_all_v2"; then
   echo "OK: systemd uses raspberry_executor.run_all_v2"
 else
   warn "systemd does not show raspberry_executor.run_all_v2"
+fi
+
+if journalctl -u "$SERVICE_NAME" -n 200 --no-pager | grep -q "settings bootstrap startup"; then
+  echo "OK: settings bootstrap started"
+else
+  warn "settings bootstrap not seen yet in recent logs"
 fi
 
 if journalctl -u "$SERVICE_NAME" -n 200 --no-pager | grep -q "candidate status sync thread started"; then
@@ -84,7 +97,12 @@ cat <<'EOF'
 Done.
 
 Expected service line:
-ExecStart=/home/pi/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
+ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
+
+Settings persistence:
+- Admin saves are written to .env and SQLite settings table.
+- Restart restores .env from SQLite settings table.
+- Reset local tracking preserves settings and meta.
 
 If TUI still shows: Dry run global=true
 1) Open SignalMaker Admin
