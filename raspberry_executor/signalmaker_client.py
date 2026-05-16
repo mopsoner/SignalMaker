@@ -1,5 +1,10 @@
 import requests
 
+from raspberry_executor.candidate_cursor_store import (
+    advance_candidate_cursor,
+    filter_candidates_after_cursor,
+    read_candidate_cursor,
+)
 from raspberry_executor.local_candidate_store import list_local_candidates, upsert_remote_candidates
 
 
@@ -22,18 +27,34 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker admin settings response: {type(data).__name__}")
         return data
 
+    def _candidate_params(self, limit: int, **extra) -> dict:
+        params = {"limit": limit, **extra}
+        cursor = read_candidate_cursor()
+        if cursor:
+            params["since"] = cursor
+            params["created_after"] = cursor
+            params["updated_after"] = cursor
+        return params
+
+    def _import_candidates(self, data: list[dict], limit: int) -> list[dict]:
+        cursor = read_candidate_cursor()
+        fresh = filter_candidates_after_cursor(data, cursor)
+        if fresh:
+            upsert_remote_candidates(fresh)
+            advance_candidate_cursor(fresh)
+        return list_local_candidates(limit=limit, include_executed=False)
+
     def get_open_candidates(self, limit: int = 10) -> list[dict]:
         response = self.session.get(
             self._url("/api/v1/trade-candidates"),
-            params={"status": "open", "limit": limit},
+            params=self._candidate_params(limit, status="open"),
             timeout=15,
         )
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
-        upsert_remote_candidates(data)
-        return list_local_candidates(limit=limit, include_executed=False)
+        return self._import_candidates(data, limit)
 
     def mark_candidate_executed(self, candidate_id: str) -> dict:
         # Deprecated for Raspberry local execution tracking. Kept for backwards
@@ -43,11 +64,10 @@ class SignalMakerClient:
     def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
         """Return local candidates refreshed from SignalMaker.
 
-        Remote SignalMaker may keep ids such as SYMBOL-open. The Raspberry stores
-        each received signal once using symbol+side+entry+target+stop, then uses
-        the local id for execution/dedupe.
+        The Raspberry now uses a local cursor, so it does not keep importing the
+        same 50 old remote candidates after a local reset.
         """
-        params = {"limit": limit}
+        params = self._candidate_params(limit)
         if symbol:
             params["symbol"] = symbol.upper()
 
@@ -68,13 +88,11 @@ class SignalMakerClient:
                 data = response.json()
                 if not isinstance(data, list):
                     raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
-                if data:
-                    upsert_remote_candidates(data)
-                    rows = list_local_candidates(limit=limit, include_executed=False)
-                    if symbol:
-                        wanted = symbol.upper()
-                        rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
-                    return rows
+                rows = self._import_candidates(data, limit)
+                if symbol:
+                    wanted = symbol.upper()
+                    rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
+                return rows
             except Exception as exc:
                 last_error = exc
                 continue
