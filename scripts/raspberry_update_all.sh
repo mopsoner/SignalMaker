@@ -17,19 +17,26 @@ git fetch origin
 git checkout "$BRANCH"
 git pull origin "$BRANCH"
 
-if [ -f scripts/patch_ui_contract_endpoints.py ]; then
-  echo "Apply shared UI endpoint patch..."
-  python3 scripts/patch_ui_contract_endpoints.py
-fi
+echo "Apply local Raspberry patches..."
+for patch in scripts/patch_*.py; do
+  if [ -f "$patch" ]; then
+    echo "Apply $patch"
+    python3 "$patch"
+  fi
+done
 
 echo "Run full Raspberry fix script..."
 PROJECT_DIR="$PROJECT_DIR" bash scripts/fix_raspberry_executor_service.sh
 
-if [ -f scripts/patch_ui_contract_endpoints.py ]; then
-  echo "Re-apply shared UI endpoint patch after fix script..."
-  python3 scripts/patch_ui_contract_endpoints.py
-  echo "Restart service after UI patch..."
-  sudo systemctl restart raspberry-executor || true
-fi
+echo "Re-apply local Raspberry patches after fix script..."
+for patch in scripts/patch_*.py; do
+  if [ -f "$patch" ]; then
+    echo "Apply $patch"
+    python3 "$patch"
+  fi
+done
+
+echo "Restart service after patches..."
+sudo systemctl restart raspberry-executor || true
 
 echo "Done. Log: $LOG_FILE"
