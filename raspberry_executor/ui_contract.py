@@ -9,6 +9,7 @@ from raspberry_executor.state import StateStore
 
 CANDIDATE_LABELS = [
     "Local state",
+    "Execution state",
     "Candidate",
     "Remote",
     "Symbol",
@@ -23,6 +24,7 @@ CANDIDATE_LABELS = [
 
 CANDIDATE_KEYS = [
     "local_state",
+    "execution_state",
     "candidate",
     "remote",
     "symbol",
@@ -104,6 +106,7 @@ def order_status(payload: Any) -> str:
 def candidate_row(row: dict[str, Any]) -> dict[str, str]:
     return {
         "local_state": _string(row.get("local_status")),
+        "execution_state": _string(row.get("execution_state")),
         "candidate": _string(row.get("candidate_id")),
         "remote": _string(row.get("remote_candidate_id")),
         "symbol": _string(row.get("symbol")),
@@ -126,7 +129,7 @@ def candidates_view(limit: int = 100) -> dict[str, Any]:
         "summary": candidate_status_summary(limit=max(limit, 500)),
         "rows": rows,
         "empty_message": "No local candidates.",
-        "help": "Local SQLite candidates only. Unique signal = symbol + side + entry + target + stop.",
+        "help": "Local SQLite candidates only. Local state stays received until the local candidate status changes; execution state shows whether executor consumed the signal.",
         "cursor": read_candidate_cursor(),
         "last_runtime_reset_at": _meta_value("local_runtime_data_reset_at"),
         "ignored_old_after_reset": _meta_value("local_candidates_ignored_old_after_reset"),
