@@ -8,6 +8,14 @@ from app.services.position_service import PositionService
 router = APIRouter()
 
 
+@router.get("/summary")
+def positions_summary(
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return PositionService(db).pnl_summary(status=status)
+
+
 @router.get("", response_model=list[PositionRead])
 def list_positions(
     limit: int = Query(default=100, ge=1, le=1000),
