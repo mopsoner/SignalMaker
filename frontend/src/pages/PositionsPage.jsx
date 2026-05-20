@@ -97,7 +97,7 @@ function calculatePnlSummary(positions) {
 export default function PositionsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=100'), []), 10000)
+  const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=1000'), []), 10000)
   const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 10000)
   const pnlSummary = useMemo(() => calculatePnlSummary(positions), [positions])
 
@@ -137,7 +137,7 @@ export default function PositionsPage() {
     {error ? <div className="panel error">{error}</div> : null}
     <div className="stats-grid">
       <div className="stat-card">
-        <div className="stat-label">Total PnL % · last 100 positions</div>
+        <div className="stat-label">Total PnL % · all loaded positions</div>
         <div className="stat-value" style={pnlTone(pnlSummary.totalPnlPercent)}>
           {formatSignedNumber(pnlSummary.totalPnlPercent, 2)}%
         </div>
@@ -146,7 +146,7 @@ export default function PositionsPage() {
         </div>
       </div>
       <div className="stat-card">
-        <div className="stat-label">Avg PnL % · last 100 positions</div>
+        <div className="stat-label">Avg PnL % · all loaded positions</div>
         <div className="stat-value" style={pnlTone(pnlSummary.averagePnlPercent)}>
           {formatSignedNumber(pnlSummary.averagePnlPercent, 2)}%
         </div>
