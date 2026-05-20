@@ -36,6 +36,7 @@ export const api = {
   asset: (symbol) => request(`/api/v1/assets/${encodeURIComponent(symbol)}`),
   candidates: (params = '') => request(`/api/v1/trade-candidates${params}`),
   positions: (params = '') => request(`/api/v1/positions${params}`),
+  positionsSummary: (params = '') => request(`/api/v1/positions/summary${params}`),
   liveRuns: (params = '') => request(`/api/v1/live-runs${params}`),
   orders: (params = '') => request(`/api/v1/orders${params}`),
   fills: (params = '') => request(`/api/v1/fills${params}`),
