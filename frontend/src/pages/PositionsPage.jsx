@@ -25,20 +25,46 @@ function hasTriggeredStop(row) {
   if (mark === null || stop === null || !isPnlSide(row)) return false
   return isShort(row) ? mark >= stop : mark <= stop
 }
+function hasTriggeredTarget(row) {
+  const mark = numericValue(row?.mark_price), target = numericValue(row?.target_price)
+  if (mark === null || target === null || !isPnlSide(row)) return false
+  return isShort(row) ? mark <= target : mark >= target
+}
 function effectivePnlPrice(row) {
   const mark = numericValue(row?.mark_price), stop = numericValue(row?.stop_price)
   if (mark === null) return null
   return hasTriggeredStop(row) && stop !== null ? stop : mark
 }
+function effectiveSlTpPnlPrice(row) {
+  const mark = numericValue(row?.mark_price)
+  const stop = numericValue(row?.stop_price)
+  const target = numericValue(row?.target_price)
+  if (mark === null) return null
+  if (hasTriggeredStop(row) && stop !== null) return stop
+  if (hasTriggeredTarget(row) && target !== null) return target
+  return mark
+}
+function pnlFromPrice(row, price) {
+  const entry = numericValue(row?.entry_price), qty = numericValue(row?.quantity)
+  if (entry === null || price === null || qty === null || !isPnlSide(row)) return null
+  return isShort(row) ? (entry - price) * qty : (price - entry) * qty
+}
+function pnlPctFromPrice(row, price) {
+  const entry = numericValue(row?.entry_price)
+  if (entry === null || price === null || entry === 0 || !isPnlSide(row)) return null
+  return isShort(row) ? ((entry - price) / entry) * 100 : ((price - entry) / entry) * 100
+}
 function pnlValue(row) {
-  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row), qty = numericValue(row?.quantity)
-  if (entry === null || effectivePrice === null || qty === null || !isPnlSide(row)) return null
-  return isShort(row) ? (entry - effectivePrice) * qty : (effectivePrice - entry) * qty
+  return pnlFromPrice(row, effectivePnlPrice(row))
 }
 function pnlPct(row) {
-  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row)
-  if (entry === null || effectivePrice === null || entry === 0 || !isPnlSide(row)) return null
-  return isShort(row) ? ((entry - effectivePrice) / entry) * 100 : ((effectivePrice - entry) / entry) * 100
+  return pnlPctFromPrice(row, effectivePnlPrice(row))
+}
+function slTpPnlValue(row) {
+  return pnlFromPrice(row, effectiveSlTpPnlPrice(row))
+}
+function slTpPnlPct(row) {
+  return pnlPctFromPrice(row, effectiveSlTpPnlPrice(row))
 }
 function distanceToStopPct(row) {
   const entry = Number(row?.entry_price), stop = Number(row?.stop_price)
@@ -69,6 +95,12 @@ function calculatePnlSummary(positions) {
   let stoppedCount = 0
   let winners = 0
   let losers = 0
+  let slTpTotalPnlPercent = 0
+  let slTpTotalPnlValue = 0
+  let slTpCount = 0
+  let targetedCount = 0
+  let slTpWinners = 0
+  let slTpLosers = 0
 
   for (const row of positions || []) {
     const pct = pnlPct(row)
@@ -81,6 +113,16 @@ function calculatePnlSummary(positions) {
     if (pct > 0) winners += 1
     if (pct < 0) losers += 1
     if (hasTriggeredStop(row)) stoppedCount += 1
+
+    const slTpPct = slTpPnlPct(row)
+    const slTpPnl = slTpPnlValue(row)
+    if (slTpPct === null || slTpPnl === null) continue
+    slTpTotalPnlPercent += slTpPct
+    slTpTotalPnlValue += slTpPnl
+    slTpCount += 1
+    if (slTpPct > 0) slTpWinners += 1
+    if (slTpPct < 0) slTpLosers += 1
+    if (!hasTriggeredStop(row) && hasTriggeredTarget(row)) targetedCount += 1
   }
 
   return {
@@ -91,6 +133,13 @@ function calculatePnlSummary(positions) {
     stoppedCount,
     winners,
     losers,
+    slTpTotalPnlPercent,
+    slTpAveragePnlPercent: slTpCount > 0 ? slTpTotalPnlPercent / slTpCount : 0,
+    slTpTotalPnlValue,
+    slTpCount,
+    targetedCount,
+    slTpWinners,
+    slTpLosers,
   }
 }
 
@@ -152,6 +201,15 @@ export default function PositionsPage() {
         </div>
         <div className="stat-hint">
           Total PnL % / positions · wins {pnlSummary.winners}/{pnlSummary.count} · losses {pnlSummary.losers}/{pnlSummary.count}
+        </div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Total PnL % · SL/TP model</div>
+        <div className="stat-value" style={pnlTone(pnlSummary.slTpTotalPnlPercent)}>
+          {formatSignedNumber(pnlSummary.slTpTotalPnlPercent, 2)}%
+        </div>
+        <div className="stat-hint">
+          Avg {formatSignedNumber(pnlSummary.slTpAveragePnlPercent, 2)}% · TP {pnlSummary.targetedCount}/{pnlSummary.slTpCount} · SL {pnlSummary.stoppedCount}/{pnlSummary.slTpCount} · wins {pnlSummary.slTpWinners}/{pnlSummary.slTpCount}
         </div>
       </div>
     </div>
