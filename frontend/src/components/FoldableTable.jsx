@@ -1,6 +1,18 @@
 import DataTable from './DataTable'
 
-export default function FoldableTable({ title, columns, rows, empty, defaultOpen = true, defaultSortKey, defaultSortDir, hint }) {
+export default function FoldableTable({
+  title,
+  columns,
+  rows,
+  empty,
+  defaultOpen = true,
+  defaultSortKey,
+  defaultSortDir,
+  hint,
+  paginated = false,
+  initialPageSize = 25,
+  pageSizeOptions,
+}) {
   const count = Array.isArray(rows) ? rows.length : 0
   return (
     <details className="panel collapsible-panel" open={defaultOpen}>
@@ -12,7 +24,16 @@ export default function FoldableTable({ title, columns, rows, empty, defaultOpen
         <span className="collapse-indicator">⌄</span>
       </summary>
       <div className="market-toolbar-hint" style={{ marginBottom: 10 }}>Rows: {count}</div>
-      <DataTable columns={columns} rows={rows} empty={empty} defaultSortKey={defaultSortKey} defaultSortDir={defaultSortDir} />
+      <DataTable
+        columns={columns}
+        rows={rows}
+        empty={empty}
+        defaultSortKey={defaultSortKey}
+        defaultSortDir={defaultSortDir}
+        paginated={paginated}
+        initialPageSize={initialPageSize}
+        pageSizeOptions={pageSizeOptions}
+      />
     </details>
   )
 }
