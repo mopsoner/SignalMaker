@@ -21,7 +21,7 @@ echo "Apply local Raspberry patches..."
 for patch in scripts/patch_*.py; do
   if [ -f "$patch" ]; then
     echo "Apply $patch"
-    python3 "$patch"
+    python3 "$patch" || true
   fi
 done
 
@@ -32,7 +32,7 @@ echo "Re-apply local Raspberry patches after fix script..."
 for patch in scripts/patch_*.py; do
   if [ -f "$patch" ]; then
     echo "Apply $patch"
-    python3 "$patch"
+    python3 "$patch" || true
   fi
 done
 
@@ -47,12 +47,46 @@ else
   echo "WARN: systemd/signalmaker-tui.service not found"
 fi
 
+echo "Install graphical browser kiosk fallback..."
+if [ -f scripts/start_kiosk_browser.sh ]; then
+  chmod +x scripts/start_kiosk_browser.sh || true
+  sudo tee /etc/systemd/system/signalmaker-kiosk.service >/dev/null <<'EOF'
+[Unit]
+Description=SignalMaker Browser Kiosk
+After=graphical.target raspberry-executor.service
+Wants=graphical.target raspberry-executor.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=SIGNALMAKER_KIOSK_URL=http://127.0.0.1:8090/positions
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_kiosk_browser.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=graphical.target
+EOF
+  sudo chmod 644 /etc/systemd/system/signalmaker-kiosk.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable signalmaker-kiosk.service || true
+else
+  echo "WARN: scripts/start_kiosk_browser.sh not found"
+fi
+
 echo "Restart services after patches..."
 sudo systemctl restart raspberry-executor || true
 sudo systemctl restart signalmaker-tui.service || true
+sudo systemctl restart signalmaker-kiosk.service || true
 sudo chvt 1 || true
 
 echo "TUI service status:"
 sudo systemctl status signalmaker-tui.service --no-pager || true
+
+echo "Kiosk service status:"
+sudo systemctl status signalmaker-kiosk.service --no-pager || true
 
 echo "Done. Log: $LOG_FILE"
