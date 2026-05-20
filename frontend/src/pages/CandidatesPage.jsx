@@ -56,7 +56,7 @@ function targetSource(row) {
 export default function CandidatesPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const loadCandidates = useCallback(() => api.candidates('?limit=100'), [])
+  const loadCandidates = useCallback(() => api.candidates('?limit=1000'), [])
   const { data: rows = [], loading, error } = usePollingQuery(loadCandidates, 10000)
 
   async function runPipeline() {
@@ -92,6 +92,6 @@ export default function CandidatesPage() {
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading candidates…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
-    <FoldableTable title="Open and executed candidates" columns={columns} rows={rows} empty="No trade candidates yet" />
+    <FoldableTable title="Open and executed candidates" columns={columns} rows={rows} empty="No trade candidates yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
   </div>
 }
