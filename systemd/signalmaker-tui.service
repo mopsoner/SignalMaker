@@ -1,0 +1,28 @@
+[Unit]
+Description=SignalMaker TTY Dashboard
+After=network-online.target raspberry-executor.service
+Wants=network-online.target raspberry-executor.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+Environment=PYTHONUNBUFFERED=1
+Environment=TERM=linux
+Environment=LOCAL_DASHBOARD_URL=http://127.0.0.1:8090
+Environment=TTY_DASHBOARD_REFRESH_SECONDS=5
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal+console
+ExecStartPre=/usr/bin/chvt 1
+ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.tty_dashboard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
