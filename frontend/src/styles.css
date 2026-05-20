@@ -71,7 +71,11 @@ a { color: inherit; text-decoration: none; }
 .market-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
 .filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-chip { border: 1px solid var(--line); background: rgba(9,14,24,0.7); color: var(--muted); border-radius: 999px; padding: 8px 12px; font-weight: 700; cursor: pointer; }
+.filter-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 .filter-chip.active { background: rgba(88,166,255,0.18); color: var(--text); border-color: var(--accent); }
+.table-pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0 12px; }
+.table-pager-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-pager select { background: rgba(9,14,24,0.7); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
 .market-toolbar-hint { color: var(--muted); font-size: 13px; }
 .market-mobile-cards { display: none; }
 .reason-invalid { color: #ffb4b4; font-weight: 700; }
@@ -105,6 +109,8 @@ a { color: inherit; text-decoration: none; }
   .market-mobile-cards { display: grid; }
   .filter-chips { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
   .filter-chip { white-space: nowrap; }
+  .table-pager { align-items: flex-start; }
+  .table-pager-actions { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
   .panel { padding: 14px; }
   .panel h2 { font-size: 18px; }
 }
