@@ -36,7 +36,23 @@ for patch in scripts/patch_*.py; do
   fi
 done
 
-echo "Restart service after patches..."
+echo "Install robust tty1 dashboard service..."
+if [ -f systemd/signalmaker-tui.service ]; then
+  sudo systemctl disable --now getty@tty1.service || true
+  sudo cp systemd/signalmaker-tui.service /etc/systemd/system/signalmaker-tui.service
+  sudo chmod 644 /etc/systemd/system/signalmaker-tui.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable signalmaker-tui.service
+else
+  echo "WARN: systemd/signalmaker-tui.service not found"
+fi
+
+echo "Restart services after patches..."
 sudo systemctl restart raspberry-executor || true
+sudo systemctl restart signalmaker-tui.service || true
+sudo chvt 1 || true
+
+echo "TUI service status:"
+sudo systemctl status signalmaker-tui.service --no-pager || true
 
 echo "Done. Log: $LOG_FILE"
