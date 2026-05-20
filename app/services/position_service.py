@@ -21,6 +21,10 @@ def _normalized_side(side: str | None) -> str:
     return value
 
 
+def _is_pnl_side(side: str | None) -> bool:
+    return _normalized_side(side) in {"long", "short"}
+
+
 def _position_pnl(*, side: str | None, entry_price: float | None, mark_price: float | None, quantity: float | None) -> float | None:
     if entry_price is None or mark_price is None or quantity is None:
         return None
@@ -30,6 +34,80 @@ def _position_pnl(*, side: str | None, entry_price: float | None, mark_price: fl
     if _normalized_side(side) == "short":
         return (entry - mark) * qty
     return (mark - entry) * qty
+
+
+def _has_triggered_stop(row: Position) -> bool:
+    if row.mark_price is None or row.stop_price is None or not _is_pnl_side(row.side):
+        return False
+    mark = float(row.mark_price)
+    stop = float(row.stop_price)
+    return mark >= stop if _normalized_side(row.side) == "short" else mark <= stop
+
+
+def _has_triggered_target(row: Position) -> bool:
+    if row.mark_price is None or row.target_price is None or not _is_pnl_side(row.side):
+        return False
+    mark = float(row.mark_price)
+    target = float(row.target_price)
+    return mark <= target if _normalized_side(row.side) == "short" else mark >= target
+
+
+def _effective_pnl_price(row: Position) -> float | None:
+    if row.mark_price is None:
+        return None
+    if _has_triggered_stop(row) and row.stop_price is not None:
+        return float(row.stop_price)
+    return float(row.mark_price)
+
+
+def _effective_sl_tp_pnl_price(row: Position) -> float | None:
+    if row.mark_price is None:
+        return None
+    if _has_triggered_stop(row) and row.stop_price is not None:
+        return float(row.stop_price)
+    if _has_triggered_target(row) and row.target_price is not None:
+        return float(row.target_price)
+    return float(row.mark_price)
+
+
+def _pnl_from_price(row: Position, price: float | None) -> float | None:
+    if row.entry_price is None or price is None or row.quantity is None or not _is_pnl_side(row.side):
+        return None
+    entry = float(row.entry_price)
+    qty = float(row.quantity)
+    if _normalized_side(row.side) == "short":
+        return (entry - price) * qty
+    return (price - entry) * qty
+
+
+def _pnl_pct_from_price(row: Position, price: float | None) -> float | None:
+    if row.entry_price is None or price is None or not _is_pnl_side(row.side):
+        return None
+    entry = float(row.entry_price)
+    if entry == 0:
+        return None
+    if _normalized_side(row.side) == "short":
+        return ((entry - price) / entry) * 100
+    return ((price - entry) / entry) * 100
+
+
+def _empty_summary() -> dict:
+    return {
+        "totalPnlPercent": 0.0,
+        "averagePnlPercent": 0.0,
+        "totalPnlValue": 0.0,
+        "count": 0,
+        "stoppedCount": 0,
+        "winners": 0,
+        "losers": 0,
+        "slTpTotalPnlPercent": 0.0,
+        "slTpAveragePnlPercent": 0.0,
+        "slTpTotalPnlValue": 0.0,
+        "slTpCount": 0,
+        "targetedCount": 0,
+        "slTpWinners": 0,
+        "slTpLosers": 0,
+    }
 
 
 class PositionService:
@@ -69,6 +147,52 @@ class PositionService:
         rows = list(self.db.scalars(stmt).all())
         self._refresh_open_marks(rows)
         return rows
+
+    def pnl_summary(self, status: str | None = None) -> dict:
+        stmt = select(Position)
+        if status:
+            stmt = stmt.where(Position.status == status)
+        rows = list(self.db.scalars(stmt).all())
+        self._refresh_open_marks(rows)
+
+        summary = _empty_summary()
+        for row in rows:
+            effective_price = _effective_pnl_price(row)
+            pct = _pnl_pct_from_price(row, effective_price)
+            pnl = _pnl_from_price(row, effective_price)
+            if pct is None or pnl is None:
+                continue
+
+            summary["totalPnlPercent"] += pct
+            summary["totalPnlValue"] += pnl
+            summary["count"] += 1
+            if pct > 0:
+                summary["winners"] += 1
+            if pct < 0:
+                summary["losers"] += 1
+            if _has_triggered_stop(row):
+                summary["stoppedCount"] += 1
+
+            sl_tp_price = _effective_sl_tp_pnl_price(row)
+            sl_tp_pct = _pnl_pct_from_price(row, sl_tp_price)
+            sl_tp_pnl = _pnl_from_price(row, sl_tp_price)
+            if sl_tp_pct is None or sl_tp_pnl is None:
+                continue
+            summary["slTpTotalPnlPercent"] += sl_tp_pct
+            summary["slTpTotalPnlValue"] += sl_tp_pnl
+            summary["slTpCount"] += 1
+            if sl_tp_pct > 0:
+                summary["slTpWinners"] += 1
+            if sl_tp_pct < 0:
+                summary["slTpLosers"] += 1
+            if not _has_triggered_stop(row) and _has_triggered_target(row):
+                summary["targetedCount"] += 1
+
+        if summary["count"] > 0:
+            summary["averagePnlPercent"] = summary["totalPnlPercent"] / summary["count"]
+        if summary["slTpCount"] > 0:
+            summary["slTpAveragePnlPercent"] = summary["slTpTotalPnlPercent"] / summary["slTpCount"]
+        return summary
 
     def get_open_position_for_candidate(self, candidate_id: str | None) -> Position | None:
         if not candidate_id:
