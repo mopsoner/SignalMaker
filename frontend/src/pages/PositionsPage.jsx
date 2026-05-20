@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
@@ -7,6 +7,22 @@ import { fmtDate, fmtNumber } from '../lib/format'
 
 const SHORT_SIDES = new Set(['short', 'sell', 'bear', 'bear_watch'])
 const LONG_SIDES = new Set(['long', 'buy', 'bull', 'bull_watch'])
+const EMPTY_PNL_SUMMARY = {
+  totalPnlPercent: 0,
+  averagePnlPercent: 0,
+  totalPnlValue: 0,
+  count: 0,
+  stoppedCount: 0,
+  winners: 0,
+  losers: 0,
+  slTpTotalPnlPercent: 0,
+  slTpAveragePnlPercent: 0,
+  slTpTotalPnlValue: 0,
+  slTpCount: 0,
+  targetedCount: 0,
+  slTpWinners: 0,
+  slTpLosers: 0,
+}
 
 function normalizedSide(side) {
   const value = String(side || '').toLowerCase()
@@ -25,46 +41,20 @@ function hasTriggeredStop(row) {
   if (mark === null || stop === null || !isPnlSide(row)) return false
   return isShort(row) ? mark >= stop : mark <= stop
 }
-function hasTriggeredTarget(row) {
-  const mark = numericValue(row?.mark_price), target = numericValue(row?.target_price)
-  if (mark === null || target === null || !isPnlSide(row)) return false
-  return isShort(row) ? mark <= target : mark >= target
-}
 function effectivePnlPrice(row) {
   const mark = numericValue(row?.mark_price), stop = numericValue(row?.stop_price)
   if (mark === null) return null
   return hasTriggeredStop(row) && stop !== null ? stop : mark
 }
-function effectiveSlTpPnlPrice(row) {
-  const mark = numericValue(row?.mark_price)
-  const stop = numericValue(row?.stop_price)
-  const target = numericValue(row?.target_price)
-  if (mark === null) return null
-  if (hasTriggeredStop(row) && stop !== null) return stop
-  if (hasTriggeredTarget(row) && target !== null) return target
-  return mark
-}
-function pnlFromPrice(row, price) {
-  const entry = numericValue(row?.entry_price), qty = numericValue(row?.quantity)
-  if (entry === null || price === null || qty === null || !isPnlSide(row)) return null
-  return isShort(row) ? (entry - price) * qty : (price - entry) * qty
-}
-function pnlPctFromPrice(row, price) {
-  const entry = numericValue(row?.entry_price)
-  if (entry === null || price === null || entry === 0 || !isPnlSide(row)) return null
-  return isShort(row) ? ((entry - price) / entry) * 100 : ((price - entry) / entry) * 100
-}
 function pnlValue(row) {
-  return pnlFromPrice(row, effectivePnlPrice(row))
+  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row), qty = numericValue(row?.quantity)
+  if (entry === null || effectivePrice === null || qty === null || !isPnlSide(row)) return null
+  return isShort(row) ? (entry - effectivePrice) * qty : (effectivePrice - entry) * qty
 }
 function pnlPct(row) {
-  return pnlPctFromPrice(row, effectivePnlPrice(row))
-}
-function slTpPnlValue(row) {
-  return pnlFromPrice(row, effectiveSlTpPnlPrice(row))
-}
-function slTpPnlPct(row) {
-  return pnlPctFromPrice(row, effectiveSlTpPnlPrice(row))
+  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row)
+  if (entry === null || effectivePrice === null || entry === 0 || !isPnlSide(row)) return null
+  return isShort(row) ? ((entry - effectivePrice) / entry) * 100 : ((effectivePrice - entry) / entry) * 100
 }
 function distanceToStopPct(row) {
   const entry = Number(row?.entry_price), stop = Number(row?.stop_price)
@@ -88,67 +78,13 @@ function formatSignedNumber(value, decimals = 2) {
   const sign = number > 0 ? '+' : ''
   return `${sign}${fmtNumber(number, decimals)}`
 }
-function calculatePnlSummary(positions) {
-  let totalPnlPercent = 0
-  let totalPnlValue = 0
-  let count = 0
-  let stoppedCount = 0
-  let winners = 0
-  let losers = 0
-  let slTpTotalPnlPercent = 0
-  let slTpTotalPnlValue = 0
-  let slTpCount = 0
-  let targetedCount = 0
-  let slTpWinners = 0
-  let slTpLosers = 0
-
-  for (const row of positions || []) {
-    const pct = pnlPct(row)
-    const pnl = pnlValue(row)
-    if (pct === null || pnl === null) continue
-
-    totalPnlPercent += pct
-    totalPnlValue += pnl
-    count += 1
-    if (pct > 0) winners += 1
-    if (pct < 0) losers += 1
-    if (hasTriggeredStop(row)) stoppedCount += 1
-
-    const slTpPct = slTpPnlPct(row)
-    const slTpPnl = slTpPnlValue(row)
-    if (slTpPct === null || slTpPnl === null) continue
-    slTpTotalPnlPercent += slTpPct
-    slTpTotalPnlValue += slTpPnl
-    slTpCount += 1
-    if (slTpPct > 0) slTpWinners += 1
-    if (slTpPct < 0) slTpLosers += 1
-    if (!hasTriggeredStop(row) && hasTriggeredTarget(row)) targetedCount += 1
-  }
-
-  return {
-    totalPnlPercent,
-    averagePnlPercent: count > 0 ? totalPnlPercent / count : 0,
-    totalPnlValue,
-    count,
-    stoppedCount,
-    winners,
-    losers,
-    slTpTotalPnlPercent,
-    slTpAveragePnlPercent: slTpCount > 0 ? slTpTotalPnlPercent / slTpCount : 0,
-    slTpTotalPnlValue,
-    slTpCount,
-    targetedCount,
-    slTpWinners,
-    slTpLosers,
-  }
-}
 
 export default function PositionsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=1000'), []), 10000)
+  const { data: pnlSummary = EMPTY_PNL_SUMMARY, loading: summaryLoading, error: summaryError } = usePollingQuery(useCallback(() => api.positionsSummary(), []), 10000)
   const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 10000)
-  const pnlSummary = useMemo(() => calculatePnlSummary(positions), [positions])
 
   async function runExecutor() {
     setBusy(true); setMessage('')
@@ -183,19 +119,21 @@ export default function PositionsPage() {
     <PageHeader title="Positions" subtitle="Paper execution state, orders, fills, PnL and stop/target distances" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button>} />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
+    {summaryLoading ? <div className="panel">Loading PnL summary…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
+    {summaryError ? <div className="panel error">{summaryError}</div> : null}
     <div className="stats-grid">
       <div className="stat-card">
-        <div className="stat-label">Total PnL % · all loaded positions</div>
+        <div className="stat-label">Total PnL % · all DB positions</div>
         <div className="stat-value" style={pnlTone(pnlSummary.totalPnlPercent)}>
           {formatSignedNumber(pnlSummary.totalPnlPercent, 2)}%
         </div>
         <div className="stat-hint">
-          Sum of capped position PnL % · {pnlSummary.count} positions · stopped {pnlSummary.stoppedCount}/{pnlSummary.count}
+          Server-side sum of capped position PnL % · {pnlSummary.count} positions · stopped {pnlSummary.stoppedCount}/{pnlSummary.count}
         </div>
       </div>
       <div className="stat-card">
-        <div className="stat-label">Avg PnL % · all loaded positions</div>
+        <div className="stat-label">Avg PnL % · all DB positions</div>
         <div className="stat-value" style={pnlTone(pnlSummary.averagePnlPercent)}>
           {formatSignedNumber(pnlSummary.averagePnlPercent, 2)}%
         </div>
@@ -209,7 +147,7 @@ export default function PositionsPage() {
           {formatSignedNumber(pnlSummary.slTpTotalPnlPercent, 2)}%
         </div>
         <div className="stat-hint">
-          Avg {formatSignedNumber(pnlSummary.slTpAveragePnlPercent, 2)}% · TP {pnlSummary.targetedCount}/{pnlSummary.slTpCount} · SL {pnlSummary.stoppedCount}/{pnlSummary.slTpCount} · wins {pnlSummary.slTpWinners}/{pnlSummary.slTpCount}
+          Server-side · avg {formatSignedNumber(pnlSummary.slTpAveragePnlPercent, 2)}% · TP {pnlSummary.targetedCount}/{pnlSummary.slTpCount} · SL {pnlSummary.stoppedCount}/{pnlSummary.slTpCount} · wins {pnlSummary.slTpWinners}/{pnlSummary.slTpCount}
         </div>
       </div>
     </div>
