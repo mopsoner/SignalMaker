@@ -36,8 +36,24 @@ def _position_pnl(*, side: str | None, entry_price: float | None, mark_price: fl
     return (mark - entry) * qty
 
 
+def _is_valid_stop(row: Position) -> bool:
+    if row.entry_price is None or row.stop_price is None or not _is_pnl_side(row.side):
+        return False
+    entry = float(row.entry_price)
+    stop = float(row.stop_price)
+    return stop > entry if _normalized_side(row.side) == "short" else stop < entry
+
+
+def _is_valid_target(row: Position) -> bool:
+    if row.entry_price is None or row.target_price is None or not _is_pnl_side(row.side):
+        return False
+    entry = float(row.entry_price)
+    target = float(row.target_price)
+    return target < entry if _normalized_side(row.side) == "short" else target > entry
+
+
 def _has_triggered_stop(row: Position) -> bool:
-    if row.mark_price is None or row.stop_price is None or not _is_pnl_side(row.side):
+    if row.mark_price is None or not _is_valid_stop(row):
         return False
     mark = float(row.mark_price)
     stop = float(row.stop_price)
@@ -45,7 +61,7 @@ def _has_triggered_stop(row: Position) -> bool:
 
 
 def _has_triggered_target(row: Position) -> bool:
-    if row.mark_price is None or row.target_price is None or not _is_pnl_side(row.side):
+    if row.mark_price is None or not _is_valid_target(row):
         return False
     mark = float(row.mark_price)
     target = float(row.target_price)
@@ -107,6 +123,8 @@ def _empty_summary() -> dict:
         "targetedCount": 0,
         "slTpWinners": 0,
         "slTpLosers": 0,
+        "invalidStopCount": 0,
+        "invalidTargetCount": 0,
     }
 
 
@@ -157,6 +175,11 @@ class PositionService:
 
         summary = _empty_summary()
         for row in rows:
+            if row.stop_price is not None and not _is_valid_stop(row):
+                summary["invalidStopCount"] += 1
+            if row.target_price is not None and not _is_valid_target(row):
+                summary["invalidTargetCount"] += 1
+
             effective_price = _effective_pnl_price(row)
             pct = _pnl_pct_from_price(row, effective_price)
             pnl = _pnl_from_price(row, effective_price)
