@@ -42,6 +42,16 @@ function entryExposureQuote(row) {
   if (entry === null || qty === null || entry === 0 || !isPnlSide(row)) return null
   return Math.abs(entry * qty)
 }
+function stopRiskQuote(row) {
+  const entry = numericValue(row?.entry_price), stop = numericValue(row?.stop_price), qty = numericValue(row?.quantity)
+  if (entry === null || stop === null || qty === null || entry === 0 || stop === entry || !isPnlSide(row)) return null
+  return Math.abs(entry - stop) * Math.abs(qty)
+}
+function pnlRiskRatio(row) {
+  const pnl = pnlValue(row), risk = stopRiskQuote(row)
+  if (pnl === null || risk === null || risk === 0) return null
+  return pnl / risk
+}
 function pnlPct(row) {
   const entry = numericValue(row?.entry_price), mark = numericValue(row?.mark_price)
   if (entry === null || mark === null || entry === 0 || !isPnlSide(row)) return null
@@ -77,18 +87,26 @@ function calculatePnlSummaryByQuoteAsset(positions) {
     const exposure = entryExposureQuote(row)
     if (pnl === null || exposure === null) continue
 
+    const risk = stopRiskQuote(row)
     const quote = quoteAsset(row)
     const current = summaryByQuote.get(quote) || {
       quoteAsset: quote,
       totalPnlQuote: 0,
       totalEntryValueQuote: 0,
+      totalStopRiskQuote: 0,
       globalPnlPercent: 0,
+      globalRiskRatio: null,
       count: 0,
+      riskCount: 0,
     }
 
     current.totalPnlQuote += pnl
     current.totalEntryValueQuote += exposure
     current.count += 1
+    if (risk !== null) {
+      current.totalStopRiskQuote += risk
+      current.riskCount += 1
+    }
     summaryByQuote.set(quote, current)
   }
 
@@ -98,6 +116,9 @@ function calculatePnlSummaryByQuoteAsset(positions) {
       globalPnlPercent: item.totalEntryValueQuote > 0
         ? (item.totalPnlQuote / item.totalEntryValueQuote) * 100
         : 0,
+      globalRiskRatio: item.totalStopRiskQuote > 0
+        ? item.totalPnlQuote / item.totalStopRiskQuote
+        : null,
     }))
     .sort((a, b) => Math.abs(b.totalPnlQuote) - Math.abs(a.totalPnlQuote))
 }
@@ -133,6 +154,14 @@ export default function PositionsPage() {
       return <span style={pnlTone(pct)}>{pct === null ? '—' : `${formatSignedNumber(pct, 2)}%`}</span>
     }, sortValue: (row) => pnlPct(row) ?? -999999 },
     { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
+    { key: 'stop_risk', title: 'Risk @ stop', render: (row) => {
+      const risk = stopRiskQuote(row)
+      return risk === null ? '—' : `${fmtNumber(risk, 4)} ${quoteAsset(row)}`
+    }, sortValue: (row) => stopRiskQuote(row) ?? -999999 },
+    { key: 'pnl_r', title: 'PnL / Risk', render: (row) => {
+      const ratio = pnlRiskRatio(row)
+      return <span style={pnlTone(ratio)}>{ratio === null ? '—' : `${formatSignedNumber(ratio, 2)}R`}</span>
+    }, sortValue: (row) => pnlRiskRatio(row) ?? -999999 },
     { key: 'dist_stop', title: 'Dist stop %', render: (row) => fmtNumber(distanceToStopPct(row), 2), sortValue: (row) => distanceToStopPct(row) ?? -999999 },
     { key: 'target_price', title: 'Target', render: (row) => fmtNumber(row.target_price, 4) },
     { key: 'dist_target', title: 'Dist target %', render: (row) => fmtNumber(distanceToTargetPct(row), 2), sortValue: (row) => distanceToTargetPct(row) ?? -999999 },
@@ -158,7 +187,7 @@ export default function PositionsPage() {
             {formatSignedNumber(item.totalPnlQuote, 4)} {item.quoteAsset}
           </div>
           <div className="stat-hint">
-            {formatSignedNumber(item.globalPnlPercent, 2)}% · exposure {fmtNumber(item.totalEntryValueQuote, 2)} {item.quoteAsset} · {item.count} position{item.count > 1 ? 's' : ''}
+            {formatSignedNumber(item.globalPnlPercent, 2)}% · {item.globalRiskRatio === null ? 'risk ratio —' : `${formatSignedNumber(item.globalRiskRatio, 2)}R`} · risk {fmtNumber(item.totalStopRiskQuote, 2)} {item.quoteAsset} · exposure {fmtNumber(item.totalEntryValueQuote, 2)} {item.quoteAsset} · {item.riskCount}/{item.count} stop{item.count > 1 ? 's' : ''}
           </div>
         </div>
       )) : (
