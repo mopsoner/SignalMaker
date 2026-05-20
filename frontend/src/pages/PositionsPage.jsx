@@ -155,7 +155,7 @@ export default function PositionsPage() {
         </div>
       </div>
     </div>
-    <FoldableTable title="Open positions" columns={positionColumns} rows={positions} empty="No positions yet" />
+    <FoldableTable title="Open positions" columns={positionColumns} rows={positions} empty="No positions yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
     <FoldableTable title="Recent orders" columns={orderColumns} rows={orders} empty="No orders yet" />
   </div>
 }
