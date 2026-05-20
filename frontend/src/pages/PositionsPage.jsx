@@ -32,10 +32,20 @@ function quoteAsset(row) {
   const knownQuote = KNOWN_QUOTE_ASSETS.find((asset) => symbol.endsWith(asset))
   return knownQuote || 'QUOTE'
 }
+function hasTriggeredStop(row) {
+  const mark = numericValue(row?.mark_price), stop = numericValue(row?.stop_price)
+  if (mark === null || stop === null || !isPnlSide(row)) return false
+  return isShort(row) ? mark >= stop : mark <= stop
+}
+function effectivePnlPrice(row) {
+  const mark = numericValue(row?.mark_price), stop = numericValue(row?.stop_price)
+  if (mark === null) return null
+  return hasTriggeredStop(row) && stop !== null ? stop : mark
+}
 function pnlValue(row) {
-  const entry = numericValue(row?.entry_price), mark = numericValue(row?.mark_price), qty = numericValue(row?.quantity)
-  if (entry === null || mark === null || qty === null || !isPnlSide(row)) return null
-  return isShort(row) ? (entry - mark) * qty : (mark - entry) * qty
+  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row), qty = numericValue(row?.quantity)
+  if (entry === null || effectivePrice === null || qty === null || !isPnlSide(row)) return null
+  return isShort(row) ? (entry - effectivePrice) * qty : (effectivePrice - entry) * qty
 }
 function entryExposureQuote(row) {
   const entry = numericValue(row?.entry_price), qty = numericValue(row?.quantity)
@@ -53,6 +63,11 @@ function pnlRiskRatio(row) {
   return pnl / risk
 }
 function pnlPct(row) {
+  const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row)
+  if (entry === null || effectivePrice === null || entry === 0 || !isPnlSide(row)) return null
+  return isShort(row) ? ((entry - effectivePrice) / entry) * 100 : ((effectivePrice - entry) / entry) * 100
+}
+function rawPnlPct(row) {
   const entry = numericValue(row?.entry_price), mark = numericValue(row?.mark_price)
   if (entry === null || mark === null || entry === 0 || !isPnlSide(row)) return null
   return isShort(row) ? ((entry - mark) / entry) * 100 : ((mark - entry) / entry) * 100
@@ -98,6 +113,7 @@ function calculatePnlSummaryByQuoteAsset(positions) {
       globalRiskRatio: null,
       count: 0,
       riskCount: 0,
+      stoppedCount: 0,
     }
 
     current.totalPnlQuote += pnl
@@ -107,6 +123,7 @@ function calculatePnlSummaryByQuoteAsset(positions) {
       current.totalStopRiskQuote += risk
       current.riskCount += 1
     }
+    if (hasTriggeredStop(row)) current.stoppedCount += 1
     summaryByQuote.set(quote, current)
   }
 
@@ -145,6 +162,10 @@ export default function PositionsPage() {
     { key: 'quote_asset', title: 'Quote', render: (row) => quoteAsset(row) },
     { key: 'entry_price', title: 'Entry', render: (row) => fmtNumber(row.entry_price, 4) },
     { key: 'mark_price', title: 'Now', render: (row) => fmtNumber(row.mark_price, 4) },
+    { key: 'effective_price', title: 'PnL price', render: (row) => {
+      const effectivePrice = effectivePnlPrice(row)
+      return <span style={hasTriggeredStop(row) ? { color: 'var(--orange)', fontWeight: 700 } : {}}>{effectivePrice === null ? '—' : fmtNumber(effectivePrice, 4)}{hasTriggeredStop(row) ? ' stop' : ''}</span>
+    }, sortValue: (row) => effectivePnlPrice(row) ?? -999999 },
     { key: 'pnl', title: 'PnL quote', render: (row) => {
       const pnl = pnlValue(row)
       return <span style={pnlTone(pnl)}>{pnl === null ? '—' : `${formatSignedNumber(pnl, 4)} ${quoteAsset(row)}`}</span>
@@ -153,6 +174,10 @@ export default function PositionsPage() {
       const pct = pnlPct(row)
       return <span style={pnlTone(pct)}>{pct === null ? '—' : `${formatSignedNumber(pct, 2)}%`}</span>
     }, sortValue: (row) => pnlPct(row) ?? -999999 },
+    { key: 'raw_pnl_pct', title: 'Raw %', render: (row) => {
+      const pct = rawPnlPct(row)
+      return <span style={pnlTone(pct)}>{pct === null ? '—' : `${formatSignedNumber(pct, 2)}%`}</span>
+    }, sortValue: (row) => rawPnlPct(row) ?? -999999 },
     { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
     { key: 'stop_risk', title: 'Risk @ stop', render: (row) => {
       const risk = stopRiskQuote(row)
@@ -187,7 +212,7 @@ export default function PositionsPage() {
             {formatSignedNumber(item.totalPnlQuote, 4)} {item.quoteAsset}
           </div>
           <div className="stat-hint">
-            {formatSignedNumber(item.globalPnlPercent, 2)}% · {item.globalRiskRatio === null ? 'risk ratio —' : `${formatSignedNumber(item.globalRiskRatio, 2)}R`} · risk {fmtNumber(item.totalStopRiskQuote, 2)} {item.quoteAsset} · exposure {fmtNumber(item.totalEntryValueQuote, 2)} {item.quoteAsset} · {item.riskCount}/{item.count} stop{item.count > 1 ? 's' : ''}
+            {formatSignedNumber(item.globalPnlPercent, 2)}% · {item.globalRiskRatio === null ? 'risk ratio —' : `${formatSignedNumber(item.globalRiskRatio, 2)}R`} · stopped {item.stoppedCount}/{item.count} · risk {fmtNumber(item.totalStopRiskQuote, 2)} {item.quoteAsset} · exposure {fmtNumber(item.totalEntryValueQuote, 2)} {item.quoteAsset} · {item.riskCount}/{item.count} stop{item.count > 1 ? 's' : ''}
           </div>
         </div>
       )) : (
