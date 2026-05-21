@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import os
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -18,12 +19,18 @@ class BinanceClient:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.secret_key)
 
+    def recv_window_ms(self) -> int:
+        try:
+            return max(5000, min(60000, int(os.getenv("BINANCE_RECV_WINDOW_MS", "60000") or "60000")))
+        except Exception:
+            return 60000
+
     def _signed(self, method: str, path: str, params: dict[str, Any] | None = None):
         if not self.is_configured():
             raise RuntimeError("Binance API credentials are missing")
         payload = dict(params or {})
         payload["timestamp"] = int(time.time() * 1000)
-        payload.setdefault("recvWindow", 5000)
+        payload.setdefault("recvWindow", self.recv_window_ms())
         query = urlencode(payload, doseq=True)
         signature = hmac.new(self.secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
         headers = {"X-MBX-APIKEY": self.api_key}
