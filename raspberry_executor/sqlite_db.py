@@ -1,23 +1,33 @@
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("raspberry_executor.db")
-STATE_JSON_PATH = Path("state.json")
+ROOT = Path(__file__).resolve().parents[1]
+DB_PATH = ROOT / "raspberry_executor.db"
+STATE_JSON_PATH = ROOT / "state.json"
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def sqlite_busy_timeout_ms() -> int:
+    try:
+        return max(5000, int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "60000") or "60000"))
+    except Exception:
+        return 60000
+
+
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=sqlite_busy_timeout_ms() / 1000.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute(f"PRAGMA busy_timeout={sqlite_busy_timeout_ms()}")
     return conn
 
 
