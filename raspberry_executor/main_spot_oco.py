@@ -13,11 +13,27 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-executor")
 
 
+class DustRemaining(RuntimeError):
+    def __init__(self, *, symbol: str, base_asset: str, free_qty: float, last_error: Exception | None) -> None:
+        self.symbol = symbol
+        self.base_asset = base_asset
+        self.free_qty = free_qty
+        self.last_error = last_error
+        super().__init__(f"dust_remaining symbol={symbol} base_asset={base_asset} free_qty={free_qty} last_error={last_error}")
+
+
 def candidate_fetch_limit() -> int:
     try:
         return max(10, int(os.getenv("CANDIDATE_FETCH_LIMIT", "100") or "100"))
     except Exception:
         return 100
+
+
+def oco_repair_max_legs() -> int:
+    try:
+        return max(1, int(os.getenv("OCO_REPAIR_MAX_LEGS", "10") or "10"))
+    except Exception:
+        return 10
 
 
 def sell_spot_balance_for_short(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, candidate: dict, execution_symbol: str) -> None:
@@ -52,7 +68,80 @@ def sell_spot_balance_for_short(binance: BinanceClient, rules: BinanceSymbolRule
         state.add_event(candidate_id, "spot_short_sell_error", {"error": error_text, "candidate": candidate})
 
 
-def repair_missing_oco(order_manager: SpotOrderManager, state: StateStore) -> None:
+def validate_oco_repair_quantity(
+    rules: BinanceSymbolRules,
+    *,
+    symbol: str,
+    raw_qty: float,
+    target_price: float,
+    stop_price: float,
+    label: str,
+) -> str:
+    qty = rules.normalize_exit_quantity(symbol, raw_qty)
+    tp = rules.normalize_exit_price(symbol, target_price)
+    stop = rules.normalize_exit_price(symbol, stop_price)
+    stop_limit = rules.normalize_exit_price(symbol, float(stop) * 0.999)
+    rules.ensure_exit_notional(symbol, qty, tp, label=f"oco_repair_{label}_take_profit")
+    rules.ensure_exit_notional(symbol, qty, stop_limit, label=f"oco_repair_{label}_stop_loss")
+    return qty
+
+
+def choose_oco_repair_quantity(
+    rules: BinanceSymbolRules,
+    *,
+    symbol: str,
+    base_asset: str,
+    free_qty: float,
+    target_price: float,
+    stop_price: float,
+) -> dict:
+    if free_qty <= 0:
+        raise DustRemaining(symbol=symbol, base_asset=base_asset, free_qty=free_qty, last_error=None)
+
+    half_error = None
+    try:
+        half_qty = validate_oco_repair_quantity(
+            rules,
+            symbol=symbol,
+            raw_qty=free_qty / 2,
+            target_price=target_price,
+            stop_price=stop_price,
+            label="half_free_asset",
+        )
+        return {
+            "quantity": half_qty,
+            "mode": "half_free_asset",
+            "base_asset": base_asset,
+            "free_qty": free_qty,
+            "raw_qty": free_qty / 2,
+        }
+    except Exception as exc:
+        half_error = exc
+        logger.warning("oco repair half quantity rejected symbol=%s base=%s free_qty=%s error=%s", symbol, base_asset, free_qty, str(exc))
+
+    try:
+        full_qty = validate_oco_repair_quantity(
+            rules,
+            symbol=symbol,
+            raw_qty=free_qty,
+            target_price=target_price,
+            stop_price=stop_price,
+            label="full_residue",
+        )
+        return {
+            "quantity": full_qty,
+            "mode": "full_residue",
+            "base_asset": base_asset,
+            "free_qty": free_qty,
+            "raw_qty": free_qty,
+            "half_error": str(half_error),
+        }
+    except Exception as exc:
+        logger.warning("oco repair full residue rejected symbol=%s base=%s free_qty=%s error=%s", symbol, base_asset, free_qty, str(exc))
+        raise DustRemaining(symbol=symbol, base_asset=base_asset, free_qty=free_qty, last_error=exc) from exc
+
+
+def repair_missing_oco(binance: BinanceClient, rules: BinanceSymbolRules, order_manager: SpotOrderManager, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         side = str(position.get("side") or "").lower()
         if side != "long":
@@ -60,35 +149,137 @@ def repair_missing_oco(order_manager: SpotOrderManager, state: StateStore) -> No
         if position.get("oco_order_list_id") and position.get("tp_order_id") and position.get("sl_order_id"):
             continue
         symbol = position.get("execution_symbol") or position.get("signal_symbol")
-        quantity = position.get("quantity")
         target_price = position.get("target_price")
         stop_price = position.get("stop_price")
-        if not symbol or not quantity or not target_price or not stop_price:
-            reason = "missing_symbol_quantity_target_or_stop"
+        if not symbol or not target_price or not stop_price:
+            reason = "missing_symbol_target_or_stop"
             logger.warning("oco repair skipped candidate=%s reason=%s", candidate_id, reason)
             state.add_event(candidate_id, "oco_repair_skipped", {"reason": reason, "position": position})
             continue
+
+        symbol = str(symbol).upper()
         try:
-            logger.warning("oco missing; repairing candidate=%s symbol=%s qty=%s target=%s stop=%s", candidate_id, symbol, quantity, target_price, stop_price)
-            result = order_manager.create_exit_oco_for_open_long(
-                symbol=str(symbol),
-                quantity=quantity,
-                target_price=float(target_price),
-                stop_price=float(stop_price),
-            )
-            updates = {
-                "quantity": result.get("quantity") or quantity,
-                "oco_order_list_id": result.get("oco_order_list_id"),
-                "tp_order_id": result.get("tp_order_id"),
-                "sl_order_id": result.get("sl_order_id"),
-                "oco_payload": result.get("oco_payload") or {},
-            }
-            state.update_open_position(candidate_id, updates, event_type="oco_repaired")
-            logger.info("oco repaired candidate=%s oco_order_list_id=%s tp=%s sl=%s", candidate_id, updates.get("oco_order_list_id"), updates.get("tp_order_id"), updates.get("sl_order_id"))
+            base_asset = rules.base_asset(symbol)
         except Exception as exc:
             error_text = str(exc)
             logger.error("oco repair failed candidate=%s error=%s", candidate_id, error_text)
             state.add_event(candidate_id, "oco_repair_failed", {"error": error_text, "position": position})
+            continue
+
+        repaired_legs = list(position.get("oco_repair_legs") or [])
+        total_repaired_qty = sum(float(leg.get("quantity") or 0) for leg in repaired_legs if isinstance(leg, dict))
+        max_legs = oco_repair_max_legs()
+
+        for leg_index in range(len(repaired_legs) + 1, max_legs + 1):
+            free_qty = binance.free_balance(base_asset)
+            try:
+                quantity_choice = choose_oco_repair_quantity(
+                    rules,
+                    symbol=symbol,
+                    base_asset=base_asset,
+                    free_qty=free_qty,
+                    target_price=float(target_price),
+                    stop_price=float(stop_price),
+                )
+            except DustRemaining as exc:
+                payload = {
+                    "symbol": symbol,
+                    "base_asset": exc.base_asset,
+                    "dust_remaining": exc.free_qty,
+                    "last_error": str(exc.last_error) if exc.last_error else None,
+                    "position": position,
+                    "repaired_legs": repaired_legs,
+                }
+                logger.info(
+                    "oco repair stopped candidate=%s reason=dust_remaining symbol=%s base=%s dust=%s error=%s",
+                    candidate_id,
+                    symbol,
+                    exc.base_asset,
+                    exc.free_qty,
+                    payload.get("last_error"),
+                )
+                state.add_event(candidate_id, "dust_remaining", payload)
+                break
+            except Exception as exc:
+                error_text = str(exc)
+                logger.error("oco repair failed candidate=%s error=%s", candidate_id, error_text)
+                state.add_event(candidate_id, "oco_repair_failed", {"error": error_text, "position": position})
+                break
+
+            quantity = quantity_choice["quantity"]
+            try:
+                logger.warning(
+                    "oco missing; repairing candidate=%s leg=%s symbol=%s qty=%s mode=%s free_qty=%s target=%s stop=%s",
+                    candidate_id,
+                    leg_index,
+                    symbol,
+                    quantity,
+                    quantity_choice.get("mode"),
+                    quantity_choice.get("free_qty"),
+                    target_price,
+                    stop_price,
+                )
+                result = order_manager.create_exit_oco_for_open_long(
+                    symbol=symbol,
+                    quantity=quantity,
+                    target_price=float(target_price),
+                    stop_price=float(stop_price),
+                )
+                leg = {
+                    "leg_index": leg_index,
+                    "quantity": result.get("quantity") or quantity,
+                    "oco_order_list_id": result.get("oco_order_list_id"),
+                    "tp_order_id": result.get("tp_order_id"),
+                    "sl_order_id": result.get("sl_order_id"),
+                    "mode": quantity_choice.get("mode"),
+                    "free_qty_before": quantity_choice.get("free_qty"),
+                    "base_asset": quantity_choice.get("base_asset"),
+                    "oco_payload": result.get("oco_payload") or {},
+                }
+                repaired_legs.append(leg)
+                total_repaired_qty += float(leg["quantity"])
+                updates = {
+                    "quantity": str(total_repaired_qty),
+                    "oco_order_list_id": leg.get("oco_order_list_id"),
+                    "tp_order_id": leg.get("tp_order_id"),
+                    "sl_order_id": leg.get("sl_order_id"),
+                    "oco_payload": leg.get("oco_payload") or {},
+                    "oco_repair_legs": repaired_legs,
+                    "oco_repair_last_mode": leg.get("mode"),
+                    "oco_repair_base_asset": leg.get("base_asset"),
+                    "oco_repair_total_qty": str(total_repaired_qty),
+                }
+                state.update_open_position(candidate_id, updates, event_type="oco_repaired")
+                logger.info(
+                    "oco repaired candidate=%s leg=%s oco_order_list_id=%s tp=%s sl=%s mode=%s total_qty=%s",
+                    candidate_id,
+                    leg_index,
+                    leg.get("oco_order_list_id"),
+                    leg.get("tp_order_id"),
+                    leg.get("sl_order_id"),
+                    leg.get("mode"),
+                    total_repaired_qty,
+                )
+                if leg.get("mode") == "full_residue":
+                    break
+            except Exception as exc:
+                error_text = str(exc)
+                logger.error("oco repair failed candidate=%s leg=%s error=%s", candidate_id, leg_index, error_text)
+                state.add_event(
+                    candidate_id,
+                    "oco_repair_failed",
+                    {
+                        "error": error_text,
+                        "leg_index": leg_index,
+                        "quantity_choice": quantity_choice,
+                        "position": position,
+                        "repaired_legs": repaired_legs,
+                    },
+                )
+                break
+        else:
+            logger.warning("oco repair max legs reached candidate=%s symbol=%s max_legs=%s", candidate_id, symbol, max_legs)
+            state.add_event(candidate_id, "oco_repair_max_legs_reached", {"symbol": symbol, "max_legs": max_legs, "repaired_legs": repaired_legs})
 
 
 def report_final_events(binance: BinanceClient, state: StateStore) -> None:
@@ -185,7 +376,7 @@ def main() -> None:
             logger.info("candidates fetched count=%s ids=%s", len(candidates), [c.get("candidate_id") for c in candidates])
             for candidate in candidates:
                 execute_candidate(settings, binance, rules, order_manager, state, guard, candidate)
-            repair_missing_oco(order_manager, state)
+            repair_missing_oco(binance, rules, order_manager, state)
             report_final_events(binance, state)
         except Exception as exc:
             logger.error("main loop error=%s", str(exc))
