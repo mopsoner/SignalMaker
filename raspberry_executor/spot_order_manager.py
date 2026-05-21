@@ -52,6 +52,35 @@ class SpotOrderManager:
         except Exception:
             return 0.5
 
+    def _available_oco_exit_quantity(self, symbol: str, requested_quantity: float | str) -> dict:
+        symbol = symbol.upper()
+        requested = float(requested_quantity)
+        if requested <= 0:
+            raise RuntimeError(f"invalid_oco_requested_quantity symbol={symbol} quantity={requested_quantity}")
+
+        base_asset = self.rules.base_asset(symbol)
+        if self.binance.dry_run:
+            return {
+                "quantity": self.rules.normalize_exit_quantity(symbol, requested),
+                "requested_quantity": requested,
+                "free_base_qty": requested,
+                "base_asset": base_asset,
+                "quantity_source": "dry_run_requested_quantity",
+            }
+
+        free_qty = self.binance.free_balance(base_asset)
+        if free_qty <= 0:
+            raise RuntimeError(f"no_free_balance_for_oco symbol={symbol} base_asset={base_asset} free_qty={free_qty}")
+
+        usable_qty = min(requested, free_qty)
+        return {
+            "quantity": self.rules.normalize_exit_quantity(symbol, usable_qty),
+            "requested_quantity": requested,
+            "free_base_qty": free_qty,
+            "base_asset": base_asset,
+            "quantity_source": "binance_free_balance" if free_qty < requested else "requested_quantity_confirmed_available",
+        }
+
     def confirm_spot_entry_order(self, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float) -> dict:
         symbol = symbol.upper()
         if not entry_order_id:
@@ -148,7 +177,8 @@ class SpotOrderManager:
             raise RuntimeError(f"invalid_oco_price_order symbol={symbol} target={target_price} current={current_price} stop={stop_price}")
         if not self.rules.oco_allowed(symbol):
             raise RuntimeError(f"oco_not_allowed_for_symbol:{symbol}")
-        exit_qty = self.rules.normalize_exit_quantity(symbol, quantity)
+        qty_info = self._available_oco_exit_quantity(symbol, quantity)
+        exit_qty = qty_info["quantity"]
         tp = self.rules.normalize_exit_price(symbol, target_price)
         stop = self.rules.normalize_exit_price(symbol, stop_price)
         stop_limit = self.rules.normalize_exit_price(symbol, float(stop) * 0.999)
@@ -156,7 +186,7 @@ class SpotOrderManager:
         self.rules.ensure_exit_notional(symbol, exit_qty, stop_limit, label="oco_stop_loss")
         oco = self._submit_oco_sell(symbol, exit_qty, tp, stop, stop_limit)
         tp_order_id, sl_order_id = self._oco_order_ids(oco)
-        return {"symbol": symbol, "quantity": exit_qty, "oco_order_list_id": oco.get("orderListId"), "tp_order_id": tp_order_id, "sl_order_id": sl_order_id, "oco_payload": oco}
+        return {"symbol": symbol, "quantity": exit_qty, "oco_order_list_id": oco.get("orderListId"), "tp_order_id": tp_order_id, "sl_order_id": sl_order_id, "oco_payload": oco, "oco_quantity_source": qty_info.get("quantity_source"), "oco_requested_quantity": qty_info.get("requested_quantity"), "oco_free_base_qty": qty_info.get("free_base_qty"), "oco_base_asset": qty_info.get("base_asset")}
 
     def open_long_with_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
@@ -169,5 +199,5 @@ class SpotOrderManager:
         executed_qty = confirm["executed_qty"]
         result = {"symbol": symbol, "side": "long", "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "entry_payload": entry}
         oco_result = self.create_exit_oco_for_open_long(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
-        result.update({"quantity": oco_result["quantity"], "oco_order_list_id": oco_result.get("oco_order_list_id"), "tp_order_id": oco_result.get("tp_order_id"), "sl_order_id": oco_result.get("sl_order_id"), "oco_payload": oco_result.get("oco_payload") or {}})
+        result.update({"quantity": oco_result["quantity"], "oco_order_list_id": oco_result.get("oco_order_list_id"), "tp_order_id": oco_result.get("tp_order_id"), "sl_order_id": oco_result.get("sl_order_id"), "oco_payload": oco_result.get("oco_payload") or {}, "oco_quantity_source": oco_result.get("oco_quantity_source"), "oco_requested_quantity": oco_result.get("oco_requested_quantity"), "oco_free_base_qty": oco_result.get("oco_free_base_qty"), "oco_base_asset": oco_result.get("oco_base_asset")})
         return result
