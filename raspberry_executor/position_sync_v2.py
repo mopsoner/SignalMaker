@@ -19,9 +19,9 @@ OCO_SKIP_EVENT_COOLDOWN_SECONDS = 300
 
 def max_oco_repair_attempts() -> int:
     try:
-        return max(1, int(os.getenv("MAX_OCO_REPAIR_ATTEMPTS", "5") or "5"))
+        return max(1, int(os.getenv("MAX_OCO_REPAIR_ATTEMPTS", "8") or "8"))
     except Exception:
-        return 5
+        return 8
 
 
 def auto_close_ghost_positions() -> bool:
@@ -33,6 +33,24 @@ def ghost_base_epsilon() -> float:
         return max(0.0, float(os.getenv("GHOST_BASE_EPSILON", "0.00000001") or "0.00000001"))
     except Exception:
         return 0.00000001
+
+
+def oco_fallback_enabled() -> bool:
+    return str(os.getenv("OCO_FALLBACK_LEVELS_ENABLED", "true") or "true").lower() in {"1", "true", "yes", "on"}
+
+
+def oco_fallback_tp_pct() -> float:
+    try:
+        return max(0.001, float(os.getenv("OCO_FALLBACK_TP_PCT", "0.10") or "0.10"))
+    except Exception:
+        return 0.10
+
+
+def oco_fallback_sl_pct() -> float:
+    try:
+        return max(0.001, float(os.getenv("OCO_FALLBACK_SL_PCT", "0.02") or "0.02"))
+    except Exception:
+        return 0.02
 
 
 def _status(payload):
@@ -97,6 +115,18 @@ def _levels(position, symbol):
     return latest_levels_for_symbol(symbol)
 
 
+def _fallback_levels(binance, symbol: str, position: dict) -> dict | None:
+    if not oco_fallback_enabled() or binance is None:
+        return None
+    current = float(binance.current_price(symbol))
+    tp_pct = oco_fallback_tp_pct()
+    sl_pct = oco_fallback_sl_pct()
+    side = str(position.get("side") or "long").lower()
+    if side == "short":
+        return {"target_price": current * (1.0 - tp_pct), "stop_price": current * (1.0 + sl_pct), "source": "fallback_current_price_tp_10_sl_2_short", "current_price": current, "tp_pct": tp_pct, "sl_pct": sl_pct}
+    return {"target_price": current * (1.0 + tp_pct), "stop_price": current * (1.0 - sl_pct), "source": "fallback_current_price_tp_10_sl_2", "current_price": current, "tp_pct": tp_pct, "sl_pct": sl_pct}
+
+
 def _available_base_balance(binance, margin, rules, symbol: str, *, use_margin: bool) -> float | None:
     base = rules.base_asset(symbol)
     try:
@@ -148,11 +178,6 @@ def _list_open_orders(binance, margin, symbol: str, *, use_margin: bool) -> list
 
 
 def _ghost_check(candidate_id: str, position: dict, symbol: str, binance, margin, rules, state, *, use_margin: bool) -> bool:
-    """Close impossible local positions that have no Binance footprint.
-
-    This fixes stale SQLite/TUI open positions where Binance has no entry order,
-    no open orders, and no base balance in the selected account.
-    """
     if not auto_close_ghost_positions() or binance.dry_run:
         return False
     entry_id = position.get("entry_order_id")
@@ -164,16 +189,7 @@ def _ghost_check(candidate_id: str, position: dict, symbol: str, binance, margin
     available_base = _available_base_balance(binance, margin, rules, symbol, use_margin=use_margin)
     has_base = available_base is not None and available_base > ghost_base_epsilon()
     if entry_missing and not entry_live and not open_orders and not has_base:
-        payload = {
-            "symbol": symbol,
-            "mode": position.get("mode"),
-            "reason": "no_entry_order_no_open_orders_no_base_balance",
-            "entry_order_id": entry_id,
-            "entry_lookup": entry_payload,
-            "available_base": available_base,
-            "open_orders_count": len(open_orders),
-            "position": position,
-        }
+        payload = {"symbol": symbol, "mode": position.get("mode"), "reason": "no_entry_order_no_open_orders_no_base_balance", "entry_order_id": entry_id, "entry_lookup": entry_payload, "available_base": available_base, "open_orders_count": len(open_orders), "position": position}
         state.close_position(candidate_id, "ghost_position_removed", payload)
         logger.warning("ghost open position removed candidate=%s symbol=%s mode=%s", candidate_id, symbol, position.get("mode"))
         return True
@@ -202,21 +218,7 @@ def _attach_existing_exit_orders(candidate_id, position, symbol, binance, margin
         return False
     tp = sorted(tp_candidates, key=lambda o: _float(o.get("price")), reverse=True)[0]
     sl = sorted(sl_candidates, key=lambda o: _float(o.get("stopPrice") or o.get("price")))[0]
-    updates = {
-        "tp_order_id": tp.get("orderId"),
-        "sl_order_id": sl.get("orderId"),
-        "oco_order_list_id": tp.get("orderListId") or sl.get("orderListId") or position.get("oco_order_list_id"),
-        "target_price": _float(tp.get("price"), _float(position.get("target_price"))),
-        "stop_price": _float(sl.get("stopPrice") or sl.get("price"), _float(position.get("stop_price"))),
-        "order_monitor_mode": "margin" if use_margin else "spot",
-        "oco_repair_mode": "attached_existing_orders",
-        "attached_existing_tp_order": tp,
-        "attached_existing_sl_order": sl,
-        "oco_repair_blocked": False,
-        "oco_repair_attempts": 0,
-        "last_oco_repair_skip_reason": None,
-        "last_oco_repair_skip_ts": None,
-    }
+    updates = {"tp_order_id": tp.get("orderId"), "sl_order_id": sl.get("orderId"), "oco_order_list_id": tp.get("orderListId") or sl.get("orderListId") or position.get("oco_order_list_id"), "target_price": _float(tp.get("price"), _float(position.get("target_price"))), "stop_price": _float(sl.get("stopPrice") or sl.get("price"), _float(position.get("stop_price"))), "order_monitor_mode": "margin" if use_margin else "spot", "oco_repair_mode": "attached_existing_orders", "attached_existing_tp_order": tp, "attached_existing_sl_order": sl, "oco_repair_blocked": False, "oco_repair_attempts": 0, "last_oco_repair_skip_reason": None, "last_oco_repair_skip_ts": None}
     state.update_open_position(candidate_id, updates, event_type="oco_existing_orders_attached")
     logger.info("attached existing exit orders candidate=%s symbol=%s tp=%s sl=%s", candidate_id, symbol, tp.get("orderId"), sl.get("orderId"))
     return True
@@ -261,9 +263,19 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state,
         return "blocked"
     levels = _levels(position, symbol)
     if not levels:
-        payload = {"symbol": symbol, "reason": "no_recent_candidate_levels"}
-        _mark_repair_skip(state, candidate_id, position, "oco_repair_waiting_levels", payload)
-        return "waiting_levels"
+        try:
+            levels = _fallback_levels(binance, symbol, position)
+        except Exception as exc:
+            levels = None
+            fallback_error = str(exc)
+        else:
+            fallback_error = None
+        if not levels:
+            payload = {"symbol": symbol, "reason": "no_recent_candidate_levels", "fallback_error": fallback_error}
+            _mark_repair_skip(state, candidate_id, position, "oco_repair_waiting_levels", payload)
+            return "waiting_levels"
+        state.update_open_position(candidate_id, {"target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "oco_repair_level_source": levels}, event_type="oco_fallback_levels_created")
+        logger.warning("oco fallback levels created candidate=%s symbol=%s tp=%s sl=%s source=%s", candidate_id, symbol, levels.get("target_price"), levels.get("stop_price"), levels.get("source"))
     quantity = position.get("quantity")
     if not quantity:
         payload = {"symbol": symbol, "reason": "missing_quantity", "levels": levels}
@@ -295,13 +307,7 @@ def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state,
         _mark_repair_skip(state, candidate_id, position, "oco_repair_failed", payload)
         raise
 
-    updates = {
-        "target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "quantity": result.get("quantity") or quantity,
-        "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"),
-        "oco_payload": result.get("oco_payload") or {}, "oco_repair_level_source": levels, "oco_repair_mode": repair_mode,
-        "oco_repair_validated_quantity": quantity, "oco_repair_attempts": 0, "oco_repair_blocked": False,
-        "last_oco_repair_skip_reason": None, "last_oco_repair_skip_ts": None,
-    }
+    updates = {"target_price": float(levels["target_price"]), "stop_price": float(levels["stop_price"]), "quantity": result.get("quantity") or quantity, "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"), "oco_payload": result.get("oco_payload") or {}, "oco_repair_level_source": levels, "oco_repair_mode": repair_mode, "oco_repair_validated_quantity": quantity, "oco_repair_attempts": 0, "oco_repair_blocked": False, "last_oco_repair_skip_reason": None, "last_oco_repair_skip_ts": None}
     state.update_open_position(candidate_id, updates, event_type="oco_repaired")
     logger.info("oco repaired candidate=%s symbol=%s mode=%s qty=%s source=%s", candidate_id, symbol, repair_mode, quantity, levels.get("source"))
     return "repaired"
