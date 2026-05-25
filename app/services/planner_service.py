@@ -157,7 +157,10 @@ class PlannerService:
             self._add_stop_candidate(candidates, name=name, level=value, entry=entry, side=side, rank=rank)
         ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
         if ordered:
-            selected = ordered[0]
+            selected_index = 1 if len(ordered) > 1 else 0
+            selected = ordered[selected_index]
+            selected['selected_by'] = 'deeper_structural_stop_base_rule'
+            selected['skipped_tighter_stop_source'] = ordered[0].get('source') if selected_index == 1 else None
             return selected['level'], selected['source'], ordered
         return None, 'missing_structural_stop', ordered
 
