@@ -204,9 +204,9 @@ def render_candidates(stdscr, y, x, h, w, data):
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   St     Stop        Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status   Stop        Target", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<6} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
