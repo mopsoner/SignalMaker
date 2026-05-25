@@ -28,6 +28,21 @@ class ExecutorService:
             return value.get('level')
         return value
 
+    def _current_price_for_candidate(self, candidate, *, requested_mode: str) -> float:
+        if requested_mode == 'live':
+            return self.binance.current_price(candidate.symbol)
+        return float(candidate.entry_price)
+
+    def _price_between_stop_and_target(self, candidate, target_price: float, mark_price: float) -> bool:
+        if candidate.stop_price is None or target_price is None:
+            return False
+        stop = float(candidate.stop_price)
+        target = float(target_price)
+        mark = float(mark_price)
+        if self._is_short_side(candidate.side):
+            return target < mark < stop
+        return stop < mark < target
+
     def _add_target_candidate(self, candidates: list[dict], *, name: str, level, source: str, rank: int, entry: float, is_short: bool) -> None:
         if level is None:
             return
@@ -324,7 +339,7 @@ class ExecutorService:
             'exchange_oco_order_list_id': oco_resp.get('orderListId'),
         }
 
-    def execute_open_candidates(self, limit: int = 10, quantity: float = 1.0, mode: str = 'paper') -> dict:
+    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
         executed = []
         skipped = []
         requested_mode = (mode or 'paper').lower()
@@ -333,6 +348,18 @@ class ExecutorService:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
                 continue
             try:
+                target_plan = self._hierarchical_target_plan(candidate)
+                target_price = target_plan['target_price']
+                mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
+                if not self._price_between_stop_and_target(candidate, target_price, mark_price):
+                    skipped.append({
+                        'candidate_id': candidate.candidate_id,
+                        'reason': 'current_price_outside_stop_target_range',
+                        'mark_price': mark_price,
+                        'stop_price': candidate.stop_price,
+                        'target_price': target_price,
+                    })
+                    continue
                 if requested_mode == 'live':
                     result = self._execute_live_candidate(candidate, quantity)
                 else:
