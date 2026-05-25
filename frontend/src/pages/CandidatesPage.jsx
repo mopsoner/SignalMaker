@@ -53,6 +53,60 @@ function targetSource(row) {
   )
 }
 
+function csvValue(value) {
+  const text = safeText(value).replaceAll('—', '')
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+function exportCandidatesCsv(rows) {
+  const headers = [
+    'symbol',
+    'side',
+    'stage',
+    'status',
+    'setup',
+    'confirm',
+    'macro',
+    'entry_context',
+    'stop_source',
+    'target_source',
+    'score',
+    'entry_price',
+    'stop_price',
+    'target_price',
+    'rr_ratio',
+    'created_at',
+  ]
+  const csvRows = rows.map((row) => [
+    row.symbol,
+    row.side,
+    row.stage,
+    row.status,
+    setupState(row),
+    confirmLabel(row),
+    summarizeContext(row?.payload?.macro_liquidity_context || row?.liquidity_context),
+    summarizeContext(row?.payload?.entry_liquidity_context),
+    stopSource(row),
+    targetSource(row),
+    row.score,
+    row.entry_price,
+    row.stop_price,
+    row.target_price,
+    row.rr_ratio,
+    row.created_at,
+  ].map(csvValue).join(','))
+  const csv = [headers.join(','), ...csvRows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `signalmaker-candidates-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 export default function CandidatesPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -88,7 +142,14 @@ export default function CandidatesPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Trade Candidates" subtitle="Planner outputs with confirmed setup, liquidity context and stop source." actions={<button className="button" disabled={busy} onClick={runPipeline}>{busy ? 'Running…' : 'Run pipeline'}</button>} />
+    <PageHeader
+      title="Trade Candidates"
+      subtitle="Planner outputs with confirmed setup, liquidity context and stop source."
+      actions={<div className="button-row">
+        <button className="button secondary" disabled={!rows.length} onClick={() => exportCandidatesCsv(rows)}>Export CSV</button>
+        <button className="button" disabled={busy} onClick={runPipeline}>{busy ? 'Running…' : 'Run pipeline'}</button>
+      </div>}
+    />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading candidates…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
