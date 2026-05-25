@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
     binance_use_testnet: bool = Field(default=True, alias="BINANCE_USE_TESTNET")
     live_spot_allow_shorts: bool = Field(default=False, alias="LIVE_SPOT_ALLOW_SHORTS")
-    live_max_open_positions: int = Field(default=3, alias="LIVE_MAX_OPEN_POSITIONS")
+    live_max_open_positions: int = Field(default=100, alias="LIVE_MAX_OPEN_POSITIONS")
     live_max_notional_per_trade: float = Field(default=250.0, alias="LIVE_MAX_NOTIONAL_PER_TRADE")
     live_require_tp_sl: bool = Field(default=True, alias="LIVE_REQUIRE_TP_SL")
     live_reconcile_enabled: bool = Field(default=True, alias="LIVE_RECONCILE_ENABLED")
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     bot_pipeline_interval_sec: int = Field(default=60, alias="BOT_PIPELINE_INTERVAL_SEC")
     bot_executor_interval_sec: int = Field(default=30, alias="BOT_EXECUTOR_INTERVAL_SEC")
     bot_scheduler_interval_sec: int = Field(default=30, alias="BOT_SCHEDULER_INTERVAL_SEC")
-    bot_executor_limit: int = Field(default=10, alias="BOT_EXECUTOR_LIMIT")
+    bot_executor_limit: int = Field(default=100, alias="BOT_EXECUTOR_LIMIT")
     bot_executor_quantity: float = Field(default=1.0, alias="BOT_EXECUTOR_QUANTITY")
 
     @property
