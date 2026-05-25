@@ -18,7 +18,10 @@ class TradeCandidateService:
         return list(self.db.scalars(stmt).all())
 
     def get_open_candidates(self, limit: int = 100) -> list[TradeCandidate]:
-        stmt = select(TradeCandidate).where(TradeCandidate.status == "open").order_by(TradeCandidate.score.desc(), TradeCandidate.created_at.desc()).limit(limit)
+        # Raspberry executor backlog mode: play older unexecuted candidates first.
+        # This prevents valid open candidates from being starved by newer, higher
+        # score candidates when balance or executor limit is temporarily tight.
+        stmt = select(TradeCandidate).where(TradeCandidate.status == "open").order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
     def upsert_open_candidate(self, *, symbol: str, side: str, stage: str, score: float, entry_price: float | None, stop_price: float | None, target_price: float | None, rr_ratio: float | None, execution_target: dict | None, liquidity_context: dict | None, notes: str | None, payload: dict | None) -> TradeCandidate:
