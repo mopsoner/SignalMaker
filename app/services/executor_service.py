@@ -19,6 +19,24 @@ class ExecutorService:
         self.risk = RiskService(db)
         self.binance = BinanceTradingService()
 
+    def _is_short_side(self, side: str | None) -> bool:
+        return (side or '').lower() in {'short', 'sell', 'bear'}
+
+    def _current_price_for_candidate(self, candidate, *, requested_mode: str) -> float:
+        if requested_mode == 'live':
+            return self.binance.current_price(candidate.symbol)
+        return float(candidate.entry_price)
+
+    def _price_between_stop_and_target(self, candidate, mark_price: float) -> bool:
+        if candidate.stop_price is None or candidate.target_price is None:
+            return False
+        stop = float(candidate.stop_price)
+        target = float(candidate.target_price)
+        mark = float(mark_price)
+        if self._is_short_side(candidate.side):
+            return target < mark < stop
+        return stop < mark < target
+
     def _execute_paper_candidate(self, candidate, quantity: float) -> dict:
         position = self.positions.create_position(symbol=candidate.symbol, side=candidate.side, quantity=quantity, entry_price=candidate.entry_price, mark_price=candidate.entry_price, stop_price=candidate.stop_price, target_price=candidate.target_price, meta={"candidate_id": candidate.candidate_id, "mode": "paper"})
         order = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side=candidate.side, order_type="market", quantity=quantity, requested_price=candidate.entry_price, filled_price=candidate.entry_price, status="filled", meta={"mode": "paper"})
@@ -124,7 +142,7 @@ class ExecutorService:
             'exchange_oco_order_list_id': oco_resp.get('orderListId'),
         }
 
-    def execute_open_candidates(self, limit: int = 10, quantity: float = 1.0, mode: str = 'paper') -> dict:
+    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
         executed = []
         skipped = []
         requested_mode = (mode or 'paper').lower()
@@ -133,6 +151,16 @@ class ExecutorService:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
                 continue
             try:
+                mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
+                if not self._price_between_stop_and_target(candidate, mark_price):
+                    skipped.append({
+                        'candidate_id': candidate.candidate_id,
+                        'reason': 'current_price_outside_stop_target_range',
+                        'mark_price': mark_price,
+                        'stop_price': candidate.stop_price,
+                        'target_price': candidate.target_price,
+                    })
+                    continue
                 if requested_mode == 'live':
                     result = self._execute_live_candidate(candidate, quantity)
                 else:
