@@ -15,9 +15,9 @@ class PlannerService:
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'min_score': strategy['planner_min_score'],
             'min_rr': strategy['planner_min_rr'],
-            'stop_policy': 'structural_invalidation_with_buffer',
+            'stop_policy': 'third_valid_structural_invalidation_with_buffer',
             'stop_buffer_pct': STOP_BUFFER_PCT,
-            'target_policy': 'structural_liquidity',
+            'target_policy': 'third_valid_structural_liquidity',
             'execution_policy': '1h_setup_15m_alignment_required',
             'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
@@ -157,10 +157,10 @@ class PlannerService:
             self._add_stop_candidate(candidates, name=name, level=value, entry=entry, side=side, rank=rank)
         ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
         if ordered:
-            selected_index = 1 if len(ordered) > 1 else 0
+            selected_index = 2 if len(ordered) > 2 else len(ordered) - 1
             selected = ordered[selected_index]
-            selected['selected_by'] = 'deeper_structural_stop_base_rule'
-            selected['skipped_tighter_stop_source'] = ordered[0].get('source') if selected_index == 1 else None
+            selected['selected_by'] = 'third_valid_structural_stop_base_rule'
+            selected['skipped_tighter_stop_sources'] = [item.get('source') for item in ordered[:selected_index]]
             return selected['level'], selected['source'], ordered
         return None, 'missing_structural_stop', ordered
 
@@ -207,7 +207,10 @@ class PlannerService:
             rank += 10
         ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
         if ordered:
-            selected = ordered[0]
+            selected_index = 2 if len(ordered) > 2 else len(ordered) - 1
+            selected = ordered[selected_index]
+            selected['selected_by'] = 'third_valid_structural_target_base_rule'
+            selected['skipped_nearer_target_sources'] = [item.get('source') for item in ordered[:selected_index]]
             return selected['level'], selected['source'], ordered
         return None, 'missing_structural_target', ordered
 
