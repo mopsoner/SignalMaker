@@ -100,9 +100,36 @@ function MobileAssetCards({ rows }) {
 
 export default function DashboardPage() {
   const [marketFilter, setMarketFilter] = useState('actionable')
+  const [clearStatus, setClearStatus] = useState('')
   const { data: adminSettings } = usePollingQuery(useCallback(() => api.adminSettings(), []), 30000)
   const assetLimit = Number(adminSettings?.binance?.binance_max_symbols || 50)
   const { data: assets = [], loading, error } = usePollingQuery(useCallback(() => api.assets(`?limit=${assetLimit}&sort_by=updated_at`), [assetLimit]), 15000)
+
+  const handleClearOpenCandidates = useCallback(async () => {
+    const ok = window.confirm('Delete all open trade candidates? This does not delete positions or orders.')
+    if (!ok) return
+    setClearStatus('Clearing open trade candidates…')
+    try {
+      const result = await api.clearOpenCandidates()
+      setClearStatus(`Deleted ${result.deleted || 0} open trade candidates.`)
+      window.setTimeout(() => window.location.reload(), 500)
+    } catch (err) {
+      setClearStatus(err?.message || 'Failed to clear trade candidates')
+    }
+  }, [])
+
+  const handleClearAllCandidates = useCallback(async () => {
+    const ok = window.confirm('Delete ALL trade candidates, including executed/history rows? Positions and orders are not deleted.')
+    if (!ok) return
+    setClearStatus('Clearing all trade candidates…')
+    try {
+      const result = await api.clearCandidates()
+      setClearStatus(`Deleted ${result.deleted || 0} trade candidates.`)
+      window.setTimeout(() => window.location.reload(), 500)
+    } catch (err) {
+      setClearStatus(err?.message || 'Failed to clear trade candidates')
+    }
+  }, [])
 
   const counts = useMemo(() => ({
     actionable: assets.filter(actionableWatch).length,
@@ -207,6 +234,6 @@ export default function DashboardPage() {
     <div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Actionable" value={counts.actionable} /><StatCard label="Bull / Bear 1H" value={`${counts.oneHourBull} / ${counts.oneHourBear}`} /><StatCard label="15m aligned / opposed" value={`${counts.fifteenMinAligned} / ${counts.fifteenMinOpposed}`} /></div>
     {loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}
     <FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" />
-    <details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {sortedFilteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={sortedFilteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={sortedFilteredAssets} /></details>
+    <details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {sortedFilteredAssets.length} / {assets.length}</div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}><button type="button" className="filter-chip" onClick={handleClearOpenCandidates}>Clear open candidates</button><button type="button" className="filter-chip" onClick={handleClearAllCandidates}>Clear all candidates</button>{clearStatus ? <span style={{ fontSize: 12, opacity: 0.8 }}>{clearStatus}</span> : null}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={sortedFilteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={sortedFilteredAssets} /></details>
   </div>
 }
