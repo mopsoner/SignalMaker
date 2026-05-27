@@ -25,6 +25,10 @@ def _is_pnl_side(side: str | None) -> bool:
     return _normalized_side(side) in {"long", "short"}
 
 
+def _safe_div(numerator: float, denominator: float) -> float:
+    return numerator / denominator if denominator else 0.0
+
+
 def _position_pnl(*, side: str | None, entry_price: float | None, mark_price: float | None, quantity: float | None) -> float | None:
     if entry_price is None or mark_price is None or quantity is None:
         return None
@@ -116,6 +120,24 @@ def _empty_summary() -> dict:
         "stoppedCount": 0,
         "winners": 0,
         "losers": 0,
+        "breakevenCount": 0,
+        "winRatePercent": 0.0,
+        "lossRatePercent": 0.0,
+        "averageWinPercent": 0.0,
+        "averageLossPercent": 0.0,
+        "averageWinValue": 0.0,
+        "averageLossValue": 0.0,
+        "grossProfitValue": 0.0,
+        "grossLossValue": 0.0,
+        "grossProfitPercent": 0.0,
+        "grossLossPercent": 0.0,
+        "profitFactor": 0.0,
+        "expectancyPercent": 0.0,
+        "expectancyValue": 0.0,
+        "bestTradePercent": 0.0,
+        "worstTradePercent": 0.0,
+        "bestTradeValue": 0.0,
+        "worstTradeValue": 0.0,
         "slTpTotalPnlPercent": 0.0,
         "slTpAveragePnlPercent": 0.0,
         "slTpTotalPnlValue": 0.0,
@@ -123,6 +145,15 @@ def _empty_summary() -> dict:
         "targetedCount": 0,
         "slTpWinners": 0,
         "slTpLosers": 0,
+        "slTpBreakevenCount": 0,
+        "slTpWinRatePercent": 0.0,
+        "slTpLossRatePercent": 0.0,
+        "tpHitRatePercent": 0.0,
+        "slHitRatePercent": 0.0,
+        "slTpAverageWinPercent": 0.0,
+        "slTpAverageLossPercent": 0.0,
+        "slTpProfitFactor": 0.0,
+        "slTpExpectancyPercent": 0.0,
         "invalidStopCount": 0,
         "invalidTargetCount": 0,
     }
@@ -145,12 +176,7 @@ class PositionService:
             if not asset or asset.price is None:
                 continue
             row.mark_price = float(asset.price)
-            row.unrealized_pnl = _position_pnl(
-                side=row.side,
-                entry_price=row.entry_price,
-                mark_price=row.mark_price,
-                quantity=row.quantity,
-            )
+            row.unrealized_pnl = _position_pnl(side=row.side, entry_price=row.entry_price, mark_price=row.mark_price, quantity=row.quantity)
             changed = True
         if changed:
             self.db.commit()
@@ -182,6 +208,13 @@ class PositionService:
         self._refresh_open_marks(rows)
 
         summary = _empty_summary()
+        winning_pct_total = losing_pct_total = 0.0
+        winning_value_total = losing_value_total = 0.0
+        sl_tp_winning_pct_total = sl_tp_losing_pct_total = 0.0
+        sl_tp_winning_value_total = sl_tp_losing_value_total = 0.0
+        best_pct = worst_pct = None
+        best_value = worst_value = None
+
         for row in rows:
             if row.stop_price is not None and not _is_valid_stop(row):
                 summary["invalidStopCount"] += 1
@@ -197,10 +230,21 @@ class PositionService:
             summary["totalPnlPercent"] += pct
             summary["totalPnlValue"] += pnl
             summary["count"] += 1
+            best_pct = pct if best_pct is None else max(best_pct, pct)
+            worst_pct = pct if worst_pct is None else min(worst_pct, pct)
+            best_value = pnl if best_value is None else max(best_value, pnl)
+            worst_value = pnl if worst_value is None else min(worst_value, pnl)
+
             if pct > 0:
                 summary["winners"] += 1
-            if pct < 0:
+                winning_pct_total += pct
+                winning_value_total += pnl
+            elif pct < 0:
                 summary["losers"] += 1
+                losing_pct_total += pct
+                losing_value_total += pnl
+            else:
+                summary["breakevenCount"] += 1
             if _has_triggered_stop(row):
                 summary["stoppedCount"] += 1
 
@@ -214,15 +258,54 @@ class PositionService:
             summary["slTpCount"] += 1
             if sl_tp_pct > 0:
                 summary["slTpWinners"] += 1
-            if sl_tp_pct < 0:
+                sl_tp_winning_pct_total += sl_tp_pct
+                sl_tp_winning_value_total += sl_tp_pnl
+            elif sl_tp_pct < 0:
                 summary["slTpLosers"] += 1
+                sl_tp_losing_pct_total += sl_tp_pct
+                sl_tp_losing_value_total += sl_tp_pnl
+            else:
+                summary["slTpBreakevenCount"] += 1
             if not _has_triggered_stop(row) and _has_triggered_target(row):
                 summary["targetedCount"] += 1
 
-        if summary["count"] > 0:
-            summary["averagePnlPercent"] = summary["totalPnlPercent"] / summary["count"]
-        if summary["slTpCount"] > 0:
-            summary["slTpAveragePnlPercent"] = summary["slTpTotalPnlPercent"] / summary["slTpCount"]
+        count = summary["count"]
+        if count > 0:
+            summary["averagePnlPercent"] = summary["totalPnlPercent"] / count
+            summary["expectancyPercent"] = summary["averagePnlPercent"]
+            summary["expectancyValue"] = summary["totalPnlValue"] / count
+            summary["winRatePercent"] = _safe_div(summary["winners"], count) * 100
+            summary["lossRatePercent"] = _safe_div(summary["losers"], count) * 100
+            summary["bestTradePercent"] = best_pct or 0.0
+            summary["worstTradePercent"] = worst_pct or 0.0
+            summary["bestTradeValue"] = best_value or 0.0
+            summary["worstTradeValue"] = worst_value or 0.0
+
+        if summary["winners"] > 0:
+            summary["averageWinPercent"] = winning_pct_total / summary["winners"]
+            summary["averageWinValue"] = winning_value_total / summary["winners"]
+        if summary["losers"] > 0:
+            summary["averageLossPercent"] = losing_pct_total / summary["losers"]
+            summary["averageLossValue"] = losing_value_total / summary["losers"]
+        summary["grossProfitValue"] = winning_value_total
+        summary["grossLossValue"] = losing_value_total
+        summary["grossProfitPercent"] = winning_pct_total
+        summary["grossLossPercent"] = losing_pct_total
+        summary["profitFactor"] = _safe_div(winning_value_total, abs(losing_value_total)) if losing_value_total else (winning_value_total if winning_value_total else 0.0)
+
+        sl_tp_count = summary["slTpCount"]
+        if sl_tp_count > 0:
+            summary["slTpAveragePnlPercent"] = summary["slTpTotalPnlPercent"] / sl_tp_count
+            summary["slTpExpectancyPercent"] = summary["slTpAveragePnlPercent"]
+            summary["slTpWinRatePercent"] = _safe_div(summary["slTpWinners"], sl_tp_count) * 100
+            summary["slTpLossRatePercent"] = _safe_div(summary["slTpLosers"], sl_tp_count) * 100
+            summary["tpHitRatePercent"] = _safe_div(summary["targetedCount"], sl_tp_count) * 100
+            summary["slHitRatePercent"] = _safe_div(summary["stoppedCount"], sl_tp_count) * 100
+        if summary["slTpWinners"] > 0:
+            summary["slTpAverageWinPercent"] = sl_tp_winning_pct_total / summary["slTpWinners"]
+        if summary["slTpLosers"] > 0:
+            summary["slTpAverageLossPercent"] = sl_tp_losing_pct_total / summary["slTpLosers"]
+        summary["slTpProfitFactor"] = _safe_div(sl_tp_winning_value_total, abs(sl_tp_losing_value_total)) if sl_tp_losing_value_total else (sl_tp_winning_value_total if sl_tp_winning_value_total else 0.0)
         return summary
 
     def get_open_position_for_candidate(self, candidate_id: str | None) -> Position | None:
@@ -245,25 +328,14 @@ class PositionService:
     def create_position(self, *, symbol: str, side: str, quantity: float, entry_price: float | None, mark_price: float | None, stop_price: float | None, target_price: float | None, meta: dict | None) -> Position:
         meta = meta or {}
         candidate_id = meta.get("candidate_id")
-
-        # Idempotency guard: a candidate can be regenerated by the scanner after
-        # execution. Do not create a second position for the same live candidate.
         existing = self.get_open_position_for_candidate(candidate_id)
         if existing is None:
-            # SignalMaker currently tracks one active setup per symbol. This also
-            # prevents duplicate positions if the candidate id is refreshed but the
-            # same symbol/side is already open.
             existing = self.get_open_position_for_symbol(symbol, side=side)
         if existing is not None:
             existing.mark_price = mark_price if mark_price is not None else existing.mark_price
             existing.stop_price = stop_price if stop_price is not None else existing.stop_price
             existing.target_price = target_price if target_price is not None else existing.target_price
-            existing.unrealized_pnl = _position_pnl(
-                side=existing.side,
-                entry_price=existing.entry_price,
-                mark_price=existing.mark_price,
-                quantity=existing.quantity,
-            )
+            existing.unrealized_pnl = _position_pnl(side=existing.side, entry_price=existing.entry_price, mark_price=existing.mark_price, quantity=existing.quantity)
             existing.meta = {**(existing.meta or {}), **meta, "dedupe_refresh": True}
             self.db.commit()
             self.db.refresh(existing)
@@ -293,12 +365,7 @@ class PositionService:
             return None
         row.status = "closed"
         row.mark_price = mark_price
-        row.unrealized_pnl = unrealized_pnl if unrealized_pnl is not None else _position_pnl(
-            side=row.side,
-            entry_price=row.entry_price,
-            mark_price=mark_price,
-            quantity=row.quantity,
-        )
+        row.unrealized_pnl = unrealized_pnl if unrealized_pnl is not None else _position_pnl(side=row.side, entry_price=row.entry_price, mark_price=mark_price, quantity=row.quantity)
         row.closed_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(row)
