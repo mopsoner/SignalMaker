@@ -18,7 +18,7 @@ class PlannerService:
             'stop_policy': 'third_valid_structural_invalidation_with_buffer',
             'stop_buffer_pct': STOP_BUFFER_PCT,
             'target_policy': 'third_valid_structural_liquidity',
-            'execution_policy': '1h_setup_15m_alignment_required',
+            'execution_policy': 'strict_1h_setup_requires_15m_bos_mss_or_reclaim',
             'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
 
@@ -96,6 +96,86 @@ class PlannerService:
             return False
         gate = signal.get('hierarchy_gate') or {}
         return bool(gate.get('accepted') is True or signal.get('pipeline', {}).get('confirm'))
+
+    def _has_15m_execution_confirmation(self, signal: dict, side: str) -> bool:
+        """True only when 15m provides a real execution trigger.
+
+        A neutral 15m that is simply not opposed to the 1h setup is not enough
+        to create an open planner candidate. This prevents 1h setups from being
+        upgraded to trade_ready before BOS/MSS/reclaim appears on execution TF.
+        """
+        if side not in {'long', 'short'}:
+            return False
+
+        confirmation = signal.get('confirmation_model') or {}
+        gate = signal.get('hierarchy_gate') or {}
+        exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
+        source = (
+            exec_trigger.get('confirm_source')
+            or signal.get('confirm_source')
+            or confirmation.get('confirmation_source')
+            or ''
+        )
+        source_text = str(source).lower()
+
+        if confirmation.get('confirmed_by_15m') is True:
+            return True
+        if gate.get('execution_15m_aligned') is True:
+            return True
+        if exec_trigger.get('aligned') is True:
+            return True
+
+        if side == 'long':
+            if signal.get('mss_bull') or signal.get('bos_bull'):
+                return True
+            if exec_trigger.get('mss_bull') or exec_trigger.get('bos_bull'):
+                return True
+            if any(token in source_text for token in ('15m_mss_bull', '15m_bos_bull', '15m_reclaim', '15m_spring_reclaim', 'bull_reclaim')):
+                return True
+        else:
+            if signal.get('mss_bear') or signal.get('bos_bear'):
+                return True
+            if exec_trigger.get('mss_bear') or exec_trigger.get('bos_bear'):
+                return True
+            if any(token in source_text for token in ('15m_mss_bear', '15m_bos_bear', '15m_rejection', '15m_utad_rejection', 'bear_rejection')):
+                return True
+
+        return False
+
+    def _missing_15m_confirmation_reason(self, signal: dict, side: str) -> str | None:
+        if self._has_15m_execution_confirmation(signal, side):
+            return None
+
+        gate = signal.get('hierarchy_gate') or {}
+        confirmation = signal.get('confirmation_model') or {}
+        exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
+
+        confirmation_path = gate.get('confirmation_path')
+        one_hour_confirmed = confirmation.get('confirmed_by_1h') is True or gate.get('one_hour_decision_ok') is True
+        fifteen_neutral = (
+            gate.get('execution_15m_alignment') == 'neutral_not_opposed'
+            or exec_trigger.get('alignment_status') == 'neutral_not_opposed'
+            or confirmation.get('fifteen_min_alignment') == 'neutral_not_opposed'
+        )
+
+        if confirmation_path == '1h_setup_15m_not_opposed' or (one_hour_confirmed and fifteen_neutral):
+            return 'waiting_15m_bos_mss_or_reclaim'
+        return None
+
+    def _mark_waiting_15m_confirmation(self, signal: dict, resolved_trade: dict, rr: float | None, reason: str) -> None:
+        waiting_trade = {**resolved_trade, 'status': 'waiting_15m_confirmation'}
+        signal['trade'] = waiting_trade
+        signal['planner_trade_plan'] = {
+            'model': 'waiting_15m_confirmation_v1',
+            **waiting_trade,
+            'rr_ratio': rr,
+        }
+        signal.setdefault('pipeline', {})['trade'] = False
+        signal['state'] = 'setup_ready'
+        signal['stage'] = 'waiting_15m_confirmation'
+        signal['planner_candidate_status'] = 'watch_candidate'
+        signal['planner_candidate_reason'] = reason
+        signal['confirm_block_reason'] = reason
 
     def _add_stop_candidate(self, candidates: list[dict], *, name: str, level, entry: float, side: str, rank: int) -> None:
         source_level = self._as_float(level)
@@ -292,6 +372,13 @@ class PlannerService:
             return {'accepted': False, 'reason': 'low_score', 'candidate': None, 'rr_ratio': rr}
         if rr is None or rr < strategy['planner_min_rr']:
             return {'accepted': False, 'reason': 'low_rr', 'candidate': None, 'rr_ratio': rr}
+
+        waiting_reason = self._missing_15m_confirmation_reason(signal, side)
+        if waiting_reason:
+            self._mark_waiting_15m_confirmation(signal, resolved_trade, rr, waiting_reason)
+            signal['trade_plan_rejected'] = signal.get('planner_trade_plan')
+            return {'accepted': False, 'reason': waiting_reason, 'candidate': None, 'rr_ratio': rr}
+
         signal['trade'] = resolved_trade
         signal['planner_trade_plan'] = {'model': 'accepted_signal_inference_v6_upsert_compatible_candidate', **resolved_trade, 'rr_ratio': rr}
         signal.setdefault('pipeline', {})['trade'] = True
