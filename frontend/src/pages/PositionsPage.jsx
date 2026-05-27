@@ -13,15 +13,27 @@ const EMPTY_PNL_SUMMARY = {
   totalPnlValue: 0,
   count: 0,
   stoppedCount: 0,
+  targetedCount: 0,
   winners: 0,
   losers: 0,
-  slTpTotalPnlPercent: 0,
-  slTpAveragePnlPercent: 0,
-  slTpTotalPnlValue: 0,
+  winRatePercent: 0,
+  lossRatePercent: 0,
+  averageWinPercent: 0,
+  averageLossPercent: 0,
+  averageWinValue: 0,
+  averageLossValue: 0,
+  profitFactor: 0,
+  expectancyPercent: 0,
+  expectancyValue: 0,
+  bestTradePercent: 0,
+  worstTradePercent: 0,
   slTpCount: 0,
-  targetedCount: 0,
-  slTpWinners: 0,
-  slTpLosers: 0,
+  slTpWinRatePercent: 0,
+  slTpLossRatePercent: 0,
+  tpHitRatePercent: 0,
+  slHitRatePercent: 0,
+  slTpProfitFactor: 0,
+  slTpExpectancyPercent: 0,
 }
 
 function normalizedSide(side) {
@@ -78,6 +90,22 @@ function formatSignedNumber(value, decimals = 2) {
   const sign = number > 0 ? '+' : ''
   return `${sign}${fmtNumber(number, decimals)}`
 }
+function formatPercent(value, decimals = 2) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—'
+  return `${fmtNumber(value, decimals)}%`
+}
+function formatProfitFactor(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—'
+  return fmtNumber(value, 2)
+}
+function PnlMetricCard({ label, value, hint, toneValue, suffix = '', decimals = 2 }) {
+  const display = typeof value === 'string' ? value : `${formatSignedNumber(value, decimals)}${suffix}`
+  return <div className="stat-card">
+    <div className="stat-label">{label}</div>
+    <div className="stat-value" style={pnlTone(toneValue ?? value)}>{display}</div>
+    <div className="stat-hint">{hint}</div>
+  </div>
+}
 
 export default function PositionsPage() {
   const [busy, setBusy] = useState(false)
@@ -116,41 +144,34 @@ export default function PositionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Positions" subtitle="Paper execution state, orders, fills, PnL and stop/target distances" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button>} />
+    <PageHeader title="Positions" subtitle="Paper execution state, orders, fills, PnL and strategy quality metrics" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button>} />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
     {summaryLoading ? <div className="panel">Loading PnL summary…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
     {summaryError ? <div className="panel error">{summaryError}</div> : null}
+
     <div className="stats-grid">
-      <div className="stat-card">
-        <div className="stat-label">Total PnL % · all DB positions</div>
-        <div className="stat-value" style={pnlTone(pnlSummary.totalPnlPercent)}>
-          {formatSignedNumber(pnlSummary.totalPnlPercent, 2)}%
-        </div>
-        <div className="stat-hint">
-          Server-side sum of capped position PnL % · {pnlSummary.count} positions · stopped {pnlSummary.stoppedCount}/{pnlSummary.count}
-        </div>
-      </div>
-      <div className="stat-card">
-        <div className="stat-label">Avg PnL % · all DB positions</div>
-        <div className="stat-value" style={pnlTone(pnlSummary.averagePnlPercent)}>
-          {formatSignedNumber(pnlSummary.averagePnlPercent, 2)}%
-        </div>
-        <div className="stat-hint">
-          Total PnL % / positions · wins {pnlSummary.winners}/{pnlSummary.count} · losses {pnlSummary.losers}/{pnlSummary.count}
-        </div>
-      </div>
-      <div className="stat-card">
-        <div className="stat-label">Total PnL % · SL/TP model</div>
-        <div className="stat-value" style={pnlTone(pnlSummary.slTpTotalPnlPercent)}>
-          {formatSignedNumber(pnlSummary.slTpTotalPnlPercent, 2)}%
-        </div>
-        <div className="stat-hint">
-          Server-side · avg {formatSignedNumber(pnlSummary.slTpAveragePnlPercent, 2)}% · TP {pnlSummary.targetedCount}/{pnlSummary.slTpCount} · SL {pnlSummary.stoppedCount}/{pnlSummary.slTpCount} · wins {pnlSummary.slTpWinners}/{pnlSummary.slTpCount}
-        </div>
-      </div>
+      <PnlMetricCard label="Net PnL" value={pnlSummary.totalPnlValue} toneValue={pnlSummary.totalPnlValue} decimals={4} hint={`Total ${formatSignedNumber(pnlSummary.totalPnlPercent, 2)}% · ${pnlSummary.count} positions`} />
+      <PnlMetricCard label="Win Rate" value={formatPercent(pnlSummary.winRatePercent, 2)} toneValue={pnlSummary.winRatePercent - pnlSummary.lossRatePercent} hint={`Wins ${pnlSummary.winners}/${pnlSummary.count}`} />
+      <PnlMetricCard label="Loss Rate" value={formatPercent(pnlSummary.lossRatePercent, 2)} toneValue={-(pnlSummary.lossRatePercent || 0)} hint={`Losses ${pnlSummary.losers}/${pnlSummary.count}`} />
+      <PnlMetricCard label="Profit Factor" value={formatProfitFactor(pnlSummary.profitFactor)} toneValue={(pnlSummary.profitFactor || 0) - 1} hint="Gross profit / gross loss" />
     </div>
+
+    <div className="stats-grid">
+      <PnlMetricCard label="Avg Win" value={pnlSummary.averageWinPercent} toneValue={pnlSummary.averageWinPercent} suffix="%" hint={`${formatSignedNumber(pnlSummary.averageWinValue, 4)} avg value`} />
+      <PnlMetricCard label="Avg Loss" value={pnlSummary.averageLossPercent} toneValue={pnlSummary.averageLossPercent} suffix="%" hint={`${formatSignedNumber(pnlSummary.averageLossValue, 4)} avg value`} />
+      <PnlMetricCard label="Expectancy" value={pnlSummary.expectancyPercent} toneValue={pnlSummary.expectancyPercent} suffix="%" hint={`${formatSignedNumber(pnlSummary.expectancyValue, 4)} per trade`} />
+      <PnlMetricCard label="Best / Worst" value={`${formatSignedNumber(pnlSummary.bestTradePercent, 2)}% / ${formatSignedNumber(pnlSummary.worstTradePercent, 2)}%`} toneValue={pnlSummary.totalPnlPercent} hint="Best and worst capped position PnL" />
+    </div>
+
+    <div className="stats-grid">
+      <PnlMetricCard label="TP Hit Rate" value={formatPercent(pnlSummary.tpHitRatePercent, 2)} toneValue={pnlSummary.tpHitRatePercent} hint={`TP ${pnlSummary.targetedCount}/${pnlSummary.slTpCount}`} />
+      <PnlMetricCard label="SL Hit Rate" value={formatPercent(pnlSummary.slHitRatePercent, 2)} toneValue={-(pnlSummary.slHitRatePercent || 0)} hint={`SL ${pnlSummary.stoppedCount}/${pnlSummary.slTpCount}`} />
+      <PnlMetricCard label="SL/TP Win Rate" value={formatPercent(pnlSummary.slTpWinRatePercent, 2)} toneValue={pnlSummary.slTpWinRatePercent - pnlSummary.slTpLossRatePercent} hint={`Wins ${pnlSummary.slTpWinners}/${pnlSummary.slTpCount}`} />
+      <PnlMetricCard label="SL/TP Model" value={pnlSummary.slTpExpectancyPercent} toneValue={pnlSummary.slTpExpectancyPercent} suffix="%" hint={`PF ${formatProfitFactor(pnlSummary.slTpProfitFactor)} · total ${formatSignedNumber(pnlSummary.slTpTotalPnlPercent, 2)}%`} />
+    </div>
+
     <FoldableTable title="Open positions" columns={positionColumns} rows={positions} empty="No positions yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
     <FoldableTable title="Recent orders" columns={orderColumns} rows={orders} empty="No orders yet" />
   </div>
