@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.asset_state import AssetStateCurrent
@@ -165,6 +165,14 @@ class PositionService:
         rows = list(self.db.scalars(stmt).all())
         self._refresh_open_marks(rows)
         return rows
+
+    def clear_positions(self, status: str | None = None) -> int:
+        stmt = delete(Position)
+        if status:
+            stmt = stmt.where(Position.status == status)
+        result = self.db.execute(stmt)
+        self.db.commit()
+        return int(result.rowcount or 0)
 
     def pnl_summary(self, status: str | None = None) -> dict:
         stmt = select(Position)
