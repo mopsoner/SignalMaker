@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.trade_candidate import TradeCandidate
@@ -16,6 +16,14 @@ class TradeCandidateService:
             stmt = stmt.where(TradeCandidate.status == status)
         stmt = stmt.order_by(TradeCandidate.created_at.desc(), TradeCandidate.score.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
+
+    def clear_candidates(self, status: str | None = None) -> int:
+        stmt = delete(TradeCandidate)
+        if status:
+            stmt = stmt.where(TradeCandidate.status == status)
+        result = self.db.execute(stmt)
+        self.db.commit()
+        return int(result.rowcount or 0)
 
     def get_open_candidates(self, limit: int = 100) -> list[TradeCandidate]:
         # Executor backlog mode: play older unexecuted candidates first instead
