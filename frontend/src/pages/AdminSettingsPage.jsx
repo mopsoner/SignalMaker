@@ -32,6 +32,7 @@ const EMPTY_SETTINGS = {
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
 const inputStyle = { width: '100%', background: 'rgba(9, 14, 24, 0.7)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: '12px', padding: '12px 14px' }
 const fieldStyle = { display: 'grid', gap: '8px' }
+const dangerButtonStyle = { borderColor: 'rgba(239, 68, 68, 0.45)', color: 'var(--red)' }
 
 function Field({ label, children }) {
   return <label style={fieldStyle}><span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>{children}</label>
@@ -39,6 +40,10 @@ function Field({ label, children }) {
 
 function Section({ title, description, children }) {
   return <section className="panel"><div style={{ marginBottom: 16 }}><h2>{title}</h2><p className="stat-hint" style={{ marginTop: 6 }}>{description}</p></div><div style={gridStyle}>{children}</div></section>
+}
+
+function CleanupCard({ title, description, children }) {
+  return <div className="stat-card"><div className="stat-label">{title}</div><div className="stat-hint" style={{ margin: '8px 0 14px' }}>{description}</div><div className="page-actions" style={{ flexWrap: 'wrap' }}>{children}</div></div>
 }
 
 export default function AdminSettingsPage() {
@@ -120,9 +125,20 @@ export default function AdminSettingsPage() {
     }
   }
 
+  async function doCleanup(label, action) {
+    const ok = window.confirm(`${label}? This only deletes SignalMaker database rows for this category.`)
+    if (!ok) return
+    try {
+      const result = await action()
+      setMessage(`${label}: deleted ${result.deleted || 0} rows`)
+    } catch (error) {
+      setMessage(error.message || 'Cleanup failed')
+    }
+  }
+
   return (
     <div className="page-stack">
-      <PageHeader title="Admin Settings" subtitle="Runtime config, worker control and service tests." />
+      <PageHeader title="Admin Settings" subtitle="Runtime config, worker control, database cleanup and service tests." />
 
       <section className="panel">
         <div style={gridStyle}>
@@ -137,6 +153,24 @@ export default function AdminSettingsPage() {
           <button className="button" onClick={() => doAction(api.testNotifications)} disabled={loading}>Test notifications</button>
         </div>
         {message ? <p className="stat-hint" style={{ marginTop: 14 }}>{message}</p> : null}
+      </section>
+
+      <section className="panel">
+        <div style={{ marginBottom: 16 }}><h2>Database cleanup</h2><p className="stat-hint" style={{ marginTop: 6 }}>Clear generated paper-trading rows from the admin page. These actions do not touch Binance.</p></div>
+        <div style={gridStyle}>
+          <CleanupCard title="Trade candidates" description="Clear scanner/planner candidates after logic changes or before a clean pipeline run.">
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open trade candidates', api.clearOpenCandidates)}>Clear open candidates</button>
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all trade candidates', api.clearCandidates)}>Clear all candidates</button>
+          </CleanupCard>
+          <CleanupCard title="Positions" description="Clear paper positions and reset the PnL/positions page data.">
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open positions', api.clearOpenPositions)}>Clear open positions</button>
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all positions', api.clearPositions)}>Clear all positions</button>
+          </CleanupCard>
+          <CleanupCard title="Orders" description="Clear paper orders created by the executor.">
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open orders', api.clearOpenOrders)}>Clear open orders</button>
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all orders', api.clearOrders)}>Clear all orders</button>
+          </CleanupCard>
+        </div>
       </section>
 
       <Section title="General" description="Application identity and startup behavior.">
@@ -178,12 +212,7 @@ export default function AdminSettingsPage() {
       </Section>
 
       <Section title="Strategy" description="Signal engine, execution timeframe and planner thresholds.">
-        <Field label="Execution timeframe">
-          <select style={inputStyle} value={settings.strategy.signal_execution_interval || '15m'} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}>
-            <option value="5m">5 minutes</option>
-            <option value="15m">15 minutes</option>
-          </select>
-        </Field>
+        <Field label="Execution timeframe"><select style={inputStyle} value={settings.strategy.signal_execution_interval || '15m'} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></Field>
         <Field label="Session timezone offset"><input style={inputStyle} type="number" value={settings.strategy.session_timezone_offset_hours} onChange={(e) => updateField('strategy', 'session_timezone_offset_hours', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Session confirm filter enabled"><input type="checkbox" checked={Boolean(settings.strategy.signal_session_confirm_filter_enabled)} onChange={(e) => updateField('strategy', 'signal_session_confirm_filter_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="RSI period"><input style={inputStyle} type="number" value={settings.strategy.signal_rsi_period} onChange={(e) => updateField('strategy', 'signal_rsi_period', e.target.value, 'number')} disabled={loading} /></Field>
@@ -214,18 +243,7 @@ export default function AdminSettingsPage() {
 
       <section className="panel">
         <h2>Workers</h2>
-        <div style={gridStyle}>
-          {['pipeline', 'executor', 'scheduler'].map((name) => (
-            <div key={name} className="stat-card">
-              <div className="stat-label">{name}</div>
-              <div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div>
-              <div className="page-actions">
-                <button className="button" onClick={() => doAction(() => api.startWorker(name))}>Start</button>
-                <button className="button" onClick={() => doAction(() => api.stopWorker(name))}>Stop</button>
-              </div>
-            </div>
-          ))}
-        </div>
+        <div style={gridStyle}>{['pipeline', 'executor', 'scheduler'].map((name) => <div key={name} className="stat-card"><div className="stat-label">{name}</div><div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div><div className="page-actions"><button className="button" onClick={() => doAction(() => api.startWorker(name))}>Start</button><button className="button" onClick={() => doAction(() => api.stopWorker(name))}>Stop</button></div></div>)}</div>
       </section>
     </div>
   )
