@@ -7,6 +7,9 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { fmtDate, fmtNumber } from '../lib/format'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+const DEFAULT_CADENCE_HOURS = 4
+const STARTING_CAPITAL = 1000
+const MIN_MOMENTUM_SCORE = 0
 
 function getOperatorKey() {
   try {
@@ -16,16 +19,45 @@ function getOperatorKey() {
   }
 }
 
-async function fetchMomentum(limit = 300) {
+function headers() {
   const operatorKey = getOperatorKey()
-  const headers = { 'Content-Type': 'application/json' }
-  if (operatorKey) headers['x-operator-key'] = operatorKey
-  const res = await fetch(`${API_BASE}/api/v1/momentum?limit=${limit}`, { headers })
+  const out = { 'Content-Type': 'application/json' }
+  if (operatorKey) out['x-operator-key'] = operatorKey
+  return out
+}
+
+async function fetchJson(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, { headers: headers(), ...options })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+function fetchMomentum(limit = 300) {
+  return fetchJson(`/api/v1/momentum?limit=${limit}`)
+}
+
+function fetchMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS) {
+  const params = new URLSearchParams({
+    cadence_hours: String(cadenceHours),
+    starting_capital: String(STARTING_CAPITAL),
+    min_momentum_score: String(MIN_MOMENTUM_SCORE),
+  })
+  return fetchJson(`/api/v1/momentum-engine/status?${params.toString()}`)
+}
+
+function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = true) {
+  return fetchJson('/api/v1/momentum-engine/run-once', {
+    method: 'POST',
+    body: JSON.stringify({
+      force,
+      cadence_hours: Number(cadenceHours),
+      starting_capital: STARTING_CAPITAL,
+      min_momentum_score: MIN_MOMENTUM_SCORE,
+    }),
+  })
 }
 
 function classLabel(value) {
@@ -56,7 +88,12 @@ function trendLabel(value) {
 
 export default function MomentumPage() {
   const [filter, setFilter] = useState('all')
+  const [cadenceHours, setCadenceHours] = useState(DEFAULT_CADENCE_HOURS)
+  const [engineOverride, setEngineOverride] = useState(null)
+  const [engineActionError, setEngineActionError] = useState(null)
   const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => fetchMomentum(300), []), 30000)
+  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
+  const engine = engineOverride || engineData
 
   const counts = useMemo(() => ({
     all: rows.length,
@@ -73,8 +110,19 @@ export default function MomentumPage() {
     return rows.filter((row) => row.classification === filter)
   }, [filter, rows])
 
-  const strongest = useMemo(() => rows.slice(0, 6), [rows])
+  const strongest = useMemo(() => rows.slice(0, 10), [rows])
   const avgScore = rows.length ? rows.reduce((sum, row) => sum + Number(row.momentum_score || 0), 0) / rows.length : 0
+
+  async function onRunEngine(force = true) {
+    setEngineActionError(null)
+    try {
+      const result = await runMomentumEngine(cadenceHours, force)
+      setEngineOverride(result)
+      refreshEngine()
+    } catch (err) {
+      setEngineActionError(err.message || String(err))
+    }
+  }
 
   const filters = [
     ['all', `All (${counts.all})`],
@@ -104,8 +152,19 @@ export default function MomentumPage() {
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.updated_at), sortValue: (row) => row.updated_at || '' },
   ]
 
+  const tradeColumns = [
+    { key: 'created_at', title: 'Time', render: (row) => fmtDate(row.created_at), sortValue: (row) => row.created_at || '' },
+    { key: 'action', title: 'Action', render: (row) => row.action, sortValue: (row) => row.action || '' },
+    { key: 'symbol', title: 'Symbol', render: (row) => row.symbol, sortValue: (row) => row.symbol || '' },
+    { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 6), sortValue: (row) => Number(row.price || 0) },
+    { key: 'quantity', title: 'Qty', render: (row) => fmtNumber(row.quantity, 6), sortValue: (row) => Number(row.quantity || 0) },
+    { key: 'value', title: 'Value', render: (row) => fmtNumber(row.value, 2), sortValue: (row) => Number(row.value || 0) },
+    { key: 'pnl', title: 'PnL', render: (row) => fmtNumber(row.pnl, 2), sortValue: (row) => Number(row.pnl || 0) },
+    { key: 'reason', title: 'Reason', render: (row) => row.reason || '—', sortValue: (row) => row.reason || '' },
+  ]
+
   return <div className="page-stack">
-    <PageHeader title="Momentum Ranking" subtitle="Read-only crypto ranking from 15m, 1h and 4h momentum. This page does not trigger trades or modify SignalMaker signals." />
+    <PageHeader title="Momentum Ranking" subtitle="Read-only ranking + dedicated backend paper engine for 4H momentum rotation. No real Binance order is sent." />
     <div className="stats-grid">
       <StatCard label="Tracked assets" value={counts.all} hint={`${counts.complete} complete data sets`} />
       <StatCard label="Strong Bull" value={counts.strong_bull} />
@@ -114,7 +173,43 @@ export default function MomentumPage() {
     </div>
     {loading ? <div className="panel">Loading momentum ranking…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
-    <FoldableTable title="Top momentum assets" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
+
+    <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
+
+    <details className="panel collapsible-panel" open>
+      <summary><h2>Positions momentum · backend paper engine</h2><span className="collapse-indicator">⌄</span></summary>
+      {engineLoading ? <div className="panel">Loading momentum engine…</div> : null}
+      {engineError ? <div className="panel error">{engineError}</div> : null}
+      {engineActionError ? <div className="panel error">{engineActionError}</div> : null}
+      <div className="stats-grid">
+        <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start: ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} USDC`} />
+        <StatCard label="Total PnL" value={`${fmtNumber(engine?.total_pnl, 2)} USDC`} hint={`${fmtNumber(engine?.total_pnl_pct, 2)}%`} />
+        <StatCard label="Cash" value={fmtNumber(engine?.cash, 2)} />
+        <StatCard label="Next check" value={engine?.next_check_at ? fmtDate(engine.next_check_at) : 'Now'} hint={`Cadence: ${cadenceHours}h`} />
+      </div>
+      <div className="market-toolbar">
+        <div className="filter-chips">
+          <button className="filter-chip active" type="button" onClick={() => onRunEngine(true)}>Run engine now</button>
+          <button className="filter-chip" type="button" onClick={() => onRunEngine(false)}>Run only if due</button>
+          <label className="market-toolbar-hint">Cadence{' '}
+            <select value={cadenceHours} onChange={(event) => { setCadenceHours(Number(event.target.value)); setEngineOverride(null) }}>
+              <option value={4}>4h · default</option>
+              <option value={8}>8h · calmer rotation</option>
+              <option value={24}>24h · swing mode</option>
+            </select>
+          </label>
+        </div>
+        <div className="market-toolbar-hint">Default 4h is aligned with the macro 4H momentum and avoids noisy 15m over-rotation.</div>
+      </div>
+      <div className="stats-grid">
+        <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Entry ${fmtNumber(engine.open_position.entry_price, 6)} · rank #${engine.open_position.entry_rank}` : 'No open paper position'} />
+        <StatCard label="Open PnL" value={`${fmtNumber(engine?.open_position?.unrealized_pnl, 2)} USDC`} hint={engine?.open_position?.mark_price ? `Mark ${fmtNumber(engine.open_position.mark_price, 6)}` : 'No mark'} />
+        <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
+        <StatCard label="Recommendation" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={engine?.recommendation || '—'} />
+      </div>
+      <FoldableTable title="Backend momentum trade log" columns={tradeColumns} rows={engine?.trades || []} empty="No backend paper trades yet" defaultSortKey="created_at" defaultSortDir="desc" paginated initialPageSize={10} />
+    </details>
+
     <details className="panel collapsible-panel" open>
       <summary><h2>Momentum scanner</h2><span className="collapse-indicator">⌄</span></summary>
       <div className="market-toolbar">
