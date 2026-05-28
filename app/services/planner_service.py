@@ -18,7 +18,7 @@ class PlannerService:
             'stop_policy': 'third_valid_structural_invalidation_with_buffer',
             'stop_buffer_pct': STOP_BUFFER_PCT,
             'target_policy': 'third_valid_structural_liquidity',
-            'execution_policy': 'strict_1h_setup_requires_15m_bos_mss_or_reclaim',
+            'execution_policy': 'strict_requires_explicit_15m_bos_mss_reclaim_or_rejection',
             'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
 
@@ -58,22 +58,8 @@ class PlannerService:
 
     def _side_fields(self, position_side: str) -> dict:
         if position_side == 'short':
-            return {
-                'side': 'short',
-                'position_side': 'short',
-                'entry_action': 'sell',
-                'exit_action': 'buy',
-                'order_side': 'sell',
-                'side_label': 'SHORT',
-            }
-        return {
-            'side': 'long',
-            'position_side': 'long',
-            'entry_action': 'buy',
-            'exit_action': 'sell',
-            'order_side': 'buy',
-            'side_label': 'LONG',
-        }
+            return {'side': 'short', 'position_side': 'short', 'entry_action': 'sell', 'exit_action': 'buy', 'order_side': 'sell', 'side_label': 'SHORT'}
+        return {'side': 'long', 'position_side': 'long', 'entry_action': 'buy', 'exit_action': 'sell', 'order_side': 'buy', 'side_label': 'LONG'}
 
     def _watch_reason(self, signal: dict, trade: dict) -> str:
         if signal.get('hierarchy_block_reason'):
@@ -98,78 +84,59 @@ class PlannerService:
         return bool(gate.get('accepted') is True or signal.get('pipeline', {}).get('confirm'))
 
     def _has_15m_execution_confirmation(self, signal: dict, side: str) -> bool:
-        """True only when 15m provides a real execution trigger.
+        """True only when the execution timeframe gives an explicit trigger.
 
-        A neutral 15m that is simply not opposed to the 1h setup is not enough
-        to create an open planner candidate. This prevents 1h setups from being
-        upgraded to trade_ready before BOS/MSS/reclaim appears on execution TF.
+        A 1h setup, a neutral 15m alignment, an empty confirm source, or a legacy
+        trigger such as "wait" is not enough to create an executable candidate.
         """
         if side not in {'long', 'short'}:
             return False
-
         confirmation = signal.get('confirmation_model') or {}
         gate = signal.get('hierarchy_gate') or {}
         exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-        source = (
-            exec_trigger.get('confirm_source')
-            or signal.get('confirm_source')
-            or confirmation.get('confirmation_source')
-            or ''
-        )
-        source_text = str(source).lower()
+        sources = [
+            exec_trigger.get('confirm_source'),
+            signal.get('confirm_source'),
+            signal.get('trigger'),
+            confirmation.get('confirmation_source'),
+            confirmation.get('entry_mode'),
+            gate.get('confirmation_path'),
+            exec_trigger.get('trigger'),
+        ]
+        source_text = ' '.join(str(value).lower() for value in sources if value)
 
         if confirmation.get('confirmed_by_15m') is True:
             return True
-        if gate.get('execution_15m_aligned') is True:
+        if gate.get('confirm_15m_seen') is True and gate.get('execution_15m_aligned') is True:
             return True
-        if exec_trigger.get('aligned') is True:
+        if exec_trigger.get('seen') is True and exec_trigger.get('aligned') is True:
+            return True
+        if exec_trigger.get('valid') is True and exec_trigger.get('trigger') in {'mss', 'bos', 'reclaim', 'spring_reclaim', 'utad_rejection'}:
             return True
 
         if side == 'long':
-            if signal.get('mss_bull') or signal.get('bos_bull'):
+            if signal.get('mss_bull') or signal.get('bos_bull') or exec_trigger.get('mss_bull') or exec_trigger.get('bos_bull'):
                 return True
-            if exec_trigger.get('mss_bull') or exec_trigger.get('bos_bull'):
-                return True
-            if any(token in source_text for token in ('15m_mss_bull', '15m_bos_bull', '15m_reclaim', '15m_spring_reclaim', 'bull_reclaim')):
-                return True
-        else:
-            if signal.get('mss_bear') or signal.get('bos_bear'):
-                return True
-            if exec_trigger.get('mss_bear') or exec_trigger.get('bos_bear'):
-                return True
-            if any(token in source_text for token in ('15m_mss_bear', '15m_bos_bear', '15m_rejection', '15m_utad_rejection', 'bear_rejection')):
-                return True
+            long_tokens = ('15m_mss_bull', '15m_bos_bull', '15m_reclaim', '15m_spring_reclaim', 'mss_bull_15m', 'bos_bull_15m', 'bull_reclaim_15m')
+            return any(token in source_text for token in long_tokens)
 
-        return False
+        if signal.get('mss_bear') or signal.get('bos_bear') or exec_trigger.get('mss_bear') or exec_trigger.get('bos_bear'):
+            return True
+        short_tokens = ('15m_mss_bear', '15m_bos_bear', '15m_rejection', '15m_utad_rejection', 'mss_bear_15m', 'bos_bear_15m', 'bear_rejection_15m')
+        return any(token in source_text for token in short_tokens)
 
     def _missing_15m_confirmation_reason(self, signal: dict, side: str) -> str | None:
         if self._has_15m_execution_confirmation(signal, side):
             return None
-
-        gate = signal.get('hierarchy_gate') or {}
-        confirmation = signal.get('confirmation_model') or {}
         exec_trigger = signal.get('execution_trigger') or signal.get('execution_trigger_5m') or {}
-
-        confirmation_path = gate.get('confirmation_path')
-        one_hour_confirmed = confirmation.get('confirmed_by_1h') is True or gate.get('one_hour_decision_ok') is True
-        fifteen_neutral = (
-            gate.get('execution_15m_alignment') == 'neutral_not_opposed'
-            or exec_trigger.get('alignment_status') == 'neutral_not_opposed'
-            or confirmation.get('fifteen_min_alignment') == 'neutral_not_opposed'
-        )
-
-        if confirmation_path == '1h_setup_15m_not_opposed' or (one_hour_confirmed and fifteen_neutral):
-            return 'waiting_15m_bos_mss_or_reclaim'
-        return None
+        if exec_trigger.get('alignment_status') == 'opposed':
+            return 'blocked_15m_opposes_1h_setup'
+        return 'waiting_explicit_15m_bos_mss_reclaim_or_rejection'
 
     def _mark_waiting_15m_confirmation(self, signal: dict, resolved_trade: dict, rr: float | None, reason: str) -> None:
         waiting_trade = {**resolved_trade, 'status': 'waiting_15m_confirmation'}
         signal['trade'] = waiting_trade
-        signal['planner_trade_plan'] = {
-            'model': 'waiting_15m_confirmation_v1',
-            **waiting_trade,
-            'rr_ratio': rr,
-        }
+        signal['planner_trade_plan'] = {'model': 'waiting_explicit_15m_confirmation_v2', **waiting_trade, 'rr_ratio': rr}
         signal.setdefault('pipeline', {})['trade'] = False
         signal['state'] = 'setup_ready'
         signal['stage'] = 'waiting_15m_confirmation'
@@ -193,46 +160,16 @@ class PlannerService:
             method = 'below_source_minus_buffer'
         else:
             return
-        candidates.append({
-            'source': name,
-            'source_level': source_level,
-            'level': stop_level,
-            'distance': abs(stop_level - entry),
-            'distance_pct': self._distance_pct(entry, stop_level),
-            'buffer_pct': STOP_BUFFER_PCT,
-            'method': method,
-            'hierarchy_rank': rank,
-            'valid': True,
-            'validation': 'structural_stop',
-            'rejected_reason': None,
-        })
+        candidates.append({'source': name, 'source_level': source_level, 'level': stop_level, 'distance': abs(stop_level - entry), 'distance_pct': self._distance_pct(entry, stop_level), 'buffer_pct': STOP_BUFFER_PCT, 'method': method, 'hierarchy_rank': rank, 'valid': True, 'validation': 'structural_stop', 'rejected_reason': None})
 
     def _infer_stop(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
         candidates: list[dict] = []
         entry_ctx = signal.get('entry_liquidity_context') or {}
         macro_ctx = signal.get('macro_liquidity_context') or signal.get('liquidity_context') or {}
         if side == 'short':
-            sources = [
-                ('entry_liquidity_context', entry_ctx, 5),
-                ('external_swing_high', signal.get('external_swing_high'), 20),
-                ('internal_bear_pivot_high', signal.get('internal_bear_pivot_high'), 30),
-                ('range_high_1h', signal.get('range_high_1h'), 40),
-                ('previous_day_high', signal.get('previous_day_high'), 50),
-                ('macro_liquidity_context', macro_ctx, 60),
-                ('range_high_4h', signal.get('range_high_4h'), 70),
-                ('major_swing_high_4h', signal.get('major_swing_high_4h'), 80),
-            ]
+            sources = [('entry_liquidity_context', entry_ctx, 5), ('external_swing_high', signal.get('external_swing_high'), 20), ('internal_bear_pivot_high', signal.get('internal_bear_pivot_high'), 30), ('range_high_1h', signal.get('range_high_1h'), 40), ('previous_day_high', signal.get('previous_day_high'), 50), ('macro_liquidity_context', macro_ctx, 60), ('range_high_4h', signal.get('range_high_4h'), 70), ('major_swing_high_4h', signal.get('major_swing_high_4h'), 80)]
         else:
-            sources = [
-                ('entry_liquidity_context', entry_ctx, 5),
-                ('external_swing_low', signal.get('external_swing_low'), 20),
-                ('internal_bull_pivot_low', signal.get('internal_bull_pivot_low'), 30),
-                ('range_low_1h', signal.get('range_low_1h'), 40),
-                ('previous_day_low', signal.get('previous_day_low'), 50),
-                ('macro_liquidity_context', macro_ctx, 60),
-                ('range_low_4h', signal.get('range_low_4h'), 70),
-                ('major_swing_low_4h', signal.get('major_swing_low_4h'), 80),
-            ]
+            sources = [('entry_liquidity_context', entry_ctx, 5), ('external_swing_low', signal.get('external_swing_low'), 20), ('internal_bull_pivot_low', signal.get('internal_bull_pivot_low'), 30), ('range_low_1h', signal.get('range_low_1h'), 40), ('previous_day_low', signal.get('previous_day_low'), 50), ('macro_liquidity_context', macro_ctx, 60), ('range_low_4h', signal.get('range_low_4h'), 70), ('major_swing_low_4h', signal.get('major_swing_low_4h'), 80)]
         for name, value, rank in sources:
             self._add_stop_candidate(candidates, name=name, level=value, entry=entry, side=side, rank=rank)
         ordered = sorted(candidates, key=lambda item: (item['hierarchy_rank'], item.get('distance_pct') or 999))
@@ -252,24 +189,11 @@ class PlannerService:
             return
         if side == 'long' and level <= entry:
             return
-        candidates.append({
-            'source': name,
-            'level': level,
-            'distance': abs(level - entry),
-            'distance_pct': self._distance_pct(entry, level),
-            'hierarchy_rank': rank,
-            'valid': True,
-            'validation': 'structural_liquidity_target',
-            'rejected_reason': None,
-        })
+        candidates.append({'source': name, 'level': level, 'distance': abs(level - entry), 'distance_pct': self._distance_pct(entry, level), 'hierarchy_rank': rank, 'valid': True, 'validation': 'structural_liquidity_target', 'rejected_reason': None})
 
     def _infer_target(self, signal: dict, *, side: str, entry: float) -> tuple[float | None, str | None, list[dict]]:
         candidates: list[dict] = []
-        ordered_sources = [
-            ('execution_target', signal.get('execution_target')),
-            ('projected_target', signal.get('projected_target')),
-            ('context_selection_debug.selected_target', (signal.get('context_selection_debug') or {}).get('selected_target')),
-        ]
+        ordered_sources = [('execution_target', signal.get('execution_target')), ('projected_target', signal.get('projected_target')), ('context_selection_debug.selected_target', (signal.get('context_selection_debug') or {}).get('selected_target'))]
         for index, item in enumerate((signal.get('context_selection_debug') or {}).get('target_candidates') or []):
             ordered_sources.append((f'context_selection_debug.target_candidates[{index}]', item))
         fallback = ['range_low_1h', 'previous_day_low', 'old_support_shelf', 'previous_week_low', 'range_low_4h', 'major_swing_low_4h'] if side == 'short' else ['range_high_1h', 'previous_day_high', 'old_resistance_shelf', 'previous_week_high', 'range_high_4h', 'major_swing_high_4h']
@@ -329,21 +253,7 @@ class PlannerService:
                 return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_long_stop'
             if target <= entry:
                 return {'entry': entry, 'stop': stop, 'target': target, **self._side_fields(side)}, 'invalid_long_target'
-        resolved = {
-            **self._side_fields(side),
-            'status': 'planned',
-            'entry': entry,
-            'stop': stop,
-            'target': target,
-            'entry_source': entry_source,
-            'stop_source': stop_source,
-            'target_source': target_source,
-            'stop_distance_pct': self._distance_pct(entry, stop),
-            'target_distance_pct': self._distance_pct(entry, target),
-            'stop_validation': 'structural_invalidation',
-            'target_validation': 'structural_liquidity',
-            'inferred_by': 'planner_from_accepted_signal_v6_upsert_compatible_candidate',
-        }
+        resolved = {**self._side_fields(side), 'status': 'planned', 'entry': entry, 'stop': stop, 'target': target, 'entry_source': entry_source, 'stop_source': stop_source, 'target_source': target_source, 'stop_distance_pct': self._distance_pct(entry, stop), 'target_distance_pct': self._distance_pct(entry, target), 'stop_validation': 'structural_invalidation', 'target_validation': 'structural_liquidity', 'inferred_by': 'planner_from_accepted_signal_v6_upsert_compatible_candidate'}
         if stop_candidates:
             resolved['stop_candidates'] = stop_candidates[:8]
         if target_candidates:
@@ -380,24 +290,11 @@ class PlannerService:
             return {'accepted': False, 'reason': waiting_reason, 'candidate': None, 'rr_ratio': rr}
 
         signal['trade'] = resolved_trade
-        signal['planner_trade_plan'] = {'model': 'accepted_signal_inference_v6_upsert_compatible_candidate', **resolved_trade, 'rr_ratio': rr}
+        signal['planner_trade_plan'] = {'model': 'accepted_explicit_15m_confirmation_v2', **resolved_trade, 'rr_ratio': rr}
         signal.setdefault('pipeline', {})['trade'] = True
         stage = 'trade' if signal.get('pipeline', {}).get('trade') else signal.get('state', 'collect')
-        candidate = {
-            'symbol': signal['symbol'],
-            'side': side,
-            'stage': stage,
-            'score': score,
-            'entry_price': entry,
-            'stop_price': stop,
-            'target_price': target,
-            'rr_ratio': rr,
-            'execution_target': signal.get('execution_target'),
-            'liquidity_context': signal.get('liquidity_context'),
-            'notes': signal.get('confirm_source') or signal.get('trigger'),
-            'payload': signal,
-        }
-        return {'accepted': True, 'reason': 'accepted', 'candidate': candidate, 'rr_ratio': rr}
+        candidate = {'symbol': signal['symbol'], 'side': side, 'stage': stage, 'score': score, 'entry_price': entry, 'stop_price': stop, 'target_price': target, 'rr_ratio': rr, 'execution_target': signal.get('execution_target'), 'liquidity_context': signal.get('liquidity_context'), 'notes': signal.get('confirm_source') or signal.get('trigger'), 'payload': signal}
+        return {'accepted': True, 'reason': 'accepted_explicit_15m_confirmation', 'candidate': candidate, 'rr_ratio': rr}
 
     def build_candidate_from_signal(self, signal: dict) -> dict | None:
         assessment = self.assess_signal(signal)
