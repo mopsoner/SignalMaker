@@ -8,6 +8,7 @@ from app.models.market_candle import MarketCandle
 from app.models.order import Order
 from app.models.fill import Fill
 from app.models.app_setting import AppSetting
+from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 
 
 def init_db() -> None:
