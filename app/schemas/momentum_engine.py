@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MomentumEnginePositionRead(BaseModel):
@@ -17,6 +17,8 @@ class MomentumEnginePositionRead(BaseModel):
     opened_at: datetime
     closed_at: datetime | None = None
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 class MomentumEngineTradeRead(BaseModel):
     trade_id: str
@@ -28,6 +30,8 @@ class MomentumEngineTradeRead(BaseModel):
     pnl: float
     reason: str | None = None
     created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MomentumEngineStatus(BaseModel):
