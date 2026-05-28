@@ -25,47 +25,22 @@ class MomentumEngineService:
         self.db = db
 
     def status(self, *, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
-        self._ensure_tables()
-        best_asset = self._best_asset(min_momentum_score=min_momentum_score)
-        open_position = self._open_position()
-        last_trade = self._last_check_trade()
-        now = datetime.now(timezone.utc)
-        last_check_at = last_trade.created_at if last_trade else None
-        next_check_at = last_check_at + timedelta(hours=cadence_hours) if last_check_at else None
-        due_now = next_check_at is None or now >= next_check_at
-        cash = self._cash_balance(starting_capital=starting_capital)
-
-        if open_position:
-            mark_price = self._price_for(open_position.symbol, fallback=open_position.entry_price)
-            open_position.mark_price = mark_price
-            open_position.unrealized_pnl = (open_position.quantity * mark_price) - open_position.entry_value
-            self.db.commit()
-
-        equity = cash + self._open_position_value(open_position)
-        total_pnl = equity - starting_capital
-        recommendation = self._recommendation(open_position=open_position, best_asset=best_asset, due_now=due_now)
-
-        return {
-            "strategy": self.STRATEGY,
-            "mode": self.MODE,
-            "cadence_hours": cadence_hours,
-            "starting_capital": starting_capital,
-            "cash": round(cash, 8),
-            "equity": round(equity, 8),
-            "total_pnl": round(total_pnl, 8),
-            "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
-            "open_position": open_position,
-            "best_asset": best_asset,
-            "last_check_at": last_check_at,
-            "next_check_at": next_check_at,
-            "due_now": due_now,
-            "recommendation": recommendation,
-            "trades": self._recent_trades(limit=50),
-        }
+        rankings = self._rankings()
+        return self._build_status(
+            rankings=rankings,
+            cadence_hours=cadence_hours,
+            starting_capital=starting_capital,
+            min_momentum_score=min_momentum_score,
+        )
 
     def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
-        self._ensure_tables()
-        before = self.status(cadence_hours=cadence_hours, starting_capital=starting_capital, min_momentum_score=min_momentum_score)
+        rankings = self._rankings()
+        before = self._build_status(
+            rankings=rankings,
+            cadence_hours=cadence_hours,
+            starting_capital=starting_capital,
+            min_momentum_score=min_momentum_score,
+        )
         if not force and not before["due_now"]:
             return before
 
@@ -73,11 +48,16 @@ class MomentumEngineService:
         if not best_asset:
             self._record_trade(action="CHECK_NO_ELIGIBLE_ASSET", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="No asset above minimum momentum score")
             self.db.commit()
-            return self.status(cadence_hours=cadence_hours, starting_capital=starting_capital, min_momentum_score=min_momentum_score)
+            return self._build_status(
+                rankings=rankings,
+                cadence_hours=cadence_hours,
+                starting_capital=starting_capital,
+                min_momentum_score=min_momentum_score,
+            )
 
         open_position = self._open_position()
         if open_position and open_position.symbol != best_asset["symbol"]:
-            self._close_position(open_position, reason=f"Rotate into {best_asset['symbol']} with stronger momentum")
+            self._close_position(open_position, rankings=rankings, reason=f"Rotate into {best_asset['symbol']} with stronger momentum")
             open_position = None
 
         if open_position and open_position.symbol == best_asset["symbol"]:
@@ -91,17 +71,50 @@ class MomentumEngineService:
                 self._record_trade(action="CHECK_NO_CASH", symbol=best_asset["symbol"], price=float(best_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for momentum rotation")
 
         self.db.commit()
-        return self.status(cadence_hours=cadence_hours, starting_capital=starting_capital, min_momentum_score=min_momentum_score)
+        return self._build_status(
+            rankings=rankings,
+            cadence_hours=cadence_hours,
+            starting_capital=starting_capital,
+            min_momentum_score=min_momentum_score,
+        )
 
-    def _ensure_tables(self) -> None:
-        from app.models.base import Base
-        from app.db.session import engine
+    def _rankings(self) -> list[dict[str, Any]]:
+        return MomentumService(self.db).list_rankings(limit=300)
 
-        Base.metadata.create_all(bind=engine)
+    def _build_status(self, *, rankings: list[dict[str, Any]], cadence_hours: int, starting_capital: float, min_momentum_score: float) -> dict[str, Any]:
+        best_asset = self._best_asset(rankings=rankings, min_momentum_score=min_momentum_score)
+        open_position = self._open_position()
+        open_position_payload = self._position_payload(open_position, rankings=rankings) if open_position else None
+        last_trade = self._last_check_trade()
+        now = datetime.now(timezone.utc)
+        last_check_at = last_trade.created_at if last_trade else None
+        next_check_at = last_check_at + timedelta(hours=cadence_hours) if last_check_at else None
+        due_now = next_check_at is None or now >= next_check_at
+        cash = self._cash_balance(starting_capital=starting_capital)
+        equity = cash + self._open_position_value(open_position, rankings=rankings)
+        total_pnl = equity - starting_capital
+        recommendation = self._recommendation(open_position=open_position, best_asset=best_asset, due_now=due_now)
 
-    def _best_asset(self, *, min_momentum_score: float) -> dict[str, Any] | None:
-        rows = MomentumService(self.db).list_rankings(limit=300)
-        for row in rows:
+        return {
+            "strategy": self.STRATEGY,
+            "mode": self.MODE,
+            "cadence_hours": cadence_hours,
+            "starting_capital": starting_capital,
+            "cash": round(cash, 8),
+            "equity": round(equity, 8),
+            "total_pnl": round(total_pnl, 8),
+            "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
+            "open_position": open_position_payload,
+            "best_asset": best_asset,
+            "last_check_at": last_check_at,
+            "next_check_at": next_check_at,
+            "due_now": due_now,
+            "recommendation": recommendation,
+            "trades": self._recent_trades(limit=50),
+        }
+
+    def _best_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float) -> dict[str, Any] | None:
+        for row in rankings:
             if float(row.get("price") or 0) > 0 and float(row.get("momentum_score") or 0) > min_momentum_score:
                 return row
         return None
@@ -143,15 +156,32 @@ class MomentumEngineService:
                 cash += float(trade.value or 0)
         return cash
 
-    def _open_position_value(self, position: MomentumEnginePosition | None) -> float:
+    def _position_payload(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]]) -> dict[str, Any]:
+        mark_price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
+        unrealized_pnl = (float(position.quantity or 0) * mark_price) - float(position.entry_value or 0)
+        return {
+            "position_id": position.position_id,
+            "symbol": position.symbol,
+            "status": position.status,
+            "quantity": position.quantity,
+            "entry_price": position.entry_price,
+            "entry_value": position.entry_value,
+            "entry_score": position.entry_score,
+            "entry_rank": position.entry_rank,
+            "mark_price": mark_price,
+            "unrealized_pnl": unrealized_pnl,
+            "opened_at": position.opened_at,
+            "closed_at": position.closed_at,
+        }
+
+    def _open_position_value(self, position: MomentumEnginePosition | None, *, rankings: list[dict[str, Any]]) -> float:
         if not position:
             return 0.0
-        mark_price = position.mark_price or self._price_for(position.symbol, fallback=position.entry_price)
+        mark_price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
         return float(position.quantity or 0) * float(mark_price or 0)
 
-    def _price_for(self, symbol: str, *, fallback: float) -> float:
-        rows = MomentumService(self.db).list_rankings(limit=300)
-        for row in rows:
+    def _price_for(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> float:
+        for row in rankings:
             if row.get("symbol") == symbol and row.get("price"):
                 return float(row["price"])
         return float(fallback or 0)
@@ -179,8 +209,8 @@ class MomentumEngineService:
         self._record_trade(action="BUY_TOP_MOMENTUM", symbol=asset["symbol"], price=price, quantity=quantity, value=cash, pnl=0.0, reason=f"Top eligible momentum rank #{asset.get('rank')}")
         return position
 
-    def _close_position(self, position: MomentumEnginePosition, *, reason: str) -> None:
-        price = self._price_for(position.symbol, fallback=position.entry_price)
+    def _close_position(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]], reason: str) -> None:
+        price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
         value = position.quantity * price
         pnl = value - position.entry_value
         position.status = "closed"
