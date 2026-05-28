@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SignalMaker Momentum TUI
+Comment=Open the SignalMaker Momentum monitoring TUI
+Path=/home/pi/Desktop/SignalMaker
+Exec=lxterminal -e bash -lc 'cd /home/pi/Desktop/SignalMaker && bash scripts/start_momentum_tui.sh'
+Terminal=false
+Categories=Finance;Utility;
+StartupNotify=true
