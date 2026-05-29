@@ -13,6 +13,7 @@ from app.services.collector_service import CollectorService
 from app.services.hierarchical_gate_service import apply_hierarchical_stage_gates
 from app.services.live_run_service import LiveRunService
 from app.services.market_data_service import MarketDataService
+from app.services.momentum_service import MomentumService
 from app.services.planner_service import PlannerService
 from app.services.signal_context_service import apply_context_driven_progression
 from app.services.signal_engine_service import SignalEngineService
@@ -46,6 +47,7 @@ class PipelineService:
         self.live_runs = LiveRunService(db)
         self.trade_candidates = TradeCandidateService(db)
         self.market_data = MarketDataService(db)
+        self.momentum = MomentumService(db)
 
     def _execution_interval(self) -> str:
         return EXECUTION_INTERVAL
@@ -82,8 +84,6 @@ class PipelineService:
             payload["execution_trigger"] = {**legacy_trigger, "timeframe": EXECUTION_INTERVAL}
         if isinstance(payload.get("execution_trigger"), dict):
             payload["execution_trigger"]["timeframe"] = EXECUTION_INTERVAL
-        # one_hour_confirmation_debug used to be a decision field. It is removed
-        # from the public payload to avoid confusion; one_hour_decision is the source of truth.
         payload.pop("one_hour_confirmation_debug", None)
         payload.pop("rsi_5m", None)
         payload["rsi_15m"] = payload.get("rsi_main")
@@ -95,7 +95,6 @@ class PipelineService:
         return payload
 
     def _enforce_one_hour_decision_gate(self, signal: dict) -> dict:
-        """Option A strict gate: 1H decision.valid=false means no trade/candidate."""
         decision = signal.get("one_hour_decision") or {}
         if decision.get("valid"):
             return signal
@@ -204,6 +203,7 @@ class PipelineService:
         scanned = 0
         candidates = 0
         candles_written = 0
+        momentum_rows_upserted = 0
         errors: list[dict] = []
         collected_symbols: set[str] = set()
         latest_close_times = self.market_data.get_latest_close_times(symbols)
@@ -251,6 +251,12 @@ class PipelineService:
                         collected_symbols.add(symbol)
                 except Exception as exc:
                     errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
+
+        try:
+            momentum_result = self.momentum.recalculate_and_store(symbols=list(collected_symbols or symbols))
+            momentum_rows_upserted = int(momentum_result.get("momentum_rows_upserted", 0))
+        except Exception as exc:
+            errors.append({"phase": "momentum_recalculate", "error": str(exc)})
 
         limits = self._bundle_limits(execution_interval)
         analyzed_symbols = self._order_symbols_for_analysis(symbols)
@@ -361,6 +367,7 @@ class PipelineService:
         stats = {
             "candidates_created": candidates,
             "candles_written": candles_written,
+            "momentum_rows_upserted": momentum_rows_upserted,
             "errors": errors,
             "symbols_requested": len(symbols),
             "symbols_collected": len(collected_symbols),
@@ -389,6 +396,7 @@ class PipelineService:
             "symbols_collected": len(collected_symbols),
             "symbols_scanned": scanned,
             "candles_written": candles_written,
+            "momentum_rows_upserted": momentum_rows_upserted,
             "candidates_created": candidates,
             "collect_workers": worker_count,
             "execution_interval": execution_interval,
