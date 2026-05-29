@@ -14,17 +14,23 @@ from app.services.momentum_service import MomentumService
 class MomentumEngineService:
     """Dedicated backend paper engine for momentum rotation.
 
-    Strategy v2:
-    - Buy the best eligible momentum asset with valid 15m structure.
-    - Hold it even if another asset becomes #1.
-    - Sell only when the current asset breaks 15m structure bearish.
-    - After a break, rotate into the next best eligible asset with valid 15m structure.
+    Strategy v3:
+    - Exit risk is still managed by bearish 15m structure.
+    - Entry timing is based on RSI 1h pullback/recovery zone.
+    - The engine looks for entry-ready assets inside the top momentum pool.
+    - A current position is sold only if 15m structure breaks or another top-pool asset has a valid entry.
     """
 
     STRATEGY = "momentum_rotation_v1"
     MODE = "paper"
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
+    ENTRY_RSI_MIN = 45.0
+    ENTRY_RSI_MAX = 55.0
+    ENTRY_RSI_FIELD = "rsi_1h"
+    ENTRY_RSI_TIMEFRAME = "1h"
+    ENTRY_POOL_TOP_N = 10
+    ENTRY_POOL_MIN_LEADER_RATIO = 0.80
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -52,18 +58,50 @@ class MomentumEngineService:
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
         current_broken = self._structure_broken(current_asset) if current_asset else False
+        exclude_symbols = {open_position.symbol} if open_position else set()
+        next_entry = self._best_entry_ready_asset(
+            rankings=rankings,
+            min_momentum_score=min_momentum_score,
+            exclude_symbols=exclude_symbols,
+        )
 
-        if open_position and not current_broken:
-            price = self._price_for(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
-            self._record_trade(
-                action="HOLD_STRUCTURE_VALID",
-                symbol=open_position.symbol,
-                price=price,
-                quantity=open_position.quantity,
-                value=open_position.quantity * price,
-                pnl=0.0,
-                reason=self._hold_reason(current_asset),
-            )
+        if open_position:
+            if current_broken:
+                self._close_position(
+                    open_position,
+                    rankings=rankings,
+                    reason=self._break_reason(current_asset) or "15m structure broken bearish",
+                )
+                if next_entry:
+                    cash = self._cash_balance(starting_capital=starting_capital)
+                    if cash > 0 and float(next_entry.get("price") or 0) > 0:
+                        self._open_new_position(next_entry, cash, action="BUY_AFTER_STRUCTURE_BREAK")
+                    else:
+                        self._record_trade(action="CHECK_NO_CASH", symbol=next_entry["symbol"], price=float(next_entry.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available after 15m structure break")
+                else:
+                    self._record_trade(action="STAY_CASH_AFTER_STRUCTURE_BREAK", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="15m structure broke and no top-pool asset has RSI 1h entry ready")
+            elif next_entry:
+                self._close_position(
+                    open_position,
+                    rankings=rankings,
+                    reason=f"Rotate into top-pool entry-ready asset {next_entry['symbol']} with RSI 1h {next_entry.get('rsi_1h')}",
+                )
+                cash = self._cash_balance(starting_capital=starting_capital)
+                if cash > 0 and float(next_entry.get("price") or 0) > 0:
+                    self._open_new_position(next_entry, cash, action="BUY_NEXT_ENTRY_READY")
+                else:
+                    self._record_trade(action="CHECK_NO_CASH", symbol=next_entry["symbol"], price=float(next_entry.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for entry-ready rotation")
+            else:
+                price = self._price_for(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
+                self._record_trade(
+                    action="HOLD_NO_NEXT_ENTRY",
+                    symbol=open_position.symbol,
+                    price=price,
+                    quantity=open_position.quantity,
+                    value=open_position.quantity * price,
+                    pnl=0.0,
+                    reason=self._hold_reason(current_asset),
+                )
             self.db.commit()
             return self._build_status(
                 rankings=rankings,
@@ -72,19 +110,17 @@ class MomentumEngineService:
                 min_momentum_score=min_momentum_score,
             )
 
-        exclude_symbols: set[str] = set()
-        if open_position and current_broken:
-            exclude_symbols.add(open_position.symbol)
-            self._close_position(
-                open_position,
-                rankings=rankings,
-                reason=self._break_reason(current_asset) or "15m structure broken bearish",
-            )
-            open_position = None
-
-        best_asset = self._best_eligible_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
+        best_asset = self._best_entry_ready_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=set())
         if not best_asset:
-            self._record_trade(action="CHECK_NO_ELIGIBLE_STRUCTURE_ASSET", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="No momentum asset with valid 15m structure")
+            self._record_trade(
+                action="CHECK_NO_ENTRY_READY_ASSET",
+                symbol="NONE",
+                price=0.0,
+                quantity=0.0,
+                value=0.0,
+                pnl=0.0,
+                reason=f"No top-pool momentum asset with valid 15m structure and RSI 1h between {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}",
+            )
             self.db.commit()
             return self._build_status(
                 rankings=rankings,
@@ -95,9 +131,9 @@ class MomentumEngineService:
 
         cash = self._cash_balance(starting_capital=starting_capital)
         if cash > 0 and float(best_asset.get("price") or 0) > 0:
-            self._open_new_position(best_asset, cash)
+            self._open_new_position(best_asset, cash, action="BUY_RSI_1H_ENTRY_READY")
         else:
-            self._record_trade(action="CHECK_NO_CASH", symbol=best_asset["symbol"], price=float(best_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for momentum structure rotation")
+            self._record_trade(action="CHECK_NO_CASH", symbol=best_asset["symbol"], price=float(best_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for momentum entry")
 
         self.db.commit()
         return self._build_status(
@@ -111,9 +147,11 @@ class MomentumEngineService:
         return MomentumService(self.db).list_rankings(limit=300)
 
     def _build_status(self, *, rankings: list[dict[str, Any]], cadence_hours: int, starting_capital: float, min_momentum_score: float) -> dict[str, Any]:
-        best_asset = self._best_eligible_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=set())
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
+        exclude_symbols = {open_position.symbol} if open_position else set()
+        best_asset = self._best_entry_ready_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
+        top_watch_asset = self._top_watch_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
         open_position_payload = self._position_payload(open_position, rankings=rankings, current_asset=current_asset) if open_position else None
         last_trade = self._last_check_trade()
         now = datetime.now(timezone.utc)
@@ -123,7 +161,7 @@ class MomentumEngineService:
         cash = self._cash_balance(starting_capital=starting_capital)
         equity = cash + self._open_position_value(open_position, rankings=rankings)
         total_pnl = equity - starting_capital
-        recommendation = self._recommendation(open_position=open_position, current_asset=current_asset, best_asset=best_asset, due_now=due_now)
+        recommendation = self._recommendation(open_position=open_position, current_asset=current_asset, best_asset=best_asset, top_watch_asset=top_watch_asset, due_now=due_now)
 
         return {
             "strategy": self.STRATEGY,
@@ -134,8 +172,14 @@ class MomentumEngineService:
             "equity": round(equity, 8),
             "total_pnl": round(total_pnl, 8),
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
+            "entry_rsi_timeframe": self.ENTRY_RSI_TIMEFRAME,
+            "entry_rsi_min": self.ENTRY_RSI_MIN,
+            "entry_rsi_max": self.ENTRY_RSI_MAX,
+            "entry_pool_top_n": self.ENTRY_POOL_TOP_N,
+            "entry_pool_min_leader_ratio": self.ENTRY_POOL_MIN_LEADER_RATIO,
             "open_position": open_position_payload,
             "best_asset": best_asset,
+            "top_watch_asset": top_watch_asset,
             "last_check_at": last_check_at,
             "next_check_at": next_check_at,
             "due_now": due_now,
@@ -148,6 +192,20 @@ class MomentumEngineService:
             if row.get("symbol") == symbol:
                 return row
         return None
+
+    def _leader_score(self, rankings: list[dict[str, Any]]) -> float:
+        if not rankings:
+            return 0.0
+        return float(rankings[0].get("momentum_score") or 0.0)
+
+    def _in_entry_pool(self, asset: dict[str, Any], *, leader_score: float) -> bool:
+        rank = int(asset.get("rank") or 999999)
+        score = float(asset.get("momentum_score") or 0.0)
+        if rank <= self.ENTRY_POOL_TOP_N:
+            return True
+        if leader_score > 0 and score >= leader_score * self.ENTRY_POOL_MIN_LEADER_RATIO:
+            return True
+        return False
 
     def _structure_valid(self, asset: dict[str, Any] | None) -> bool:
         if not asset:
@@ -167,7 +225,37 @@ class MomentumEngineService:
             or bool(asset.get("bos_15m_bearish"))
         )
 
-    def _best_eligible_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str]) -> dict[str, Any] | None:
+    def _entry_status(self, asset: dict[str, Any] | None) -> str:
+        if not asset:
+            return "blocked_missing_asset"
+        if not self._structure_valid(asset):
+            return "blocked_structure_not_valid"
+        rsi = asset.get(self.ENTRY_RSI_FIELD)
+        if rsi is None:
+            return "wait_rsi_1h_missing"
+        rsi_value = float(rsi)
+        if rsi_value < self.ENTRY_RSI_MIN:
+            return "wait_recovery_rsi_1h_too_low"
+        if rsi_value > self.ENTRY_RSI_MAX:
+            return "wait_pullback_rsi_1h_too_high"
+        return "ready"
+
+    def _entry_ready(self, asset: dict[str, Any] | None) -> bool:
+        return self._entry_status(asset) == "ready"
+
+    def _decorate_entry(self, asset: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not asset:
+            return None
+        decorated = dict(asset)
+        decorated["entry_status"] = self._entry_status(asset)
+        decorated["entry_rsi_timeframe"] = self.ENTRY_RSI_TIMEFRAME
+        decorated["entry_rsi_min"] = self.ENTRY_RSI_MIN
+        decorated["entry_rsi_max"] = self.ENTRY_RSI_MAX
+        decorated["in_entry_pool"] = True
+        return decorated
+
+    def _top_watch_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str]) -> dict[str, Any] | None:
+        leader_score = self._leader_score(rankings)
         for row in rankings:
             if row.get("symbol") in exclude_symbols:
                 continue
@@ -175,15 +263,33 @@ class MomentumEngineService:
                 continue
             if float(row.get("momentum_score") or 0) <= min_momentum_score:
                 continue
+            if not self._in_entry_pool(row, leader_score=leader_score):
+                continue
             if not self._structure_valid(row):
                 continue
-            return row
+            return self._decorate_entry(row)
+        return None
+
+    def _best_entry_ready_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str]) -> dict[str, Any] | None:
+        leader_score = self._leader_score(rankings)
+        for row in rankings:
+            if row.get("symbol") in exclude_symbols:
+                continue
+            if float(row.get("price") or 0) <= 0:
+                continue
+            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+                continue
+            if not self._in_entry_pool(row, leader_score=leader_score):
+                continue
+            if not self._entry_ready(row):
+                continue
+            return self._decorate_entry(row)
         return None
 
     def _hold_reason(self, asset: dict[str, Any] | None) -> str:
         if not asset:
-            return "Current asset not found in ranking, holding until explicit structure break."
-        return f"15m structure holding: {asset.get('structure_15m_status')} / {asset.get('structure_reason')}"
+            return "Current asset not found in ranking, holding until explicit structure break or new entry-ready asset."
+        return f"Hold: 15m structure still holding and no top-pool RSI 1h entry is ready. Current structure: {asset.get('structure_15m_status')} / {asset.get('structure_reason')}"
 
     def _break_reason(self, asset: dict[str, Any] | None) -> str | None:
         if not asset:
@@ -247,6 +353,8 @@ class MomentumEngineService:
             "structure_15m_bias": current_asset.get("structure_15m_bias") if current_asset else "missing",
             "structure_reason": current_asset.get("structure_reason") if current_asset else "asset_missing_from_ranking",
             "structure_broken": self._structure_broken(current_asset),
+            "rsi_1h": current_asset.get("rsi_1h") if current_asset else None,
+            "entry_status": self._entry_status(current_asset) if current_asset else "blocked_missing_asset",
         }
 
     def _open_position_value(self, position: MomentumEnginePosition | None, *, rankings: list[dict[str, Any]]) -> float:
@@ -261,7 +369,7 @@ class MomentumEngineService:
                 return float(row["price"])
         return float(fallback or 0)
 
-    def _open_new_position(self, asset: dict[str, Any], cash: float) -> MomentumEnginePosition:
+    def _open_new_position(self, asset: dict[str, Any], cash: float, *, action: str) -> MomentumEnginePosition:
         price = float(asset["price"])
         quantity = cash / price
         now = datetime.now(timezone.utc)
@@ -282,11 +390,14 @@ class MomentumEngineService:
                 "data_quality": asset.get("data_quality"),
                 "structure_15m_status": asset.get("structure_15m_status"),
                 "structure_reason": asset.get("structure_reason"),
+                "rsi_1h": asset.get("rsi_1h"),
+                "entry_status": asset.get("entry_status"),
+                "entry_rsi_timeframe": self.ENTRY_RSI_TIMEFRAME,
             },
             opened_at=now,
         )
         self.db.add(position)
-        self._record_trade(action="BUY_TOP_VALID_STRUCTURE", symbol=asset["symbol"], price=price, quantity=quantity, value=cash, pnl=0.0, reason=f"Top momentum rank #{asset.get('rank')} with valid 15m structure")
+        self._record_trade(action=action, symbol=asset["symbol"], price=price, quantity=quantity, value=cash, pnl=0.0, reason=f"Top-pool momentum rank #{asset.get('rank')} with valid 15m structure and RSI 1h {asset.get('rsi_1h')} in {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}")
         return position
 
     def _close_position(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]], reason: str) -> None:
@@ -297,7 +408,7 @@ class MomentumEngineService:
         position.mark_price = price
         position.unrealized_pnl = pnl
         position.closed_at = datetime.now(timezone.utc)
-        self._record_trade(action="SELL_STRUCTURE_BREAK", symbol=position.symbol, price=price, quantity=position.quantity, value=value, pnl=pnl, reason=reason)
+        self._record_trade(action="SELL_ROTATE_OR_STRUCTURE_BREAK", symbol=position.symbol, price=price, quantity=position.quantity, value=value, pnl=pnl, reason=reason)
 
     def _record_trade(self, *, action: str, symbol: str, price: float, quantity: float, value: float, pnl: float, reason: str) -> MomentumEngineTrade:
         trade = MomentumEngineTrade(
@@ -316,12 +427,16 @@ class MomentumEngineService:
         self.db.add(trade)
         return trade
 
-    def _recommendation(self, *, open_position: MomentumEnginePosition | None, current_asset: dict[str, Any] | None, best_asset: dict[str, Any] | None, due_now: bool) -> str:
-        if open_position and not self._structure_broken(current_asset):
-            return f"Hold {open_position.symbol} until 15m structure breaks."
+    def _recommendation(self, *, open_position: MomentumEnginePosition | None, current_asset: dict[str, Any] | None, best_asset: dict[str, Any] | None, top_watch_asset: dict[str, Any] | None, due_now: bool) -> str:
         if open_position and self._structure_broken(current_asset):
             target = best_asset.get("symbol") if best_asset else "cash"
             return f"Sell {open_position.symbol}: 15m structure broken. Rotate to {target}."
-        if not best_asset:
-            return "No eligible momentum asset with valid 15m structure."
-        return f"Buy {best_asset['symbol']} — best momentum with valid 15m structure." if due_now else "Wait until next scheduled momentum check."
+        if open_position and best_asset:
+            return f"Rotate from {open_position.symbol} to {best_asset['symbol']} — RSI 1h entry ready ({best_asset.get('rsi_1h')})."
+        if open_position:
+            return f"Hold {open_position.symbol}: no top-pool RSI 1h entry is ready and 15m structure has not broken."
+        if best_asset:
+            return f"Buy {best_asset['symbol']} — RSI 1h entry ready ({best_asset.get('rsi_1h')})." if due_now else "Wait until next scheduled momentum check."
+        if top_watch_asset:
+            return f"Wait on {top_watch_asset['symbol']}: {top_watch_asset.get('entry_status')} (RSI 1h={top_watch_asset.get('rsi_1h')})."
+        return f"No top-pool momentum asset with valid 15m structure and RSI 1h between {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}."
