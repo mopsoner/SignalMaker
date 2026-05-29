@@ -73,11 +73,20 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "bot_pipeline_enabled": base_settings.bot_pipeline_enabled,
         "bot_executor_enabled": base_settings.bot_executor_enabled,
         "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
+        "bot_momentum_engine_enabled": True,
         "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
         "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
         "bot_scheduler_interval_sec": base_settings.bot_scheduler_interval_sec,
+        "bot_momentum_engine_interval_sec": 300,
         "bot_executor_limit": base_settings.bot_executor_limit,
         "bot_executor_quantity": base_settings.bot_executor_quantity,
+    },
+    "momentum": {
+        "momentum_engine_enabled": True,
+        "momentum_engine_interval_sec": 300,
+        "momentum_engine_cadence_hours": 4,
+        "momentum_engine_starting_capital": 1000.0,
+        "momentum_engine_min_score": 0.0,
     },
     "live": {
         "live_trading_enabled": base_settings.live_trading_enabled,
@@ -106,6 +115,14 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             payload.get("binance", {}).get("binance_collector_enabled", True),
             default=True,
         )
+        payload.setdefault("bot", {})["bot_momentum_engine_enabled"] = _as_bool(
+            payload.get("bot", {}).get("bot_momentum_engine_enabled", True),
+            default=True,
+        )
+        payload.setdefault("momentum", {})["momentum_engine_enabled"] = _as_bool(
+            payload.get("momentum", {}).get("momentum_engine_enabled", True),
+            default=True,
+        )
         return payload
     finally:
         if owns_session:
@@ -120,6 +137,14 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     binance = payload.get("binance")
     if isinstance(binance, dict) and "binance_collector_enabled" in binance:
         binance["binance_collector_enabled"] = _as_bool(binance["binance_collector_enabled"], default=True)
+
+    bot = payload.get("bot")
+    if isinstance(bot, dict) and "bot_momentum_engine_enabled" in bot:
+        bot["bot_momentum_engine_enabled"] = _as_bool(bot["bot_momentum_engine_enabled"], default=True)
+
+    momentum = payload.get("momentum")
+    if isinstance(momentum, dict) and "momentum_engine_enabled" in momentum:
+        momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
 
     for category, values in payload.items():
         if not isinstance(values, dict):
