@@ -4,6 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
+import MomentumBacktestPage from './pages/MomentumBacktestPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -28,6 +29,7 @@ export default function App() {
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
           <NavLink to="/" end onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/momentum" onClick={closeMenu}>Momentum</NavLink>
+          <NavLink to="/momentum-backtest" onClick={closeMenu}>Momentum Backtest</NavLink>
           <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
@@ -40,6 +42,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
+          <Route path="/momentum-backtest" element={<MomentumBacktestPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/ops" element={<OpsPage />} />
