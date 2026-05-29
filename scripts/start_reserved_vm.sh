@@ -21,11 +21,14 @@ SCHEDULER_PID=$!
 bash scripts/start_momentum_engine_worker.sh &
 MOMENTUM_ENGINE_PID=$!
 
+bash scripts/start_momentum_backtest_worker.sh &
+MOMENTUM_BACKTEST_PID=$!
+
 FRONTEND_PORT=${FRONTEND_PORT:-5000} bash scripts/start_frontend.sh &
 FRONTEND_PID=$!
 
 cleanup() {
-  kill "$API_PID" "$PIPELINE_PID" "$EXECUTOR_PID" "$SCHEDULER_PID" "$MOMENTUM_ENGINE_PID" "$FRONTEND_PID" 2>/dev/null || true
+  kill "$API_PID" "$PIPELINE_PID" "$EXECUTOR_PID" "$SCHEDULER_PID" "$MOMENTUM_ENGINE_PID" "$MOMENTUM_BACKTEST_PID" "$FRONTEND_PID" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
