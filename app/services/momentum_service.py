@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import fmean
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.momentum_current import MomentumCurrent
 from app.services.market_data_service import MarketDataService
 
 
 class MomentumService:
-    """Read-only momentum ranking service.
+    """Momentum calculation and snapshot service.
 
-    This service intentionally does not write to the database and does not touch
-    the existing signal/trade engine. It only ranks symbols from stored candles.
+    Heavy calculations happen explicitly after candle ingestion through
+    recalculate_and_store(). Read paths use the persisted momentum_current table.
     """
 
     INTERVALS = ("15m", "1h", "4h")
@@ -27,13 +29,60 @@ class MomentumService:
         self.market_data = MarketDataService(db)
 
     def list_rankings(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        symbols = self.market_data.list_symbols(limit=None)
-        rows = [self._build_symbol_row(symbol) for symbol in symbols]
-        rows.sort(key=lambda row: row["momentum_score"], reverse=True)
-        ranked = rows[:limit]
-        for index, row in enumerate(ranked, start=1):
-            row["rank"] = index
-        return ranked
+        stmt = select(MomentumCurrent).order_by(MomentumCurrent.momentum_score.desc(), MomentumCurrent.symbol.asc()).limit(limit)
+        rows = list(self.db.scalars(stmt).all())
+        return [self._row_to_payload(row, index) for index, row in enumerate(rows, start=1)]
+
+    def recalculate_and_store(self, *, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, Any]:
+        target_symbols = sorted({symbol.upper() for symbol in (symbols or self.market_data.list_symbols(limit=None))})
+        if limit is not None:
+            target_symbols = target_symbols[:limit]
+
+        calculated_rows = [self._build_symbol_row(symbol) for symbol in target_symbols]
+        calculated_rows.sort(key=lambda row: row["momentum_score"], reverse=True)
+        now = datetime.now(timezone.utc)
+        for index, payload in enumerate(calculated_rows, start=1):
+            payload["rank"] = index
+            self._upsert_current(payload, calculated_at=now)
+        self.db.commit()
+        return {"symbols": len(target_symbols), "momentum_rows_upserted": len(calculated_rows), "calculated_at": now.isoformat()}
+
+    def _row_to_payload(self, row: MomentumCurrent, rank: int) -> dict[str, Any]:
+        return {
+            "rank": rank,
+            "symbol": row.symbol,
+            "price": row.price,
+            "momentum_15m": row.momentum_15m,
+            "momentum_1h": row.momentum_1h,
+            "momentum_4h": row.momentum_4h,
+            "momentum_score": row.momentum_score,
+            "classification": row.classification,
+            "rsi_15m": row.rsi_15m,
+            "rsi_1h": row.rsi_1h,
+            "rsi_4h": row.rsi_4h,
+            "change_15m": row.change_15m,
+            "change_1h": row.change_1h,
+            "change_4h": row.change_4h,
+            "ema_trend_15m": row.ema_trend_15m,
+            "ema_trend_1h": row.ema_trend_1h,
+            "ema_trend_4h": row.ema_trend_4h,
+            "updated_at": row.updated_at,
+            "data_quality": row.data_quality,
+            "calculated_at": row.calculated_at,
+        }
+
+    def _upsert_current(self, payload: dict[str, Any], *, calculated_at: datetime) -> None:
+        row = self.db.get(MomentumCurrent, payload["symbol"])
+        if row is None:
+            row = MomentumCurrent(symbol=payload["symbol"])
+            self.db.add(row)
+        for key in (
+            "price", "momentum_15m", "momentum_1h", "momentum_4h", "momentum_score", "classification",
+            "rsi_15m", "rsi_1h", "rsi_4h", "change_15m", "change_1h", "change_4h",
+            "ema_trend_15m", "ema_trend_1h", "ema_trend_4h", "data_quality", "rank", "updated_at",
+        ):
+            setattr(row, key, payload.get(key))
+        row.calculated_at = calculated_at
 
     def _build_symbol_row(self, symbol: str) -> dict[str, Any]:
         bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
