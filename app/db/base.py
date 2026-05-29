@@ -11,6 +11,7 @@ from app.models.app_setting import AppSetting
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_structure_current import MomentumStructureCurrent
+from app.models.momentum_backtest import MomentumBacktestRun, MomentumBacktestTrade, MomentumBacktestEquity
 
 
 def init_db() -> None:
