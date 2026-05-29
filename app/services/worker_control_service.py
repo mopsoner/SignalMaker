@@ -15,6 +15,7 @@ WORKERS = {
     "executor": {"module": "scripts.run_executor_loop", "pid_file": RUNTIME_DIR / "executor.pid", "log_file": RUNTIME_DIR / "executor.log"},
     "scheduler": {"module": "scripts.run_scheduler_loop", "pid_file": RUNTIME_DIR / "scheduler.pid", "log_file": RUNTIME_DIR / "scheduler.log"},
     "momentum_engine": {"module": "scripts.run_momentum_engine_loop", "pid_file": RUNTIME_DIR / "momentum_engine.pid", "log_file": RUNTIME_DIR / "momentum_engine.log"},
+    "momentum_backtest": {"module": "scripts.run_momentum_backtest_worker", "pid_file": RUNTIME_DIR / "momentum_backtest.pid", "log_file": RUNTIME_DIR / "momentum_backtest.log"},
 }
 
 
