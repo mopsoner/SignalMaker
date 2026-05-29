@@ -4,7 +4,7 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
 
-const WORKERS = ['pipeline', 'executor', 'scheduler']
+const WORKERS = ['pipeline', 'executor', 'scheduler', 'momentum_engine']
 
 function dot(running) {
   return (
@@ -33,7 +33,7 @@ function WorkerCard({ name, info, onAction }) {
     <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {dot(running)}
-        <span style={{ fontWeight: 700, textTransform: 'capitalize', fontSize: 15 }}>{name}</span>
+        <span style={{ fontWeight: 700, textTransform: 'capitalize', fontSize: 15 }}>{name.replace('_', ' ')}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: running ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
           {running ? 'Running' : 'Stopped'}
         </span>
@@ -227,7 +227,7 @@ export default function LogsPage() {
         subtitle="Worker status, pipeline run history and live log tails."
       />
 
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}>
+      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))' }}>
         {WORKERS.map((name) => (
           <WorkerCard key={name} name={name} info={workers[name]} onAction={handleWorkerAction} />
         ))}
@@ -243,10 +243,10 @@ export default function LogsPage() {
 
       <section className="panel">
         <h2 style={{ marginBottom: 14 }}>Log viewer</h2>
-        <div style={{ display: 'flex', gap: 4, marginBottom: -1 }}>
+        <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
           {WORKERS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {dot(workers[w]?.running)}{w}
+              {dot(workers[w]?.running)}{w.replace('_', ' ')}
             </button>
           ))}
         </div>
