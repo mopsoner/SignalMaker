@@ -10,6 +10,7 @@ from app.models.fill import Fill
 from app.models.app_setting import AppSetting
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_current import MomentumCurrent
+from app.models.momentum_structure_current import MomentumStructureCurrent
 
 
 def init_db() -> None:
