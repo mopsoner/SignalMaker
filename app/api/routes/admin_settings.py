@@ -57,7 +57,7 @@ def test_binance(db: Session = Depends(get_db)) -> dict:
     return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
 
 
-_ALLOWED_WORKERS = {"pipeline", "executor", "scheduler", "momentum_engine"}
+_ALLOWED_WORKERS = {"pipeline", "executor", "scheduler", "momentum_engine", "momentum_backtest"}
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
