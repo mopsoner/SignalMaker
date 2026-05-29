@@ -4,7 +4,7 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
 
-const WORKERS = ['pipeline', 'executor', 'scheduler', 'momentum_engine']
+const WORKERS = ['pipeline', 'executor', 'scheduler', 'momentum_engine', 'momentum_backtest']
 
 function dot(running) {
   return (
