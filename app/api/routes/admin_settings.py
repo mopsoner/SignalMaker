@@ -21,6 +21,8 @@ class SettingsPayload(BaseModel):
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
     bot: dict[str, Any] = {}
+    live: dict[str, Any] = {}
+    momentum: dict[str, Any] = {}
 
 
 @router.get('/admin/settings')
@@ -55,7 +57,7 @@ def test_binance(db: Session = Depends(get_db)) -> dict:
     return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
 
 
-_ALLOWED_WORKERS = {"pipeline", "executor", "scheduler"}
+_ALLOWED_WORKERS = {"pipeline", "executor", "scheduler", "momentum_engine"}
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
