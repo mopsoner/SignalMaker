@@ -1,26 +1,28 @@
 [Unit]
-Description=SignalMaker TTY Dashboard
-After=network-online.target raspberry-executor.service
+Description=SignalMaker Raspberry fullscreen TUI
+After=network-online.target raspberry-executor.service systemd-user-sessions.service
 Wants=network-online.target raspberry-executor.service
 Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
+User=pi
 WorkingDirectory=/home/pi/Desktop/SignalMaker
 Environment=PYTHONUNBUFFERED=1
-Environment=TERM=linux
-Environment=LOCAL_DASHBOARD_URL=http://127.0.0.1:8090
-Environment=TTY_DASHBOARD_REFRESH_SECONDS=5
+Environment=TERM=xterm-256color
+Environment=DISPLAY=
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
-StandardInput=tty-force
+StandardInput=tty
 StandardOutput=tty
-StandardError=journal+console
-ExecStartPre=/bin/sh -c '/usr/bin/chvt 1 || true'
-ExecStartPre=/bin/sh -c '/usr/bin/setterm -blank 0 -powerdown 0 -powersave off >/dev/tty1 || true'
-ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.tty_dashboard
+StandardError=journal
+ExecStartPre=+/bin/sleep 5
+ExecStartPre=+/usr/bin/chvt 1
+ExecStartPre=+/usr/bin/setterm -blank 0 -powerdown 0 -powersave off -term linux -store
+ExecStartPre=+/bin/sh -c 'printf "\033c" > /dev/tty1'
+ExecStart=/bin/bash -lc 'exec /home/pi/Desktop/SignalMaker/tui.sh'
 Restart=always
 RestartSec=5
 
