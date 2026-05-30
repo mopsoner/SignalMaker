@@ -4,7 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
-import MomentumBacktestPage from './pages/MomentumBacktestPage'
+import MomentumBacktestV2Page from './pages/MomentumBacktestV2Page'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -42,7 +42,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
-          <Route path="/momentum-backtest" element={<MomentumBacktestPage />} />
+          <Route path="/momentum-backtest" element={<MomentumBacktestV2Page />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/ops" element={<OpsPage />} />
