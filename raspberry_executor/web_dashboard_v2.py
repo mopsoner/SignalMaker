@@ -5,6 +5,7 @@ from urllib.parse import parse_qs
 from raspberry_executor.env_store import SECRET_KEYS, read_env, write_env
 from raspberry_executor.position_sync_v2 import sync_open_positions
 from raspberry_executor.reset_positions_db import reset_positions_db
+from raspberry_executor.settings_store import write_settings
 from raspberry_executor.state import StateStore
 from raspberry_executor.web_dashboard import Handler as DashboardHandler, page
 
@@ -50,7 +51,7 @@ def admin_page_v2():
     for key in vals:
         field_type = "password" if key in SECRET_KEYS else "text"
         body += f"<label>{escape(key)}</label><input type='{field_type}' name='{escape(key)}' value='{escape(vals.get(key, ''))}'>"
-    body += "<button>Save settings</button></form><p class='pill warn'>Restart after changing trading settings.</p></div>"
+    body += "<button>Save settings</button></form><p class='pill warn'>Settings are saved to .env and SQLite, so they are restored after reboot. Restart after changing trading settings.</p></div>"
     body += """
     <div class='box'>
       <h2>Danger zone</h2>
@@ -95,6 +96,7 @@ class Handler(DashboardHandler):
                 if key in current and not (key in SECRET_KEYS and value == "********"):
                     current[key] = value.strip()
             write_env(current)
+            write_settings(current)
             self.send_response(303)
             self.send_header("Location", "/admin")
             self.end_headers()
