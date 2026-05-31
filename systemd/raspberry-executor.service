@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=pi
 WorkingDirectory=/home/pi/Desktop/SignalMaker
-EnvironmentFile=/home/pi/Desktop/SignalMaker/.env
-ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/run_bot_service.sh
 Restart=always
 RestartSec=10
-User=pi
 
 [Install]
 WantedBy=multi-user.target
