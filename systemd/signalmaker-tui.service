@@ -9,7 +9,7 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/Desktop/SignalMaker
 Environment=PYTHONUNBUFFERED=1
-Environment=TERM=xterm-256color
+Environment=TERM=linux
 Environment=DISPLAY=
 TTYPath=/dev/tty1
 TTYReset=yes
