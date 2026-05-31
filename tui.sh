@@ -2,9 +2,7 @@
 set -e
 cd "$(dirname "$0")"
 
-if [ -d .git ]; then
-  git pull --ff-only || true
-fi
+bash scripts/self_update.sh || true
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
