@@ -49,12 +49,19 @@ def _draw_boot(stdscr, message: str = "Starting") -> None:
     stdscr.refresh()
 
 
-def _draw_error(stdscr, exc: BaseException) -> None:
+def _draw_error(stdscr, exc: BaseException, has_previous_data: bool = False) -> None:
+    if has_previous_data:
+        height, width = stdscr.getmaxyx()
+        _add(stdscr, max(0, height - 1), 0, " " * max(0, width - 1), curses.color_pair(5))
+        _add(stdscr, max(0, height - 1), 2, f"Refresh error: {type(exc).__name__}: {exc} | r retry | q quit", curses.color_pair(5))
+        stdscr.refresh()
+        return
+
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     _add(stdscr, 0, 0, " " * max(0, width - 1), curses.color_pair(1) | curses.A_BOLD)
     _add(stdscr, 0, 2, " SignalMaker Raspberry TUI - ERROR ", curses.color_pair(1) | curses.A_BOLD)
-    _add(stdscr, 2, 2, "Le TUI est lancé, mais le chargement des données a échoué.", curses.color_pair(5) | curses.A_BOLD)
+    _add(stdscr, 2, 2, "Le TUI est lance, mais le chargement des donnees a echoue.", curses.color_pair(5) | curses.A_BOLD)
     _add(stdscr, 4, 2, f"Erreur: {type(exc).__name__}: {exc}", curses.color_pair(5))
     tb = traceback.format_exc().splitlines()[-8:]
     for idx, line in enumerate(tb):
@@ -65,16 +72,13 @@ def _draw_error(stdscr, exc: BaseException) -> None:
     stdscr.refresh()
 
 
-def _snapshot_with_screen(stdscr):
-    _draw_boot(stdscr, "Loading settings, local state, candidates and positions...")
-    return dashboard.snapshot()
-
-
 def main_loop(stdscr) -> None:
     _init_screen(stdscr)
     data = None
     last_refresh = 0.0
     last_error: BaseException | None = None
+
+    _draw_boot(stdscr, "Starting SignalMaker TUI...")
 
     while True:
         now = time.monotonic()
@@ -85,18 +89,25 @@ def main_loop(stdscr) -> None:
         should_refresh = data is None or ch in (ord("r"), ord("R")) or now - last_refresh >= REFRESH_SECONDS
         if should_refresh:
             try:
-                data = _snapshot_with_screen(stdscr)
+                # Do not clear the screen before refresh. Keep the current dashboard visible
+                # while settings/state/API calls are refreshed in memory.
+                data = dashboard.snapshot()
                 last_error = None
                 last_refresh = time.monotonic()
             except BaseException as exc:
                 last_error = exc
-                data = None
                 last_refresh = time.monotonic()
+                if data is None:
+                    _draw_error(stdscr, exc, has_previous_data=False)
+                else:
+                    _draw_error(stdscr, exc, has_previous_data=True)
+                time.sleep(0.5)
+                continue
 
         if data is not None:
             dashboard.draw(stdscr, data)
         elif last_error is not None:
-            _draw_error(stdscr, last_error)
+            _draw_error(stdscr, last_error, has_previous_data=False)
         else:
             _draw_boot(stdscr)
 
