@@ -18,4 +18,5 @@ if [ ! -f .deps_ok ]; then
   touch .deps_ok
 fi
 
-python -m raspberry_executor.tui_dashboard
+export TERM="${TERM:-linux}"
+python -m raspberry_executor.tui_safe_dashboard
