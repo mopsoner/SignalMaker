@@ -5,11 +5,11 @@ ENV_PATH = ROOT / ".env"
 EXAMPLE_PATH = ROOT / ".env.raspberry.example"
 
 DEFAULTS = {
-    "SIGNALMAKER_BASE_URL": "https://your-signalmaker-app.replit.app",
+    "SIGNALMAKER_BASE_URL": "https://mysignalmaker.replit.app",
     "GATEWAY_ID": "raspberry-fr-1",
     "POLL_SECONDS": "15",
     "DRY_RUN": "false",
-    "QUOTE_ASSETS": "USDT",
+    "QUOTE_ASSETS": "USDC",
     "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "900",
     "BINANCE_BASE_URL": "https://api.binance.com",
@@ -19,7 +19,7 @@ DEFAULTS = {
     "CANDLE_FEED_INTERVALS": "15m,1h,4h",
     "CANDLE_FEED_LIMIT": "50",
     "CANDLE_FEED_POLL_SECONDS": "180",
-    "CANDLE_FEED_MAX_SYMBOLS": "10",
+    "CANDLE_FEED_MAX_SYMBOLS": "400",
     "CANDLE_FEED_MAX_WORKERS": "3",
     "CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE": "300",
     "CANDLE_FEED_SMOKE_SYMBOL_LIMIT": "3",
