@@ -17,7 +17,7 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
             'stop_policy': 'third_valid_structural_invalidation_with_buffer',
             'stop_buffer_pct': STOP_BUFFER_PCT,
-            'target_policy': 'third_valid_structural_liquidity',
+            'target_policy': 'third_valid_structural_liquidity_with_low_rr_fallback',
             'execution_policy': 'strict_requires_explicit_15m_bos_mss_reclaim_or_rejection',
             'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
@@ -218,6 +218,108 @@ class PlannerService:
             return selected['level'], selected['source'], ordered
         return None, 'missing_structural_target', ordered
 
+    def _target_candidates_from_signal(self, signal: dict, *, side: str, entry: float) -> list[dict]:
+        candidates: list[dict] = []
+        ordered_sources = []
+        for source_key in ('execution_target', 'projected_target'):
+            ordered_sources.append((source_key, signal.get(source_key)))
+        context_debug = signal.get('context_selection_debug') or {}
+        if isinstance(context_debug.get('selected_target'), dict):
+            ordered_sources.append(('context_selection_debug.selected_target', context_debug.get('selected_target')))
+        for index, item in enumerate(context_debug.get('target_candidates') or []):
+            ordered_sources.append((item.get('source') or f'context_selection_debug.target_candidates[{index}]', item))
+        fallback = ['range_low_1h', 'previous_day_low', 'old_support_shelf', 'previous_week_low', 'range_low_4h', 'major_swing_low_4h'] if side == 'short' else ['range_high_1h', 'previous_day_high', 'old_resistance_shelf', 'previous_week_high', 'range_high_4h', 'major_swing_high_4h']
+        ordered_sources.extend((key, signal.get(key)) for key in fallback)
+
+        seen = set()
+        rank = 10
+        for source, value in ordered_sources:
+            level = self._as_float(value)
+            if level is None:
+                rank += 10
+                continue
+            key = round(level, 12)
+            if key in seen:
+                rank += 10
+                continue
+            seen.add(key)
+            if side == 'short' and level >= entry:
+                rank += 10
+                continue
+            if side == 'long' and level <= entry:
+                rank += 10
+                continue
+            if isinstance(value, dict) and value.get('valid') is False:
+                rank += 10
+                continue
+            candidates.append({
+                'source': source,
+                'type': value.get('type') if isinstance(value, dict) else source,
+                'level': level,
+                'distance': abs(level - entry),
+                'distance_pct': self._distance_pct(entry, level),
+                'hierarchy_rank': value.get('hierarchy_rank', rank) if isinstance(value, dict) else rank,
+                'valid': True,
+                'validation': value.get('validation', 'structural_liquidity_target') if isinstance(value, dict) else 'structural_liquidity_target',
+                'rejected_reason': None,
+            })
+            rank += 10
+        return sorted(candidates, key=lambda item: (item.get('hierarchy_rank', 999), item.get('distance_pct') or 999))
+
+    def _upgrade_target_for_min_rr(self, resolved_trade: dict, signal: dict, *, min_rr: float) -> tuple[dict, float | None]:
+        side = resolved_trade.get('position_side')
+        entry = self._as_float(resolved_trade.get('entry'))
+        stop = self._as_float(resolved_trade.get('stop'))
+        if side not in {'long', 'short'} or entry is None or stop is None:
+            return resolved_trade, None
+
+        risk = abs(entry - stop)
+        if risk <= 0:
+            return resolved_trade, None
+
+        candidates = list(resolved_trade.get('target_candidates') or [])
+        if not candidates:
+            candidates = self._target_candidates_from_signal(signal, side=side, entry=entry)
+
+        valid_candidates = []
+        for item in candidates:
+            if item.get('valid') is False:
+                continue
+            level = self._as_float(item.get('level'))
+            if level is None:
+                continue
+            if side == 'short' and level >= entry:
+                continue
+            if side == 'long' and level <= entry:
+                continue
+            reward = abs(level - entry)
+            rr = reward / risk if risk > 0 else None
+            if rr is None:
+                continue
+            enriched = dict(item)
+            enriched['rr_ratio'] = rr
+            valid_candidates.append(enriched)
+
+        valid_candidates = sorted(valid_candidates, key=lambda item: (item.get('hierarchy_rank', 999), item.get('distance_pct') or 999))
+        for item in valid_candidates:
+            if item['rr_ratio'] >= min_rr:
+                upgraded = dict(resolved_trade)
+                upgraded['target'] = item['level']
+                upgraded['target_source'] = item.get('source') or 'target_candidate_rr_upgrade'
+                upgraded['target_distance_pct'] = self._distance_pct(entry, item['level'])
+                upgraded['target_rr_upgrade'] = {
+                    'enabled': True,
+                    'reason': 'initial_target_low_rr_next_structural_target',
+                    'min_rr': min_rr,
+                    'selected_source': upgraded['target_source'],
+                    'selected_level': item['level'],
+                    'selected_rr': item['rr_ratio'],
+                    'candidates_checked': valid_candidates[:8],
+                }
+                return upgraded, item['rr_ratio']
+
+        return resolved_trade, None
+
     def _resolve_trade_plan(self, signal: dict, trade: dict) -> tuple[dict, str | None]:
         side = self._side_from_signal(signal, trade)
         if not side:
@@ -280,8 +382,17 @@ class PlannerService:
             return {'accepted': False, 'reason': 'invalid_risk', 'candidate': None, 'rr_ratio': rr}
         if score < strategy['planner_min_score']:
             return {'accepted': False, 'reason': 'low_score', 'candidate': None, 'rr_ratio': rr}
-        if rr is None or rr < strategy['planner_min_rr']:
-            return {'accepted': False, 'reason': 'low_rr', 'candidate': None, 'rr_ratio': rr}
+        min_rr = float(strategy['planner_min_rr'])
+        if rr is None or rr < min_rr:
+            upgraded_trade, upgraded_rr = self._upgrade_target_for_min_rr(resolved_trade, signal, min_rr=min_rr)
+            if upgraded_rr is not None and upgraded_rr >= min_rr:
+                resolved_trade = upgraded_trade
+                target = resolved_trade['target']
+                reward = abs(target - entry)
+                rr = upgraded_rr
+                signal['planner_target_rr_upgrade'] = resolved_trade.get('target_rr_upgrade')
+            else:
+                return {'accepted': False, 'reason': 'low_rr', 'candidate': None, 'rr_ratio': rr}
 
         waiting_reason = self._missing_15m_confirmation_reason(signal, side)
         if waiting_reason:
