@@ -3,6 +3,7 @@ import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
+import MomentumExecutorPage from './pages/MomentumExecutorPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -26,6 +27,7 @@ export default function App() {
         </div>
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
+          <NavLink to="/momentum-executor" onClick={closeMenu}>Momentum Executor</NavLink>
           <NavLink to="/dashboard" onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
@@ -40,6 +42,7 @@ export default function App() {
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
+          <Route path="/momentum-executor" element={<MomentumExecutorPage />} />
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/settings" element={<AdminSettingsPage />} />
