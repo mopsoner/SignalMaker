@@ -76,6 +76,16 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "live_require_tp_sl": base_settings.live_require_tp_sl,
         "live_reconcile_enabled": base_settings.live_reconcile_enabled,
     },
+    "momentum": {
+        "momentum_executor_enabled": base_settings.momentum_executor_enabled,
+        "momentum_executor_mode": base_settings.momentum_executor_mode,
+        "momentum_executor_interval_sec": base_settings.momentum_executor_interval_sec,
+        "momentum_executor_api_base": base_settings.momentum_executor_api_base,
+        "momentum_executor_decision_path": base_settings.momentum_executor_decision_path,
+        "momentum_executor_quote_asset": base_settings.momentum_executor_quote_asset,
+        "momentum_executor_notional": base_settings.momentum_executor_notional,
+        "momentum_executor_apply_remote_run": base_settings.momentum_executor_apply_remote_run,
+    },
 }
 
 
@@ -90,6 +100,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             payload.setdefault(row.category, {})[row.key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
+        payload.setdefault("momentum", {})["momentum_executor_enabled"] = bool(payload.get("momentum", {}).get("momentum_executor_enabled", False))
+        payload.setdefault("momentum", {})["momentum_executor_apply_remote_run"] = bool(payload.get("momentum", {}).get("momentum_executor_apply_remote_run", False))
         return payload
     finally:
         if owns_session:
@@ -131,3 +143,7 @@ def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
             "price_near_extreme_pct": strategy["signal_price_near_extreme_pct"],
         },
     }
+
+
+def get_runtime_momentum_config(db: Session | None = None) -> dict[str, Any]:
+    return load_runtime_settings(db)["momentum"]
