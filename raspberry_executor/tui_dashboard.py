@@ -86,6 +86,19 @@ def box(stdscr, y, x, h, w, title=""):
         add(stdscr, y, x + 2, f" {title} ", curses.color_pair(3) | curses.A_BOLD)
 
 
+def _payload(event: dict) -> dict:
+    payload = event.get("payload") or {}
+    return payload if isinstance(payload, dict) else {"payload": payload}
+
+
+def latest_momentum_decision(events: list[dict]) -> dict | None:
+    for event in reversed(events):
+        if event.get("event_type") == "momentum_decision":
+            payload = _payload(event)
+            return {"timestamp": event.get("timestamp"), **payload}
+    return None
+
+
 def fetch_candidates(limit: int | None = None):
     try:
         settings = load_settings()
@@ -130,6 +143,7 @@ def snapshot():
     candidates, candidate_error = fetch_candidates(limit=limit)
     settings = load_settings()
     positions, pnl_summary = enrich_positions_with_pnl(list(state.open_positions().items()), settings)
+    events = list(reversed(state.events()[-160:]))
     now = datetime.now().astimezone()
     return {
         "settings": settings,
@@ -139,7 +153,8 @@ def snapshot():
         "shorts_enabled": shorts_enabled(),
         "positions": positions,
         "pnl_summary": pnl_summary,
-        "events": list(reversed(state.events()[-160:])),
+        "events": events,
+        "momentum": latest_momentum_decision(list(reversed(events))),
         "candidates": candidates,
         "candidate_error": candidate_error,
         "candidate_limit": limit,
@@ -158,6 +173,7 @@ def render_status(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Control")
     settings = data["settings"]
     total_pnl = data.get("pnl_summary", {}).get("total_pnl")
+    momentum = data.get("momentum") or {}
     rows = [
         ("Execution", data["execution_mode"]),
         ("Order quote", settings.order_quote_amount),
@@ -166,12 +182,39 @@ def render_status(stdscr, y, x, h, w, data):
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
         ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
         ("Candidates", f"limit={data.get('candidate_limit', '-')}") ,
+        ("Mom action", momentum.get("action", "-")),
+        ("Mom result", momentum.get("execution_result", "-")),
         ("Refresh", data["refreshed_at"]),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
         attr = curses.color_pair(2) if k == "PNL total" and _float(v, 0) >= 0 else curses.color_pair(5) if k == "PNL total" else curses.color_pair(3)
         add(stdscr, y + 1 + i, x + 2, f"{k:<12}", curses.color_pair(3))
         add(stdscr, y + 1 + i, x + 15, trunc(v, w - 18), attr)
+
+
+def render_momentum(stdscr, y, x, h, w, data):
+    box(stdscr, y, x, h, w, "Momentum Decision")
+    m = data.get("momentum") or {}
+    if not m:
+        add(stdscr, y + 1, x + 2, "No momentum decision yet", curses.color_pair(4))
+        return
+    decision = m.get("decision") if isinstance(m.get("decision"), dict) else {}
+    target = decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {}
+    rows = [
+        ("Action", m.get("action")),
+        ("Symbol", m.get("symbol")),
+        ("Buy", m.get("buy_symbol")),
+        ("Sell", m.get("sell_symbol")),
+        ("Trade", m.get("should_trade")),
+        ("Result", m.get("execution_result")),
+        ("Rank/Score", f"{safe(target.get('rank'))}/{safe(target.get('momentum_score'))}"),
+        ("Next", m.get("next_check_at")),
+        ("Reason", m.get("reason")),
+    ]
+    for i, (k, v) in enumerate(rows[: h - 2]):
+        color = curses.color_pair(2) if k == "Action" and str(v).upper() in {"BUY", "HOLD"} else curses.color_pair(5) if k == "Action" and str(v).upper() in {"SELL", "ROTATE"} else curses.color_pair(4)
+        add(stdscr, y + 1 + i, x + 2, f"{k:<10}", curses.color_pair(3))
+        add(stdscr, y + 1 + i, x + 14, trunc(v, w - 16), color)
 
 
 def render_positions(stdscr, y, x, h, w, data):
@@ -210,29 +253,16 @@ def render_candidates(stdscr, y, x, h, w, data):
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
-def _payload(event: dict) -> dict:
-    payload = event.get("payload") or {}
-    return payload if isinstance(payload, dict) else {"payload": payload}
-
-
 def _event_details(event: dict) -> str:
     payload = _payload(event)
     event_type = str(event.get("event_type") or "")
-    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
-    level_source = payload.get("oco_repair_level_source") or payload.get("levels") or {}
+    if event_type.startswith("momentum_"):
+        return "action={} sym={} buy={} sell={} result={} reason={}".format(payload.get("action"), payload.get("symbol"), payload.get("buy_symbol"), payload.get("sell_symbol"), payload.get("execution_result"), payload.get("reason") or payload.get("error"))
     parts = []
-    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl"), ("expected_quantity", "exp_qty"), ("available_base", "avail"), ("oco_order_list_id", "oco"), ("tp_order_id", "tp_id"), ("sl_order_id", "sl_id"), ("oco_repair_mode", "repair"), ("order_monitor_mode", "monitor")]:
+    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl")]:
         value = payload.get(key)
         if value is not None and value != "":
             parts.append(f"{label}={value}")
-    for key, label in [("symbol", "sym"), ("side", "side"), ("status", "status"), ("stop_price", "sl"), ("target_price", "tp")]:
-        value = candidate.get(key)
-        if value is not None and f"{label}=" not in " ".join(parts):
-            parts.append(f"cand_{label}={value}")
-    if isinstance(level_source, dict):
-        source = level_source.get("source") or level_source.get("source_candidate_id")
-        if source:
-            parts.append(f"level_src={source}")
     if not parts:
         parts.append(json.dumps(payload, ensure_ascii=False, sort_keys=True)[:300])
     return " ".join(parts)
@@ -249,7 +279,7 @@ def render_events(stdscr, y, x, h, w, data):
         event_type = str(event.get("event_type", ""))
         details = _event_details(event)
         text = (event_type + " " + details).lower()
-        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected", "mismatch"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled"]) else curses.color_pair(4)
+        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected", "mismatch"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled", "bought", "sold"]) else curses.color_pair(4)
         timestamp = fr_datetime(event.get("timestamp"))
         candidate_id = trunc(event.get("candidate_id"), 21)
         line = f"{timestamp:<14} {candidate_id:<21} {event_type} | {details}"
@@ -276,12 +306,17 @@ def draw(stdscr, data):
     bottom_y = top_h + 3
     bottom_h = height - bottom_y - 1
     left_w = max(28, min(width // 3, 46))
+    momentum_w = max(38, min(width // 3, 54))
+    pos_x = left_w + 2
+    pos_w = width - left_w - momentum_w - 5
+    mom_x = pos_x + pos_w + 2
     candidates_w = max(46, int(width * 0.42))
     events_x = candidates_w + 2
     events_w = width - events_x - 1
 
     render_status(stdscr, 2, 1, top_h, left_w, data)
-    render_positions(stdscr, 2, left_w + 2, top_h, width - left_w - 3, data)
+    render_positions(stdscr, 2, pos_x, top_h, max(36, pos_w), data)
+    render_momentum(stdscr, 2, mom_x, top_h, momentum_w, data)
     render_candidates(stdscr, bottom_y, 1, bottom_h, candidates_w, data)
     render_events(stdscr, bottom_y, events_x, bottom_h, events_w, data)
     render_footer(stdscr, height, width, data)
