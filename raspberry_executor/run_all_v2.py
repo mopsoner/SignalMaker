@@ -7,6 +7,7 @@ from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import execution_mode, margin_enabled
+from raspberry_executor.momentum_decision_feed import run_loop as momentum_decision_loop
 from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.settings_bootstrap import bootstrap_settings
 from raspberry_executor.spot_executor_v2 import main as spot_executor_main
@@ -49,6 +50,9 @@ def main() -> None:
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")
+
+    threading.Thread(target=momentum_decision_loop, daemon=True).start()
+    logger.info("momentum decision thread started")
 
     threading.Thread(target=order_monitor_loop, daemon=True).start()
     logger.info("order monitor thread started for Binance position sync")
