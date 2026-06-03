@@ -54,6 +54,18 @@ finally:
     db.close()
 PY
     ;;
+  momentum-executor-once)
+    python - <<'PY'
+from app.db.session import SessionLocal
+from app.services.momentum_executor_service import MomentumExecutorService
+
+db = SessionLocal()
+try:
+    print(MomentumExecutorService(db).run_once(force=True))
+finally:
+    db.close()
+PY
+    ;;
   pipeline-loop)
     python -m scripts.run_pipeline_loop
     ;;
@@ -63,8 +75,14 @@ PY
   scheduler-loop)
     python -m scripts.run_scheduler_loop
     ;;
+  momentum-executor-loop)
+    python -m scripts.run_momentum_executor_loop
+    ;;
+  momentum-executor-tui)
+    python -m scripts.run_momentum_executor_tui
+    ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|momentum-executor-once|pipeline-loop|executor-loop|scheduler-loop|momentum-executor-loop|momentum-executor-tui]"
     exit 1
     ;;
 esac
