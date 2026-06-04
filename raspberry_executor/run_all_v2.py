@@ -3,6 +3,7 @@ import threading
 
 from raspberry_executor.candidate_status_sync import run_loop as candidate_status_sync_loop
 from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
+from raspberry_executor.candle_backfill_4h import run_loop as candle_backfill_4h_loop
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
@@ -50,6 +51,9 @@ def main() -> None:
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")
+
+    threading.Thread(target=candle_backfill_4h_loop, daemon=True).start()
+    logger.info("optional 4h backfill thread started")
 
     threading.Thread(target=momentum_decision_loop, daemon=True).start()
     logger.info("momentum decision thread started")
