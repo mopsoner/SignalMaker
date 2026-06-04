@@ -12,6 +12,8 @@ from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-momentum-decision")
 
+DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
+
 
 def _bool(value: str | None, default: bool = True) -> bool:
     if value is None:
@@ -35,24 +37,60 @@ def _float_env(name: str, default: float) -> float:
 
 def _url(base_url: str, path: str) -> str:
     base = base_url.rstrip("/")
+    if not path.startswith("/"):
+        path = "/" + path
     if base.endswith("/api/v1") and path.startswith("/api/v1"):
-        return f"{base}{path[len('/api/v1'):] }"
+        return f"{base}{path[len('/api/v1'):] }".strip()
     return f"{base}{path}"
+
+
+def _decision_path() -> str:
+    # Keep env override for emergency rollback, but default to the current main API contract.
+    return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
+
+
+def _read_json_response(response: requests.Response) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            "momentum_decision_non_json_response "
+            f"status={response.status_code} content_type={response.headers.get('content-type')} "
+            f"url={response.url} body={response.text[:500]!r}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
+    return data
 
 
 def fetch_decision() -> dict[str, Any]:
     settings = load_settings()
-    params = {
-        "cadence_hours": _int_env("MOMENTUM_DECISION_CADENCE_HOURS", 4),
-        "starting_capital": _float_env("MOMENTUM_DECISION_STARTING_CAPITAL", 1000.0),
-        "min_momentum_score": _float_env("MOMENTUM_DECISION_MIN_SCORE", 0.0),
-    }
-    response = requests.get(_url(settings.signalmaker_base_url, "/api/v1/momentum/decision"), params=params, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    if not isinstance(data, dict):
-        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}")
-    return data
+    response = requests.get(
+        _url(settings.signalmaker_base_url, _decision_path()),
+        timeout=30,
+        headers={"accept": "application/json", "cache-control": "no-cache"},
+    )
+    data = _read_json_response(response)
+    if not response.ok:
+        raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
+    return normalize_decision(data)
+
+
+def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(decision)
+    contract = payload.get("executor_contract")
+    if isinstance(contract, dict):
+        for key in ("action", "raw_action", "symbol", "buy_symbol", "sell_symbol", "reason", "should_trade", "order_sequence"):
+            payload.setdefault(key, contract.get(key))
+    payload.setdefault("mode", "momentum_rotation")
+    payload.setdefault("action", "WAIT")
+    payload["action"] = str(payload.get("action") or "WAIT").upper()
+    payload.setdefault("symbol", payload.get("buy_symbol") or payload.get("sell_symbol"))
+    payload.setdefault("buy_symbol", payload.get("symbol") if payload["action"] in {"BUY", "ROTATE"} else None)
+    payload.setdefault("sell_symbol", payload.get("symbol") if payload["action"] == "SELL" else None)
+    payload.setdefault("should_trade", payload["action"] in {"BUY", "SELL", "ROTATE"})
+    payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
+    return payload
 
 
 def _candidate_id(symbol: str) -> str:
@@ -189,7 +227,7 @@ def run_loop() -> None:
         logger.info("momentum decision feed disabled")
         return
     poll_seconds = max(30, _int_env("MOMENTUM_DECISION_POLL_SECONDS", 60))
-    logger.info("momentum decision feed started poll_seconds=%s execute=%s", poll_seconds, os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED", "true"))
+    logger.info("momentum decision feed started poll_seconds=%s execute=%s path=%s", poll_seconds, os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED", "true"), _decision_path())
     while True:
         try:
             output = run_once()
