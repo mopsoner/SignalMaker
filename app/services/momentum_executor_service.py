@@ -17,6 +17,8 @@ from app.services.runtime_settings import load_runtime_settings
 class MomentumExecutorService:
     """Raspberry executor bridge for remote momentum rotation decisions."""
 
+    REQUIRED_DECISION_KEYS = {"action", "symbol", "buy_symbol", "sell_symbol", "reason", "target_asset", "current_position"}
+
     def __init__(self, db: Session) -> None:
         self.db = db
         self.binance = BinanceTradingService()
@@ -26,11 +28,13 @@ class MomentumExecutorService:
 
     def config(self) -> dict[str, Any]:
         payload = load_runtime_settings(self.db).get("momentum", {})
+        api_base = str(payload.get("momentum_executor_api_base", settings.momentum_executor_api_base) or settings.momentum_executor_api_base)
+        api_base = api_base.replace("mysginalmaker", "mysignalmaker")
         return {
             "momentum_executor_enabled": bool(payload.get("momentum_executor_enabled", settings.momentum_executor_enabled)),
             "momentum_executor_mode": str(payload.get("momentum_executor_mode", settings.momentum_executor_mode) or "paper"),
             "momentum_executor_interval_sec": int(payload.get("momentum_executor_interval_sec", settings.momentum_executor_interval_sec) or 30),
-            "momentum_executor_api_base": str(payload.get("momentum_executor_api_base", settings.momentum_executor_api_base) or settings.momentum_executor_api_base),
+            "momentum_executor_api_base": api_base,
             "momentum_executor_decision_path": str(payload.get("momentum_executor_decision_path", settings.momentum_executor_decision_path) or settings.momentum_executor_decision_path),
             "momentum_executor_quote_asset": str(payload.get("momentum_executor_quote_asset", settings.momentum_executor_quote_asset) or "USDC"),
             "momentum_executor_notional": float(payload.get("momentum_executor_notional", settings.momentum_executor_notional) or 25.0),
@@ -45,12 +49,40 @@ class MomentumExecutorService:
             path = "/" + path
         return base + path
 
-    def read_decision(self) -> dict[str, Any]:
-        response = requests.get(self.decision_url(), timeout=20)
-        response.raise_for_status()
-        payload = response.json()
+    def _response_payload(self, response: requests.Response) -> dict[str, Any]:
+        content_type = response.headers.get("content-type", "")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body = response.text[:500]
+            raise RuntimeError(f"Remote momentum endpoint did not return JSON. status={response.status_code} content_type={content_type} body={body!r}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Remote momentum endpoint returned non-object JSON: {type(payload).__name__}")
+        return payload
+
+    def _normalize_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "detail" in payload and "action" not in payload:
+            raise RuntimeError(f"Remote momentum endpoint returned error detail: {payload.get('detail')}")
+        payload = dict(payload)
+        payload.setdefault("action", "WAIT")
+        payload["action"] = str(payload.get("action") or "WAIT").upper()
+        payload.setdefault("symbol", payload.get("buy_symbol") or payload.get("sell_symbol"))
+        payload.setdefault("buy_symbol", payload.get("symbol") if payload["action"] in {"BUY", "ROTATE"} else None)
+        payload.setdefault("sell_symbol", payload.get("symbol") if payload["action"] == "SELL" else None)
+        payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
+        payload.setdefault("target_asset", None)
+        payload.setdefault("current_position", None)
+        payload.setdefault("should_trade", payload["action"] in {"BUY", "SELL", "ROTATE"})
+        payload.setdefault("mode", "momentum_rotation")
         payload.setdefault("read_at", datetime.now(timezone.utc).isoformat())
         return payload
+
+    def read_decision(self) -> dict[str, Any]:
+        response = requests.get(self.decision_url(), timeout=20, headers={"accept": "application/json"})
+        payload = self._response_payload(response)
+        if not response.ok:
+            raise RuntimeError(f"Remote momentum endpoint error HTTP {response.status_code}: {payload}")
+        return self._normalize_decision(payload)
 
     def current_momentum_position(self):
         rows = self.positions.list_positions(limit=100, status="open")
@@ -65,7 +97,7 @@ class MomentumExecutorService:
         try:
             decision = self.read_decision()
         except Exception as exc:
-            decision = {"action": "ERROR", "reason": str(exc)}
+            decision = {"action": "ERROR", "reason": str(exc), "url": self.decision_url()}
         position = self.current_momentum_position()
         return {
             "enabled": cfg["momentum_executor_enabled"],
@@ -100,6 +132,8 @@ class MomentumExecutorService:
             sold = self._sell_local_position(local_position, mode=mode, reason=decision.get("reason") or "momentum_rotate_sell")
             bought = self._buy_symbol(str(decision.get("buy_symbol") or decision.get("symbol")), mode=mode, reason=decision.get("reason") or "momentum_rotate_buy", cfg=cfg)
             return {"action": "ROTATE", "decision": decision, "sold": sold, "bought": bought}
+        if action == "ERROR":
+            return {"action": "ERROR", "decision": decision, "reason": decision.get("reason")}
         return {"action": "UNKNOWN", "decision": decision, "reason": f"Unsupported action {action}"}
 
     def _buy_symbol(self, symbol: str, *, mode: str, reason: str, cfg: dict[str, Any]) -> dict[str, Any]:
