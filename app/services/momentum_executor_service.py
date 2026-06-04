@@ -28,8 +28,7 @@ class MomentumExecutorService:
 
     def config(self) -> dict[str, Any]:
         payload = load_runtime_settings(self.db).get("momentum", {})
-        api_base = str(payload.get("momentum_executor_api_base", settings.momentum_executor_api_base) or settings.momentum_executor_api_base)
-        api_base = api_base.replace("mysginalmaker", "mysignalmaker")
+        api_base = str(payload.get("momentum_executor_api_base", settings.momentum_executor_api_base) or settings.momentum_executor_api_base).strip()
         return {
             "momentum_executor_enabled": bool(payload.get("momentum_executor_enabled", settings.momentum_executor_enabled)),
             "momentum_executor_mode": str(payload.get("momentum_executor_mode", settings.momentum_executor_mode) or "paper"),
@@ -64,6 +63,10 @@ class MomentumExecutorService:
         if "detail" in payload and "action" not in payload:
             raise RuntimeError(f"Remote momentum endpoint returned error detail: {payload.get('detail')}")
         payload = dict(payload)
+        contract = payload.get("executor_contract")
+        if isinstance(contract, dict):
+            for key in ("action", "raw_action", "symbol", "buy_symbol", "sell_symbol", "reason", "should_trade", "order_sequence"):
+                payload.setdefault(key, contract.get(key))
         payload.setdefault("action", "WAIT")
         payload["action"] = str(payload.get("action") or "WAIT").upper()
         payload.setdefault("symbol", payload.get("buy_symbol") or payload.get("sell_symbol"))
@@ -78,7 +81,7 @@ class MomentumExecutorService:
         return payload
 
     def read_decision(self) -> dict[str, Any]:
-        response = requests.get(self.decision_url(), timeout=20, headers={"accept": "application/json"})
+        response = requests.get(self.decision_url(), timeout=20, headers={"accept": "application/json", "cache-control": "no-cache"})
         payload = self._response_payload(response)
         if not response.ok:
             raise RuntimeError(f"Remote momentum endpoint error HTTP {response.status_code}: {payload}")
