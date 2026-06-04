@@ -45,7 +45,6 @@ def _url(base_url: str, path: str) -> str:
 
 
 def _decision_path() -> str:
-    # Keep env override for emergency rollback, but default to the current main API contract.
     return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
 
 
@@ -120,26 +119,130 @@ def _already_have(binance: BinanceClient, rules: BinanceSymbolRules, state: Stat
     return False, f"wallet_value_below_threshold:{base}:value={value:.4f}"
 
 
-def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any]) -> str:
+def _wait_for_quote_increase(binance: BinanceClient, quote: str, before_quote: float, *, attempts: int, sleep_sec: float) -> float:
+    if binance.dry_run:
+        return before_quote
+    last = before_quote
+    for _ in range(max(1, attempts)):
+        time.sleep(max(0.1, sleep_sec))
+        last = binance.free_balance(quote)
+        if last > before_quote:
+            return last
+    return last
+
+
+def _wallet_value(binance: BinanceClient, rules: BinanceSymbolRules, symbol: str) -> tuple[str, float, float, float]:
+    base = rules.base_asset(symbol)
+    qty = binance.free_balance(base)
+    price = binance.current_price(symbol)
+    return base, qty, price, qty * price
+
+
+def _safe_quote_notional(settings, binance: BinanceClient, quote: str, desired: float) -> tuple[float, float]:
+    desired = max(0.0, float(desired or 0.0))
+    if binance.dry_run:
+        return desired, desired
+    free_quote = binance.free_balance(quote)
+    reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
+    safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
+    usable = max(0.0, (free_quote - reserve) * safety_ratio)
+    return min(desired, usable), free_quote
+
+
+def _market_sell_quantity(rules: BinanceSymbolRules, symbol: str, qty: float, price: float) -> str | None:
+    try:
+        normalized = rules.normalize_market_quantity(symbol, qty)
+        rules.ensure_exit_notional(symbol, normalized, price, label="momentum_sell")
+        return normalized
+    except Exception:
+        return None
+
+
+def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
+    """Sell with wallet confirmation and chunk retries before any rotation buy."""
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
+    quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
+    base, qty, price, value = _wallet_value(binance, rules, symbol)
+    dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
+    max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
+    chunk_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_SELL_CHUNK_RATIO", 0.995)))
+    wait_attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
+    wait_sleep = max(0.2, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
+    details: list[dict[str, Any]] = []
+
+    if qty <= 0 or value < dust_value:
+        state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision})
+        return f"sell_confirmed:no_balance:{base}:value={value:.4f}"
+
+    for attempt in range(1, max_attempts + 1):
+        before_quote = binance.free_balance(quote) if not binance.dry_run else 0.0
+        base, qty, price, value = _wallet_value(binance, rules, symbol)
+        if qty <= 0 or value < dust_value:
+            state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision})
+            return f"sell_confirmed:{symbol}:remaining_value={value:.4f}"
+
+        sell_qty = _market_sell_quantity(rules, symbol, qty * chunk_ratio, price) or _market_sell_quantity(rules, symbol, qty, price)
+        if sell_qty is None:
+            message = f"sell_quantity_not_tradeable:{symbol}:qty={qty}:value={value:.4f}"
+            state.add_event(cid, "momentum_sell_not_tradeable", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision})
+            if require_confirmed:
+                raise RuntimeError(message)
+            return message
+
+        try:
+            order = binance.place_market_entry(symbol, "short", sell_qty)
+            after_quote = _wait_for_quote_increase(binance, quote, before_quote, attempts=wait_attempts, sleep_sec=wait_sleep) if not binance.dry_run else before_quote
+            after_base, after_qty, after_price, after_value = _wallet_value(binance, rules, symbol)
+            detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order}
+            details.append(detail)
+            state.add_event(cid, "momentum_sell_attempt", {"decision": decision, **detail})
+            if binance.dry_run or after_value < dust_value:
+                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details})
+                state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote})
+                return f"sell_confirmed:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
+        except Exception as exc:
+            details.append({"attempt": attempt, "symbol": symbol, "qty": sell_qty, "error": str(exc)})
+            state.add_event(cid, "momentum_sell_attempt_failed", {"symbol": symbol, "base": base, "qty": sell_qty, "attempt": attempt, "error": str(exc), "decision": decision})
+            if attempt >= max_attempts:
+                if require_confirmed:
+                    raise RuntimeError(f"sell_not_confirmed:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
+                return f"sell_failed:{symbol}:{exc}"
+            time.sleep(wait_sleep)
+
+    base, qty, price, value = _wallet_value(binance, rules, symbol)
+    if value < dust_value:
+        state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision})
+        return f"sell_confirmed:{symbol}:remaining_value={value:.4f}"
+    message = f"sell_not_confirmed:{symbol}:remaining_value={value:.4f}:attempts={max_attempts}"
+    state.add_event(cid, "momentum_sell_not_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision})
+    if require_confirmed:
+        raise RuntimeError(message)
+    return message
+
+
+def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, use_available_quote: bool = True) -> str:
+    symbol = symbol.upper()
+    cid = _candidate_id(symbol)
+    quote = _quote_asset(symbol, settings.quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
     min_value = max(5.0, float(settings.order_quote_amount) * 0.5)
     already, reason = _already_have(binance, rules, state, symbol, min_value)
     if already:
         state.add_event(cid, "momentum_buy_skipped_already_have", {"symbol": symbol, "reason": reason, "decision": decision})
         return f"already_have:{reason}"
 
-    quote = _quote_asset(symbol, settings.quote_assets)
-    if quote and not binance.dry_run:
-        free_quote = binance.free_balance(quote)
-        if free_quote < float(settings.order_quote_amount):
-            state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "decision": decision})
-            return f"quote_balance_wait:{quote}:{free_quote}"
+    desired_notional = float(settings.order_quote_amount)
+    notional, free_quote = _safe_quote_notional(settings, binance, quote, desired_notional) if use_available_quote else (desired_notional, desired_notional)
+    min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
+    if notional < min_buy_notional:
+        state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
+        return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"
 
     price = binance.current_price(symbol)
-    qty = rules.quantity_from_quote(symbol, float(settings.order_quote_amount), price, market=True)
+    qty = rules.quantity_from_quote(symbol, notional, price, market=True)
     order = binance.place_market_entry(symbol, "long", qty)
     fill_price = binance.average_fill_price(order, fallback=price) or price
+    acquired = float(qty) if binance.dry_run else binance.free_balance(rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {
         "candidate_id": cid,
@@ -153,24 +256,12 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
         "entry_order_id": order.get("orderId"),
         "momentum_decision": decision,
         "entry_payload": order,
+        "notional_used": notional,
+        "quote_asset": quote,
+        "confirmed_base_balance": acquired,
     })
-    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "order": order, "decision": decision})
-    return f"bought:{symbol}:qty={qty}"
-
-
-def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any]) -> str:
-    symbol = symbol.upper()
-    cid = _candidate_id(symbol)
-    base = rules.base_asset(symbol)
-    qty = binance.free_balance(base)
-    if qty <= 0:
-        state.add_event(cid, "momentum_sell_skipped_no_balance", {"symbol": symbol, "base": base, "decision": decision})
-        return f"no_balance:{base}"
-    market_qty = rules.normalize_market_quantity(symbol, qty)
-    order = binance.place_market_entry(symbol, "short", market_qty)
-    state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": market_qty, "order": order, "decision": decision})
-    state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": market_qty, "order": order, "decision": decision})
-    return f"sold:{symbol}:qty={market_qty}"
+    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": notional, "quote": quote, "confirmed_base_balance": acquired, "order": order, "decision": decision})
+    return f"bought:{symbol}:qty={qty}:notional={notional:.4f}"
 
 
 def execute_decision(decision: dict[str, Any]) -> str:
@@ -188,12 +279,12 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if not should_trade or action in {"WAIT", "HOLD"}:
         return f"wait:{action}"
     if action == "BUY" and buy:
-        return buy_symbol(settings, binance, rules, state, buy, decision)
+        return buy_symbol(settings, binance, rules, state, buy, decision, use_available_quote=True)
     if action == "SELL" and sell:
-        return sell_symbol(binance, rules, state, sell, decision)
+        return sell_symbol(binance, rules, state, sell, decision, require_confirmed=True)
     if action == "ROTATE":
-        sell_result = sell_symbol(binance, rules, state, sell, decision) if sell else "no_sell_symbol"
-        buy_result = buy_symbol(settings, binance, rules, state, buy, decision) if buy else "no_buy_symbol"
+        sell_result = sell_symbol(binance, rules, state, sell, decision, require_confirmed=True) if sell else "no_sell_symbol"
+        buy_result = buy_symbol(settings, binance, rules, state, buy, decision, use_available_quote=True) if buy else "no_buy_symbol"
         return f"rotate:{sell_result}:{buy_result}"
     return f"unsupported_action:{action}"
 
