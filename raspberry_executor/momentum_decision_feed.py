@@ -13,6 +13,7 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-momentum-decision")
 
 DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
+DEFAULT_MOMENTUM_RANKING_PATH = "/api/v1/momentum"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -48,7 +49,11 @@ def _decision_path() -> str:
     return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
 
 
-def _read_json_response(response: requests.Response) -> dict[str, Any]:
+def _ranking_path() -> str:
+    return os.getenv("MOMENTUM_RANKING_PATH", DEFAULT_MOMENTUM_RANKING_PATH) or DEFAULT_MOMENTUM_RANKING_PATH
+
+
+def _read_json_response(response: requests.Response) -> dict[str, Any] | list[Any]:
     try:
         data = response.json()
     except ValueError as exc:
@@ -57,8 +62,6 @@ def _read_json_response(response: requests.Response) -> dict[str, Any]:
             f"status={response.status_code} content_type={response.headers.get('content-type')} "
             f"url={response.url} body={response.text[:500]!r}"
         ) from exc
-    if not isinstance(data, dict):
-        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
     return data
 
 
@@ -72,7 +75,26 @@ def fetch_decision() -> dict[str, Any]:
     data = _read_json_response(response)
     if not response.ok:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
     return normalize_decision(data)
+
+
+def fetch_momentum_rankings(limit: int | None = None) -> list[dict[str, Any]]:
+    settings = load_settings()
+    fetch_limit = int(limit or _int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 30))
+    response = requests.get(
+        _url(settings.signalmaker_base_url, _ranking_path()),
+        params={"limit": fetch_limit},
+        timeout=30,
+        headers={"accept": "application/json", "cache-control": "no-cache"},
+    )
+    data = _read_json_response(response)
+    if not response.ok:
+        raise RuntimeError(f"momentum_ranking_http_error status={response.status_code} url={response.url} payload={data}")
+    if not isinstance(data, list):
+        raise RuntimeError(f"unexpected_momentum_ranking_response:{type(data).__name__}:url={response.url}")
+    return [row for row in data if isinstance(row, dict)]
 
 
 def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
@@ -156,6 +178,56 @@ def _market_sell_quantity(rules: BinanceSymbolRules, symbol: str, qty: float, pr
         return normalized
     except Exception:
         return None
+
+
+def _ranking_symbol(row: dict[str, Any]) -> str:
+    return str(row.get("symbol") or "").upper()
+
+
+def _fallback_row_is_eligible(row: dict[str, Any]) -> bool:
+    min_score = _float_env("MOMENTUM_DECISION_FALLBACK_MIN_SCORE", 0.0)
+    symbol = _ranking_symbol(row)
+    if not symbol:
+        return False
+    if float(row.get("momentum_score") or 0.0) < min_score:
+        return False
+    if row.get("data_quality") not in (None, "complete"):
+        return False
+    if row.get("structure_15m_status") in {"broken_bearish", "invalid", "opposed"}:
+        return False
+    if row.get("in_entry_pool") is False:
+        return False
+    entry_status = str(row.get("entry_status") or "")
+    if entry_status and not entry_status.startswith("ready"):
+        return False
+    return True
+
+
+def fallback_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    exclude = {item.upper() for item in (exclude or set()) if item}
+    rows: list[dict[str, Any]] = []
+    primary_symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
+    primary = decision.get("target_asset")
+    if isinstance(primary, dict) and _ranking_symbol(primary):
+        rows.append(primary)
+    elif primary_symbol:
+        rows.append({"symbol": primary_symbol, "source": "decision_primary"})
+
+    try:
+        rows.extend(fetch_momentum_rankings())
+    except Exception as exc:
+        StateStore().add_event("momentum-decision", "momentum_fallback_ranking_error", {"error": str(exc), "decision": decision})
+
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        symbol = _ranking_symbol(row)
+        if not symbol or symbol in seen or symbol in exclude:
+            continue
+        if row.get("source") == "decision_primary" or _fallback_row_is_eligible(row):
+            seen.add(symbol)
+            out.append(row)
+    return out
 
 
 def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
@@ -264,6 +336,36 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
     return f"bought:{symbol}:qty={qty}:notional={notional:.4f}"
 
 
+def _buy_result_ok(result: str) -> bool:
+    return str(result).startswith("bought:") or str(result).startswith("already_have:")
+
+
+def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
+    if not _bool(os.getenv("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
+        symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
+        return buy_symbol(settings, binance, rules, state, symbol, decision, use_available_quote=True)
+
+    attempts: list[dict[str, Any]] = []
+    max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
+    candidates = fallback_candidates(decision, exclude=exclude)
+    for row in candidates[:max_attempts]:
+        symbol = _ranking_symbol(row)
+        trial_decision = {**decision, "buy_symbol": symbol, "symbol": symbol, "fallback_target_asset": row}
+        try:
+            result = buy_symbol(settings, binance, rules, state, symbol, trial_decision, use_available_quote=True)
+            attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score")})
+            if _buy_result_ok(result):
+                state.add_event("momentum-decision", "momentum_fallback_buy_selected", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
+                return f"fallback_buy:{symbol}:{result}"
+        except Exception as exc:
+            attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score")})
+            StateStore().add_event(_candidate_id(symbol), "momentum_fallback_buy_failed", {"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score"), "decision": decision})
+            continue
+
+    state.add_event("momentum-decision", "momentum_fallback_buy_exhausted", {"attempts": attempts, "decision": decision})
+    return f"fallback_buy_exhausted:attempts={len(attempts)}"
+
+
 def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
@@ -279,12 +381,12 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if not should_trade or action in {"WAIT", "HOLD"}:
         return f"wait:{action}"
     if action == "BUY" and buy:
-        return buy_symbol(settings, binance, rules, state, buy, decision, use_available_quote=True)
+        return buy_best_available(settings, binance, rules, state, decision, exclude={sell})
     if action == "SELL" and sell:
         return sell_symbol(binance, rules, state, sell, decision, require_confirmed=True)
     if action == "ROTATE":
         sell_result = sell_symbol(binance, rules, state, sell, decision, require_confirmed=True) if sell else "no_sell_symbol"
-        buy_result = buy_symbol(settings, binance, rules, state, buy, decision, use_available_quote=True) if buy else "no_buy_symbol"
+        buy_result = buy_best_available(settings, binance, rules, state, decision, exclude={sell}) if buy else "no_buy_symbol"
         return f"rotate:{sell_result}:{buy_result}"
     return f"unsupported_action:{action}"
 
