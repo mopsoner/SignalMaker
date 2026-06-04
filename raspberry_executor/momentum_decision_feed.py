@@ -13,7 +13,6 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-momentum-decision")
 
 DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
-DEFAULT_MOMENTUM_RANKING_PATH = "/api/v1/momentum"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -49,11 +48,7 @@ def _decision_path() -> str:
     return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
 
 
-def _ranking_path() -> str:
-    return os.getenv("MOMENTUM_RANKING_PATH", DEFAULT_MOMENTUM_RANKING_PATH) or DEFAULT_MOMENTUM_RANKING_PATH
-
-
-def _read_json_response(response: requests.Response) -> dict[str, Any] | list[Any]:
+def _read_json_response(response: requests.Response) -> dict[str, Any]:
     try:
         data = response.json()
     except ValueError as exc:
@@ -62,6 +57,8 @@ def _read_json_response(response: requests.Response) -> dict[str, Any] | list[An
             f"status={response.status_code} content_type={response.headers.get('content-type')} "
             f"url={response.url} body={response.text[:500]!r}"
         ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
     return data
 
 
@@ -75,33 +72,14 @@ def fetch_decision() -> dict[str, Any]:
     data = _read_json_response(response)
     if not response.ok:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
-    if not isinstance(data, dict):
-        raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
     return normalize_decision(data)
-
-
-def fetch_momentum_rankings(limit: int | None = None) -> list[dict[str, Any]]:
-    settings = load_settings()
-    fetch_limit = int(limit or _int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 30))
-    response = requests.get(
-        _url(settings.signalmaker_base_url, _ranking_path()),
-        params={"limit": fetch_limit},
-        timeout=30,
-        headers={"accept": "application/json", "cache-control": "no-cache"},
-    )
-    data = _read_json_response(response)
-    if not response.ok:
-        raise RuntimeError(f"momentum_ranking_http_error status={response.status_code} url={response.url} payload={data}")
-    if not isinstance(data, list):
-        raise RuntimeError(f"unexpected_momentum_ranking_response:{type(data).__name__}:url={response.url}")
-    return [row for row in data if isinstance(row, dict)]
 
 
 def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     payload = dict(decision)
     contract = payload.get("executor_contract")
     if isinstance(contract, dict):
-        for key in ("action", "raw_action", "symbol", "buy_symbol", "sell_symbol", "reason", "should_trade", "order_sequence"):
+        for key in ("action", "raw_action", "symbol", "buy_symbol", "sell_symbol", "reason", "should_trade", "order_sequence", "buy_candidates", "fallback_policy"):
             payload.setdefault(key, contract.get(key))
     payload.setdefault("mode", "momentum_rotation")
     payload.setdefault("action", "WAIT")
@@ -111,6 +89,8 @@ def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     payload.setdefault("sell_symbol", payload.get("symbol") if payload["action"] == "SELL" else None)
     payload.setdefault("should_trade", payload["action"] in {"BUY", "SELL", "ROTATE"})
     payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
+    payload.setdefault("buy_candidates", [])
+    payload.setdefault("fallback_policy", {})
     return payload
 
 
@@ -180,53 +160,40 @@ def _market_sell_quantity(rules: BinanceSymbolRules, symbol: str, qty: float, pr
         return None
 
 
-def _ranking_symbol(row: dict[str, Any]) -> str:
-    return str(row.get("symbol") or "").upper()
+def _candidate_symbol(row: dict[str, Any]) -> str:
+    return str(row.get("symbol") or row.get("buy_symbol") or "").upper()
 
 
-def _fallback_row_is_eligible(row: dict[str, Any]) -> bool:
-    min_score = _float_env("MOMENTUM_DECISION_FALLBACK_MIN_SCORE", 0.0)
-    symbol = _ranking_symbol(row)
-    if not symbol:
-        return False
-    if float(row.get("momentum_score") or 0.0) < min_score:
-        return False
-    if row.get("data_quality") not in (None, "complete"):
-        return False
-    if row.get("structure_15m_status") in {"broken_bearish", "invalid", "opposed"}:
-        return False
-    if row.get("in_entry_pool") is False:
-        return False
-    entry_status = str(row.get("entry_status") or "")
-    if entry_status and not entry_status.startswith("ready"):
-        return False
-    return True
+def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    """Return the ordered buy candidates embedded in the persisted main decision.
 
-
-def fallback_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    The Raspberry must not fetch /api/v1/momentum during execution. Main already
+    validates and persists buy_candidates during the momentum pipeline.
+    """
     exclude = {item.upper() for item in (exclude or set()) if item}
+    contract = decision.get("executor_contract") if isinstance(decision.get("executor_contract"), dict) else {}
+    raw_candidates = decision.get("buy_candidates") or contract.get("buy_candidates") or []
     rows: list[dict[str, Any]] = []
+    if isinstance(raw_candidates, list):
+        rows.extend([row for row in raw_candidates if isinstance(row, dict)])
+
+    # Backward compatibility: if main has not produced v3 buy_candidates yet,
+    # keep the primary buy symbol only. No ranking endpoint fallback is used.
     primary_symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
     primary = decision.get("target_asset")
-    if isinstance(primary, dict) and _ranking_symbol(primary):
+    if not rows and isinstance(primary, dict) and _candidate_symbol(primary):
         rows.append(primary)
-    elif primary_symbol:
-        rows.append({"symbol": primary_symbol, "source": "decision_primary"})
-
-    try:
-        rows.extend(fetch_momentum_rankings())
-    except Exception as exc:
-        StateStore().add_event("momentum-decision", "momentum_fallback_ranking_error", {"error": str(exc), "decision": decision})
+    elif not rows and primary_symbol:
+        rows.append({"symbol": primary_symbol, "source": "decision_primary_legacy"})
 
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for row in rows:
-        symbol = _ranking_symbol(row)
+        symbol = _candidate_symbol(row)
         if not symbol or symbol in seen or symbol in exclude:
             continue
-        if row.get("source") == "decision_primary" or _fallback_row_is_eligible(row):
-            seen.add(symbol)
-            out.append(row)
+        seen.add(symbol)
+        out.append(row)
     return out
 
 
@@ -347,19 +314,23 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
 
     attempts: list[dict[str, Any]] = []
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
-    candidates = fallback_candidates(decision, exclude=exclude)
+    candidates = decision_buy_candidates(decision, exclude=exclude)
+    if not candidates:
+        state.add_event("momentum-decision", "momentum_fallback_no_decision_candidates", {"decision": decision})
+        return "fallback_buy_exhausted:no_decision_candidates"
+
     for row in candidates[:max_attempts]:
-        symbol = _ranking_symbol(row)
+        symbol = _candidate_symbol(row)
         trial_decision = {**decision, "buy_symbol": symbol, "symbol": symbol, "fallback_target_asset": row}
         try:
             result = buy_symbol(settings, binance, rules, state, symbol, trial_decision, use_available_quote=True)
-            attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score")})
+            attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score"), "source": row.get("source")})
             if _buy_result_ok(result):
                 state.add_event("momentum-decision", "momentum_fallback_buy_selected", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
                 return f"fallback_buy:{symbol}:{result}"
         except Exception as exc:
-            attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score")})
-            StateStore().add_event(_candidate_id(symbol), "momentum_fallback_buy_failed", {"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score"), "decision": decision})
+            attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score"), "source": row.get("source")})
+            state.add_event(_candidate_id(symbol), "momentum_fallback_buy_failed", {"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score"), "source": row.get("source"), "decision": decision})
             continue
 
     state.add_event("momentum-decision", "momentum_fallback_buy_exhausted", {"attempts": attempts, "decision": decision})
@@ -404,6 +375,8 @@ def record_decision(decision: dict[str, Any], execution_result: str | None = Non
         "reason": decision.get("reason"),
         "due_now": decision.get("due_now"),
         "next_check_at": decision.get("next_check_at"),
+        "buy_candidates_count": len(decision_buy_candidates(decision)),
+        "fallback_policy": decision.get("fallback_policy"),
         "decision": decision,
     })
 
@@ -425,7 +398,7 @@ def run_loop() -> None:
         try:
             output = run_once()
             decision = output["decision"]
-            logger.info("momentum decision action=%s symbol=%s should_trade=%s result=%s", decision.get("action"), decision.get("symbol"), decision.get("should_trade"), output.get("execution_result"))
+            logger.info("momentum decision action=%s symbol=%s should_trade=%s candidates=%s result=%s", decision.get("action"), decision.get("symbol"), decision.get("should_trade"), len(decision_buy_candidates(decision)), output.get("execution_result"))
         except Exception as exc:
             logger.error("momentum decision feed error=%s", str(exc))
             try:
