@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     momentum_executor_enabled: bool = Field(default=False, alias="MOMENTUM_EXECUTOR_ENABLED")
     momentum_executor_mode: str = Field(default="paper", alias="MOMENTUM_EXECUTOR_MODE")
     momentum_executor_interval_sec: int = Field(default=30, alias="MOMENTUM_EXECUTOR_INTERVAL_SEC")
-    momentum_executor_api_base: str = Field(default="https://mysignalmaker.replit.app", alias="MOMENTUM_EXECUTOR_API_BASE")
+    momentum_executor_api_base: str = Field(default="https://mysginalmaker.replit.app", alias="MOMENTUM_EXECUTOR_API_BASE")
     momentum_executor_decision_path: str = Field(default="/api/v1/momentum-engine/decision", alias="MOMENTUM_EXECUTOR_DECISION_PATH")
     momentum_executor_quote_asset: str = Field(default="USDC", alias="MOMENTUM_EXECUTOR_QUOTE_ASSET")
     momentum_executor_notional: float = Field(default=25.0, alias="MOMENTUM_EXECUTOR_NOTIONAL")
