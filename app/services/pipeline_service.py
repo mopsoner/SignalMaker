@@ -17,6 +17,7 @@ from app.services.momentum_service import MomentumService
 from app.services.planner_service import PlannerService
 from app.services.signal_context_service import apply_context_driven_progression
 from app.services.signal_engine_service import SignalEngineService
+from app.services.signal_score_service import SignalScoreService
 from app.services.trade_candidate_service import TradeCandidateService
 
 
@@ -48,6 +49,7 @@ class PipelineService:
         self.trade_candidates = TradeCandidateService(db)
         self.market_data = MarketDataService(db)
         self.momentum = MomentumService(db)
+        self.signal_score = SignalScoreService(db)
 
     def _execution_interval(self) -> str:
         return EXECUTION_INTERVAL
@@ -294,6 +296,7 @@ class PipelineService:
                 raw_signal = apply_hierarchical_stage_gates(raw_signal)
                 raw_signal = apply_context_driven_progression(raw_signal)
                 raw_signal = self._enforce_one_hour_decision_gate(raw_signal)
+                raw_signal = self.signal_score.apply(raw_signal)
 
                 if raw_signal.get("confirm_blocked_by_hierarchy"):
                     assessment = {
