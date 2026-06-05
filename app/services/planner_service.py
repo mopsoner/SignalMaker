@@ -17,7 +17,7 @@ class PlannerService:
             'min_rr': strategy['planner_min_rr'],
             'stop_policy': 'third_valid_structural_invalidation_with_buffer',
             'stop_buffer_pct': STOP_BUFFER_PCT,
-            'target_policy': 'third_valid_structural_liquidity_with_low_rr_fallback',
+            'target_policy': 'third_valid_structural_liquidity_with_next_target_rr_upgrade',
             'execution_policy': 'strict_requires_explicit_15m_bos_mss_reclaim_or_rejection',
             'side_policy': 'candidate_side_backward_compatible__payload_trade_normalized',
         }
@@ -277,44 +277,65 @@ class PlannerService:
         if risk <= 0:
             return resolved_trade, None
 
-        candidates = list(resolved_trade.get('target_candidates') or [])
-        if not candidates:
-            candidates = self._target_candidates_from_signal(signal, side=side, entry=entry)
+        current_target = self._as_float(resolved_trade.get('target'))
+        current_reward = abs(current_target - entry) if current_target is not None else 0.0
+        candidates = self._target_candidates_from_signal(signal, side=side, entry=entry)
+        candidates.extend(resolved_trade.get('target_candidates') or [])
+        if current_target is not None:
+            candidates.append({
+                'source': resolved_trade.get('target_source') or 'current_trade_target',
+                'level': current_target,
+                'distance': current_reward,
+                'distance_pct': self._distance_pct(entry, current_target),
+                'hierarchy_rank': 0,
+                'valid': True,
+                'validation': resolved_trade.get('target_validation') or 'structural_liquidity',
+            })
 
         valid_candidates = []
+        seen_levels = set()
         for item in candidates:
             if item.get('valid') is False:
                 continue
             level = self._as_float(item.get('level'))
             if level is None:
                 continue
+            level_key = round(level, 12)
+            if level_key in seen_levels:
+                continue
+            seen_levels.add(level_key)
             if side == 'short' and level >= entry:
                 continue
             if side == 'long' and level <= entry:
                 continue
             reward = abs(level - entry)
-            rr = reward / risk if risk > 0 else None
-            if rr is None:
-                continue
+            rr = reward / risk
             enriched = dict(item)
+            enriched['level'] = level
+            enriched['distance'] = reward
+            enriched['distance_pct'] = self._distance_pct(entry, level)
             enriched['rr_ratio'] = rr
+            enriched['is_farther_than_current_target'] = current_target is None or reward > current_reward + 1e-12
             valid_candidates.append(enriched)
 
-        valid_candidates = sorted(valid_candidates, key=lambda item: (item.get('hierarchy_rank', 999), item.get('distance_pct') or 999))
+        valid_candidates = sorted(valid_candidates, key=lambda item: (item['distance'], item.get('hierarchy_rank', 999)))
         for item in valid_candidates:
-            if item['rr_ratio'] >= min_rr:
+            if item['is_farther_than_current_target'] and item['rr_ratio'] >= min_rr:
                 upgraded = dict(resolved_trade)
                 upgraded['target'] = item['level']
                 upgraded['target_source'] = item.get('source') or 'target_candidate_rr_upgrade'
                 upgraded['target_distance_pct'] = self._distance_pct(entry, item['level'])
+                upgraded['target_validation'] = item.get('validation') or upgraded.get('target_validation')
                 upgraded['target_rr_upgrade'] = {
                     'enabled': True,
-                    'reason': 'initial_target_low_rr_next_structural_target',
+                    'reason': 'initial_target_low_rr_next_farther_structural_target',
                     'min_rr': min_rr,
+                    'initial_target': current_target,
+                    'initial_rr': current_reward / risk if current_target is not None else None,
                     'selected_source': upgraded['target_source'],
                     'selected_level': item['level'],
                     'selected_rr': item['rr_ratio'],
-                    'candidates_checked': valid_candidates[:8],
+                    'candidates_checked': valid_candidates[:12],
                 }
                 return upgraded, item['rr_ratio']
 

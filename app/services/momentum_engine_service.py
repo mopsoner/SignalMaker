@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.market_candle import MarketCandle
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.services.momentum_service import MomentumService
 
@@ -363,7 +364,28 @@ class MomentumEngineService:
         mark_price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
         return float(position.quantity or 0) * float(mark_price or 0)
 
+    def _latest_market_price(self, symbol: str) -> float | None:
+        normalized = symbol.upper()
+        for interval in ("15m", "1h", "4h"):
+            stmt = (
+                select(MarketCandle.close)
+                .where(MarketCandle.symbol == normalized, MarketCandle.interval == interval)
+                .order_by(MarketCandle.open_time.desc())
+                .limit(1)
+            )
+            price = self.db.scalars(stmt).first()
+            if price is not None and float(price) > 0:
+                return float(price)
+        return None
+
     def _price_for(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> float:
+        # A rotation sell must be marked with the latest known market close, not
+        # the entry-price fallback. The current asset can disappear from the
+        # ranking snapshot, and using fallback then records artificial 0-PnL
+        # sells with exactly the same price as the buy.
+        market_price = self._latest_market_price(symbol)
+        if market_price is not None:
+            return market_price
         for row in rankings:
             if row.get("symbol") == symbol and row.get("price"):
                 return float(row["price"])
