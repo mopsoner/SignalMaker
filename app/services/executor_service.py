@@ -6,6 +6,7 @@ from app.services.fill_service import FillService
 from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.risk_service import RiskService
+from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
 
 
@@ -92,7 +93,11 @@ class ExecutorService:
         entry = float(entry)
         raw_target = float(raw_target)
         risk = abs(entry - float(stop)) if stop is not None else None
-        min_reward = risk * 0.75 if risk and risk > 0 else 0.0
+        runtime = load_runtime_settings(getattr(self, 'db', None))
+        planner_min_rr = float(runtime['strategy'].get('planner_min_rr', 0.8))
+        candidate_rr = float(candidate.rr_ratio or 0.0)
+        min_reward_ratio = max(0.75, planner_min_rr, candidate_rr)
+        min_reward = risk * min_reward_ratio if risk and risk > 0 else 0.0
 
         candidates: list[dict] = []
         liquidity_context = candidate.liquidity_context or payload.get('liquidity_context') or payload.get('macro_liquidity_context') or {}
@@ -190,11 +195,13 @@ class ExecutorService:
             return {
                 'target_price': target_price,
                 'raw_target_price': raw_target,
-                'target_model': 'hierarchical_position_target_v1',
+                'target_model': 'hierarchical_position_target_v2_next_rr_target',
                 'selected_position_target': selected,
                 'target_candidates': sorted(candidates, key=lambda item: (abs(entry - float(item['level'])), item['rank'])),
                 'position_rr': rr,
                 'risk_price_distance': risk,
+                'min_reward_ratio': min_reward_ratio,
+                'min_reward_price_distance': min_reward,
             }
 
         return {
