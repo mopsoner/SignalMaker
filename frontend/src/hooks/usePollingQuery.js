@@ -40,7 +40,7 @@ export function usePollingQuery(loader, interval = 15000, options = {}) {
       active = false
       clearInterval(timer)
     }
-  }, [enabled, loader, interval, run])
+  }, [enabled, interval, run])
 
   return { data, loading, error, refresh: run }
 }

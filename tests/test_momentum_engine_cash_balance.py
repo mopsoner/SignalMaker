@@ -202,3 +202,41 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
         assert position.quantity == pytest.approx(240.0 / 130.0)
         assert trade.price == 130.0
         assert trade.price_source == "market_candle:4h"
+
+
+def test_best_entry_ready_asset_accepts_market_price_when_ranking_price_is_missing() -> None:
+    with _make_session() as db:
+        db.add(
+            MarketCandle(
+                candle_id="sol-15m-1",
+                symbol="SOLUSDC",
+                interval="15m",
+                open_time=1,
+                close_time=2,
+                open=99.0,
+                high=101.0,
+                low=98.0,
+                close=100.0,
+                volume=1.0,
+            )
+        )
+        db.commit()
+
+        asset = MomentumEngineService(db).best_entry_ready_asset(
+            rankings=[
+                {
+                    "symbol": "SOLUSDC",
+                    "price": None,
+                    "momentum_score": 12.0,
+                    "rank": 1,
+                    "structure_15m_status": "valid",
+                    "rsi_1h": 50.0,
+                }
+            ],
+            min_momentum_score=0.0,
+            exclude_symbols=set(),
+        )
+
+        assert asset is not None
+        assert asset["symbol"] == "SOLUSDC"
+        assert asset["entry_status"] == "ready"

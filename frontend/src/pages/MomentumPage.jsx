@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
@@ -114,6 +114,10 @@ export default function MomentumPage() {
     { enabled: enginePanelOpen },
   )
   const engine = engineOverride || engineData
+
+  useEffect(() => {
+    if (engineData) setEngineOverride(null)
+  }, [engineData])
 
   const counts = useMemo(() => ({
     all: rows.length,

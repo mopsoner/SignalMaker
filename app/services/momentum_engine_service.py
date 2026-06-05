@@ -148,7 +148,6 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
 
-
     def best_entry_ready_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str]) -> dict[str, Any] | None:
         return self._best_entry_ready_asset(
             rankings=rankings,
@@ -282,7 +281,7 @@ class MomentumEngineService:
         for row in rankings:
             if row.get("symbol") in exclude_symbols:
                 continue
-            if float(row.get("price") or 0) <= 0:
+            if not self._asset_has_usable_price(row):
                 continue
             if float(row.get("momentum_score") or 0) <= min_momentum_score:
                 continue
@@ -298,7 +297,7 @@ class MomentumEngineService:
         for row in rankings:
             if row.get("symbol") in exclude_symbols:
                 continue
-            if float(row.get("price") or 0) <= 0:
+            if not self._asset_has_usable_price(row):
                 continue
             if float(row.get("momentum_score") or 0) <= min_momentum_score:
                 continue
@@ -411,6 +410,13 @@ class MomentumEngineService:
             return None
         price, interval = row
         return float(price), f"market_candle:{interval}"
+
+    def _asset_has_usable_price(self, asset: dict[str, Any]) -> bool:
+        ranking_price = float(asset.get("price") or 0)
+        if ranking_price > 0:
+            return True
+        market_price = self._latest_market_price(str(asset.get("symbol") or ""))
+        return market_price is not None and market_price[0] > 0
 
     def _price_with_source(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> tuple[float, str]:
         # Momentum PnL must be marked with the freshest known market close, not
