@@ -13,6 +13,7 @@ class MomentumEnginePositionRead(BaseModel):
     entry_score: float | None = None
     entry_rank: int | None = None
     mark_price: float | None = None
+    mark_price_source: str | None = None
     unrealized_pnl: float | None = None
     opened_at: datetime
     closed_at: datetime | None = None
@@ -28,6 +29,8 @@ class MomentumEngineTradeRead(BaseModel):
     quantity: float
     value: float
     pnl: float
+    pnl_pct: float | None = None
+    price_source: str | None = None
     reason: str | None = None
     created_at: datetime
 

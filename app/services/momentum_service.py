@@ -25,6 +25,15 @@ class MomentumService:
     EMA_PERIOD = 20
     RSI_PERIOD = 14
     STRUCTURE_SWING_WINDOW = 2
+    VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
+    BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
+    ENTRY_RSI_MIN = 45.0
+    ENTRY_RSI_MAX = 55.0
+    ENTRY_RSI_FIELD = "rsi_1h"
+    ENTRY_RSI_TIMEFRAME = "1h"
+    ENTRY_POOL_TOP_N = 10
+    ENTRY_POOL_MIN_LEADER_RATIO = 0.80
+
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -34,7 +43,29 @@ class MomentumService:
         stmt = select(MomentumCurrent).order_by(MomentumCurrent.momentum_score.desc(), MomentumCurrent.symbol.asc()).limit(limit)
         rows = list(self.db.scalars(stmt).all())
         structures = self._structure_map([row.symbol for row in rows])
-        return [self._row_to_payload(row, index, structures.get(row.symbol)) for index, row in enumerate(rows, start=1)]
+        leader_score = float(rows[0].momentum_score or 0.0) if rows else 0.0
+        return [
+            self._row_to_payload(row, index, structures.get(row.symbol), leader_score=leader_score)
+            for index, row in enumerate(rows, start=1)
+        ]
+
+    def list_candidates(self, *, limit: int = 50, include_waiting: bool = False, min_momentum_score: float = 0.0) -> list[dict[str, Any]]:
+        rankings = self.list_rankings(limit=300)
+        candidates = []
+        for row in rankings:
+            if float(row.get("price") or 0) <= 0:
+                continue
+            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+                continue
+            if not row.get("in_entry_pool"):
+                continue
+            if include_waiting or row.get("trade_ready"):
+                candidate = dict(row)
+                candidate["candidate_type"] = "momentum_trade_ready" if row.get("trade_ready") else "momentum_watchlist"
+                candidates.append(candidate)
+            if len(candidates) >= limit:
+                break
+        return candidates
 
     def recalculate_and_store(self, *, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, Any]:
         target_symbols = sorted({symbol.upper() for symbol in (symbols or self.market_data.list_symbols(limit=None))})
@@ -57,7 +88,7 @@ class MomentumService:
         rows = self.db.scalars(select(MomentumStructureCurrent).where(MomentumStructureCurrent.symbol.in_(symbols))).all()
         return {row.symbol: row for row in rows}
 
-    def _row_to_payload(self, row: MomentumCurrent, rank: int, structure: MomentumStructureCurrent | None = None) -> dict[str, Any]:
+    def _row_to_payload(self, row: MomentumCurrent, rank: int, structure: MomentumStructureCurrent | None = None, *, leader_score: float = 0.0) -> dict[str, Any]:
         payload = {
             "rank": rank,
             "symbol": row.symbol,
@@ -81,7 +112,69 @@ class MomentumService:
             "calculated_at": row.calculated_at,
         }
         payload.update(self._structure_payload(structure))
+        payload.update(self._trade_ready_payload(payload, leader_score=leader_score))
         return payload
+
+    def _trade_ready_payload(self, asset: dict[str, Any], *, leader_score: float) -> dict[str, Any]:
+        in_entry_pool = self._in_entry_pool(asset, leader_score=leader_score)
+        status = self._trade_ready_status(asset, in_entry_pool=in_entry_pool)
+        return {
+            "trade_ready": status == "ready",
+            "trade_ready_status": status,
+            "trade_ready_reason": self._trade_ready_reason(status),
+            "in_entry_pool": in_entry_pool,
+            "entry_rsi_timeframe": self.ENTRY_RSI_TIMEFRAME,
+            "entry_rsi_min": self.ENTRY_RSI_MIN,
+            "entry_rsi_max": self.ENTRY_RSI_MAX,
+        }
+
+    def _in_entry_pool(self, asset: dict[str, Any], *, leader_score: float) -> bool:
+        rank = int(asset.get("rank") or 999999)
+        score = float(asset.get("momentum_score") or 0.0)
+        if rank <= self.ENTRY_POOL_TOP_N:
+            return True
+        if leader_score > 0 and score >= leader_score * self.ENTRY_POOL_MIN_LEADER_RATIO:
+            return True
+        return False
+
+    def _structure_valid(self, asset: dict[str, Any]) -> bool:
+        if asset.get("structure_15m_status") in self.BROKEN_STRUCTURE_STATUSES:
+            return False
+        if asset.get("mss_15m_bearish") or asset.get("bos_15m_bearish"):
+            return False
+        return asset.get("structure_15m_status") in self.VALID_STRUCTURE_STATUSES
+
+    def _trade_ready_status(self, asset: dict[str, Any], *, in_entry_pool: bool) -> str:
+        if float(asset.get("price") or 0) <= 0:
+            return "blocked_missing_price"
+        if float(asset.get("momentum_score") or 0) <= 0:
+            return "blocked_momentum_score_not_positive"
+        if not in_entry_pool:
+            return "blocked_not_in_entry_pool"
+        if not self._structure_valid(asset):
+            return "blocked_structure_not_valid"
+        rsi = asset.get(self.ENTRY_RSI_FIELD)
+        if rsi is None:
+            return "wait_rsi_1h_missing"
+        rsi_value = float(rsi)
+        if rsi_value < self.ENTRY_RSI_MIN:
+            return "wait_recovery_rsi_1h_too_low"
+        if rsi_value > self.ENTRY_RSI_MAX:
+            return "wait_pullback_rsi_1h_too_high"
+        return "ready"
+
+    def _trade_ready_reason(self, status: str) -> str:
+        reasons = {
+            "ready": "Trade ready: positive momentum, top entry pool, valid 15m structure, and RSI 1h in the entry zone.",
+            "blocked_missing_price": "Blocked: no usable latest price.",
+            "blocked_momentum_score_not_positive": "Blocked: momentum score is not positive.",
+            "blocked_not_in_entry_pool": f"Blocked: asset is outside the top {self.ENTRY_POOL_TOP_N} or {self.ENTRY_POOL_MIN_LEADER_RATIO:.0%} leader-score entry pool.",
+            "blocked_structure_not_valid": "Blocked: 15m structure is not valid or has bearish MSS/BOS.",
+            "wait_rsi_1h_missing": "Waiting: RSI 1h is missing.",
+            "wait_recovery_rsi_1h_too_low": f"Waiting: RSI 1h is below {self.ENTRY_RSI_MIN:g}, recovery not confirmed yet.",
+            "wait_pullback_rsi_1h_too_high": f"Waiting: RSI 1h is above {self.ENTRY_RSI_MAX:g}, wait for pullback.",
+        }
+        return reasons.get(status, "Trade readiness could not be evaluated.")
 
     def _structure_payload(self, row: MomentumStructureCurrent | None) -> dict[str, Any]:
         if row is None:
@@ -139,8 +232,14 @@ class MomentumService:
 
     def _build_symbol_row(self, symbol: str) -> dict[str, Any]:
         bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
-        interval_payloads = {interval: self._interval_momentum(bundle.get(interval) or []) for interval in self.INTERVALS}
-        structure_15m = self._structure_15m(bundle.get("15m") or [])
+        return self.build_symbol_payload_from_bundle(symbol, bundle)
+
+    def build_symbol_payload_from_bundle(self, symbol: str, bundle: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        interval_payloads = {
+            interval: self._interval_momentum((bundle.get(interval) or [])[-self.LOOKBACKS[interval]:])
+            for interval in self.INTERVALS
+        }
+        structure_15m = self._structure_15m((bundle.get("15m") or [])[-self.LOOKBACKS["15m"]:])
 
         weighted_score = 0.0
         available_weight = 0.0

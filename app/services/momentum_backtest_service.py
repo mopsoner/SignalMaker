@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from statistics import fmean
 from typing import Any
 from uuid import uuid4
 
@@ -10,34 +9,42 @@ from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
 from app.models.momentum_backtest import MomentumBacktestEquity, MomentumBacktestRun, MomentumBacktestTrade
+from app.services.momentum_engine_service import MomentumEngineService
+from app.services.momentum_service import MomentumService
 
 
 class MomentumBacktestService:
     DEFAULT_SETTINGS = {
-        "name": "P3 RSI 1h 50-62 + 4h momentum + 5m exit",
+        "name": "Live momentum engine rules",
         "initial_capital": 1000.0,
-        "entry_rsi_min": 50.0,
-        "entry_rsi_max": 62.0,
-        "entry_pool_top_n": 10,
-        "entry_pool_min_leader_ratio": 0.80,
-        "require_momentum_4h_positive": True,
-        "require_entry_structure_15m_valid": True,
-        "exit_structure_interval": "5m",
         "fee_pct": 0.001,
         "slippage_pct": 0.0005,
         "max_symbols": 300,
         "warmup_candles": 96,
-        "decision_stride": 3,
-        "volume_score_enabled": True,
-        "volume_score_weight": 0.15,
-        "volume_score_cap": 12.0,
+        "cadence_hours": 4,
+        "min_momentum_score": 0.0,
+    }
+    LEGACY_STRATEGY_SETTING_KEYS = {
+        "entry_rsi_min",
+        "entry_rsi_max",
+        "entry_pool_top_n",
+        "entry_pool_min_leader_ratio",
+        "require_momentum_4h_positive",
+        "require_entry_structure_15m_valid",
+        "exit_structure_interval",
+        "decision_stride",
+        "volume_score_enabled",
+        "volume_score_weight",
+        "volume_score_cap",
     }
 
     def __init__(self, db: Session) -> None:
         self.db = db
+        self.momentum = MomentumService(db)
+        self.engine = MomentumEngineService(db)
 
     def create_run(self, settings: dict[str, Any] | None = None) -> MomentumBacktestRun:
-        payload = {**self.DEFAULT_SETTINGS, **(settings or {})}
+        payload = self._simulation_settings(settings)
         run = MomentumBacktestRun(
             run_id=f"mombacktest-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:6]}",
             status="queued",
@@ -50,14 +57,29 @@ class MomentumBacktestService:
         return run
 
     def create_rsi_sweep(self, ranges: list[dict[str, float]], base_settings: dict[str, Any] | None = None) -> list[MomentumBacktestRun]:
+        # Backwards-compatible endpoint: strategy parameters are owned by
+        # MomentumEngineService, so RSI values sent by older UI clients no
+        # longer change the backtest rules. Create comparable live-engine runs
+        # while recording the requested ranges as metadata only.
         runs: list[MomentumBacktestRun] = []
-        base = {**self.DEFAULT_SETTINGS, **(base_settings or {})}
+        base = self._simulation_settings(base_settings)
         for item in ranges:
             rmin = float(item["min"])
             rmax = float(item["max"])
-            settings = {**base, "entry_rsi_min": rmin, "entry_rsi_max": rmax, "name": f"RSI 1h {rmin:g}-{rmax:g}"}
+            settings = {
+                **base,
+                "name": f"Live engine rules (legacy RSI {rmin:g}-{rmax:g} ignored)",
+                "legacy_requested_rsi_min": rmin,
+                "legacy_requested_rsi_max": rmax,
+            }
             runs.append(self.create_run(settings))
         return runs
+
+    def _simulation_settings(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = {**self.DEFAULT_SETTINGS, **(settings or {})}
+        for key in self.LEGACY_STRATEGY_SETTING_KEYS:
+            payload.pop(key, None)
+        return payload
 
     def list_runs(self, *, limit: int = 20) -> list[MomentumBacktestRun]:
         return list(self.db.scalars(select(MomentumBacktestRun).order_by(MomentumBacktestRun.created_at.desc()).limit(limit)).all())
@@ -91,8 +113,8 @@ class MomentumBacktestService:
         run = self.db.get(MomentumBacktestRun, run_id)
         if not run:
             raise ValueError(f"Unknown backtest run {run_id}")
-        settings = {**self.DEFAULT_SETTINGS, **(run.settings or {})}
-        exit_tf = str(settings.get("exit_structure_interval") or "5m")
+        settings = self._simulation_settings(run.settings)
+        decision_interval = "15m"
         run.status = "running"
         run.started_at = datetime.now(timezone.utc)
         run.updated_at = datetime.now(timezone.utc)
@@ -105,20 +127,20 @@ class MomentumBacktestService:
             symbols = self._symbols(limit=int(settings["max_symbols"]))
             run.symbols_total = len(symbols)
             self.db.commit()
-            data = {symbol: self._load_symbol(symbol, exit_tf=exit_tf) for symbol in symbols}
+            data = {symbol: self._load_symbol(symbol) for symbol in symbols}
             data = {
                 symbol: bundle
                 for symbol, bundle in data.items()
-                if len(bundle.get(exit_tf, [])) >= int(settings["warmup_candles"])
-                and len(bundle.get("15m", [])) >= 32
-                and len(bundle.get("1h", [])) >= 20
+                if len(bundle.get(decision_interval, [])) >= int(settings["warmup_candles"])
+                and len(bundle.get("15m", [])) >= MomentumService.LOOKBACKS["15m"]
+                and len(bundle.get("1h", [])) >= MomentumService.RSI_PERIOD + 2
                 and len(bundle.get("4h", [])) >= 10
             }
             symbols = list(data.keys())
             if not symbols:
-                raise ValueError(f"No symbols have enough {exit_tf}/15m/1h/4h candles for backtest")
+                raise ValueError("No symbols have enough 15m/1h/4h candles for live-engine backtest")
 
-            timeline = sorted({c["close_time"] for bundle in data.values() for c in bundle[exit_tf]})
+            timeline = sorted({c["close_time"] for bundle in data.values() for c in bundle[decision_interval]})
             cash = float(settings["initial_capital"])
             position: dict[str, Any] | None = None
             peak_equity = cash
@@ -127,12 +149,12 @@ class MomentumBacktestService:
             gross_profit = 0.0
             gross_loss = 0.0
             trade_count = 0
-            stride = max(1, int(settings["decision_stride"]))
+            stride = max(1, int(round(float(settings.get("cadence_hours", 4)) * 4)))
 
             for index, ts in enumerate(timeline):
                 if index < int(settings["warmup_candles"]) or index % stride != 0:
                     continue
-                snapshot = self._snapshot(data, ts, settings, exit_tf=exit_tf)
+                snapshot = self._snapshot(data, ts)
                 if not snapshot:
                     continue
                 current = snapshot.get(position["symbol"]) if position else None
@@ -150,7 +172,7 @@ class MomentumBacktestService:
                             current_price,
                             current,
                             settings,
-                            reason="structure_5m_break" if structure_break and exit_tf == "5m" else "structure_break" if structure_break else "next_entry_ready",
+                            reason="structure_15m_break" if structure_break else "next_entry_ready",
                         )
                         trade_count += 1
                         if pnl >= 0:
@@ -184,7 +206,7 @@ class MomentumBacktestService:
                     self.db.commit()
 
             if position:
-                last_snapshot = self._snapshot(data, timeline[-1], settings, exit_tf=exit_tf)
+                last_snapshot = self._snapshot(data, timeline[-1])
                 last_price = float((last_snapshot.get(position["symbol"]) or {}).get("price") or position["entry_price"])
                 cash, pnl, _ = self._close_trade(run_id, position, timeline[-1], last_price, last_snapshot.get(position["symbol"]), settings, reason="end_of_backtest")
                 trade_count += 1
@@ -222,124 +244,58 @@ class MomentumBacktestService:
         stmt = select(MarketCandle.symbol).distinct().order_by(MarketCandle.symbol).limit(limit)
         return [s.upper() for s in self.db.scalars(stmt).all()]
 
-    def _load_symbol(self, symbol: str, *, exit_tf: str) -> dict[str, list[dict[str, Any]]]:
-        intervals = {exit_tf, "15m", "1h", "4h"}
-        return {interval: self._candles(symbol, interval) for interval in intervals}
+    def _load_symbol(self, symbol: str) -> dict[str, list[dict[str, Any]]]:
+        return {interval: self._candles(symbol, interval) for interval in MomentumService.INTERVALS}
 
     def _candles(self, symbol: str, interval: str) -> list[dict[str, Any]]:
         rows = list(self.db.scalars(select(MarketCandle).where(MarketCandle.symbol == symbol, MarketCandle.interval == interval).order_by(MarketCandle.close_time.asc())).all())
-        return [{"open_time": r.open_time, "close_time": r.close_time, "open": r.open, "high": r.high, "low": r.low, "close": r.close, "volume": r.volume, "quote_volume": getattr(r, "quote_volume", 0.0)} for r in rows]
+        return [
+            {
+                "open_time": r.open_time,
+                "close_time": r.close_time,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
+                "close": r.close,
+                "volume": r.volume,
+                "quote_volume": getattr(r, "quote_volume", 0.0),
+                "ingested_at": datetime.fromtimestamp(r.close_time / 1000.0, tz=timezone.utc),
+            }
+            for r in rows
+        ]
 
-    def _snapshot(self, data: dict[str, dict[str, list[dict[str, Any]]]], ts: int, settings: dict[str, Any], *, exit_tf: str) -> dict[str, dict[str, Any]]:
+    def _snapshot(self, data: dict[str, dict[str, list[dict[str, Any]]]], ts: int) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         for symbol, bundle in data.items():
-            c_exit = [c for c in bundle[exit_tf] if c["close_time"] <= ts]
-            c15 = [c for c in bundle["15m"] if c["close_time"] <= ts]
-            c1h = [c for c in bundle["1h"] if c["close_time"] <= ts]
-            c4h = [c for c in bundle["4h"] if c["close_time"] <= ts]
-            if len(c_exit) < 20 or len(c15) < 32 or len(c1h) < 16 or len(c4h) < 10:
+            interval_candles = {
+                interval: [c for c in bundle[interval] if c["close_time"] <= ts]
+                for interval in MomentumService.INTERVALS
+            }
+            if any(len(interval_candles[interval]) < 2 for interval in MomentumService.INTERVALS):
                 continue
-            row = self._rank_row(symbol, c_exit[-32:], c15[-32:], c1h[-24:], c4h[-30:], settings, exit_tf=exit_tf)
+            row = self._rank_row(symbol, interval_candles)
             out[symbol] = row
-        ranked = sorted(out.values(), key=lambda r: r["momentum_score"], reverse=True)
+        ranked = sorted(out.values(), key=lambda r: (-float(r["momentum_score"]), r["symbol"]))
         for i, row in enumerate(ranked, start=1):
             row["rank"] = i
         return {row["symbol"]: row for row in ranked}
 
-    def _rank_row(self, symbol: str, c_exit: list[dict], c15: list[dict], c1h: list[dict], c4h: list[dict], settings: dict[str, Any], *, exit_tf: str) -> dict[str, Any]:
-        m15 = self._momentum(c15)
-        m1h = self._momentum(c1h)
-        m4h = self._momentum(c4h)
-        volume_score = self._volume_score(c1h, settings) if settings.get("volume_score_enabled", True) else 0.0
-        values = [(m15, 0.30), (m1h, 0.38), (m4h, 0.25), (volume_score, float(settings.get("volume_score_weight", 0.15)))]
-        weights = sum(w for value, w in values if value is not None)
-        score = sum((value or 0.0) * w for value, w in values) / weights if weights else 0.0
-        exit_structure = self._structure(c_exit, prefix=f"structure_{exit_tf}")
-        entry_structure = self._structure(c15, prefix="structure_15m")
-        return {
-            "symbol": symbol,
-            "price": float(c_exit[-1]["close"]),
-            "momentum_score": score,
-            "momentum_15m": m15,
-            "momentum_1h": m1h,
-            "momentum_4h": m4h,
-            "volume_score": volume_score,
-            "rsi_1h": self._rsi([float(c["close"]) for c in c1h]),
-            **exit_structure,
-            **entry_structure,
-        }
-
-    def _momentum(self, candles: list[dict]) -> float | None:
-        if len(candles) < 2 or float(candles[0]["close"]) == 0:
-            return None
-        closes = [float(c["close"]) for c in candles]
-        change = ((closes[-1] - closes[0]) / closes[0]) * 100.0
-        rsi = self._rsi(closes)
-        return change + (((rsi or 50.0) - 50.0) / 2.0)
-
-    def _volume_score(self, candles: list[dict], settings: dict[str, Any]) -> float:
-        if len(candles) < 8:
-            return 0.0
-        volumes = [float(c.get("quote_volume") or c.get("volume") or 0.0) for c in candles]
-        avg = fmean(volumes[:-1]) if len(volumes) > 1 else 0.0
-        if avg <= 0:
-            return 0.0
-        raw = ((volumes[-1] / avg) - 1.0) * 10.0
-        cap = float(settings.get("volume_score_cap", 12.0))
-        return max(-cap, min(cap, raw))
-
-    def _rsi(self, closes: list[float], period: int = 14) -> float | None:
-        if len(closes) <= period:
-            return None
-        changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-        recent = changes[-period:]
-        gains = [max(c, 0.0) for c in recent]
-        losses = [abs(min(c, 0.0)) for c in recent]
-        avg_gain = fmean(gains)
-        avg_loss = fmean(losses)
-        if avg_loss == 0:
-            return 100.0 if avg_gain > 0 else 50.0
-        return 100.0 - (100.0 / (1.0 + (avg_gain / avg_loss)))
-
-    def _structure(self, candles: list[dict], *, prefix: str) -> dict[str, Any]:
-        lows = [float(c["low"]) for c in candles]
-        highs = [float(c["high"]) for c in candles]
-        closes = [float(c["close"]) for c in candles]
-        last_swing_low = min(lows[-10:-1]) if len(lows) >= 11 else min(lows[:-1])
-        last_swing_high = max(highs[-10:-1]) if len(highs) >= 11 else max(highs[:-1])
-        broken = closes[-1] < last_swing_low
-        return {
-            f"{prefix}_status": "broken_bearish" if broken else "valid",
-            f"{prefix}_bearish": broken,
-            f"{prefix}_last_swing_low": last_swing_low,
-            f"{prefix}_last_swing_high": last_swing_high,
-        }
-
-    def _in_pool(self, row: dict[str, Any], leader_score: float, settings: dict[str, Any]) -> bool:
-        return int(row.get("rank") or 9999) <= int(settings["entry_pool_top_n"]) or (leader_score > 0 and float(row.get("momentum_score") or 0) >= leader_score * float(settings["entry_pool_min_leader_ratio"]))
-
-    def _entry_ready(self, row: dict[str, Any], settings: dict[str, Any]) -> bool:
-        rsi = row.get("rsi_1h")
-        rsi_ok = rsi is not None and float(settings["entry_rsi_min"]) <= float(rsi) <= float(settings["entry_rsi_max"])
-        structure_ok = (not settings.get("require_entry_structure_15m_valid", True)) or row.get("structure_15m_status") == "valid"
-        momentum_4h_ok = (not settings.get("require_momentum_4h_positive", False)) or float(row.get("momentum_4h") or 0.0) > 0
-        return structure_ok and momentum_4h_ok and rsi_ok
+    def _rank_row(self, symbol: str, interval_candles: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        payload = self.momentum.build_symbol_payload_from_bundle(symbol, interval_candles)
+        structure_15m = payload.pop("structure_15m")
+        payload.update(structure_15m)
+        return payload
 
     def _best_entry(self, snapshot: dict[str, dict[str, Any]], settings: dict[str, Any], *, exclude: set[str]) -> dict[str, Any] | None:
-        ranked = sorted(snapshot.values(), key=lambda r: r["momentum_score"], reverse=True)
-        leader = float(ranked[0]["momentum_score"]) if ranked else 0.0
-        for row in ranked:
-            if row["symbol"] in exclude:
-                continue
-            if self._in_pool(row, leader, settings) and self._entry_ready(row, settings):
-                return row
-        return None
+        ranked = sorted(snapshot.values(), key=lambda r: (-float(r["momentum_score"]), r["symbol"]))
+        return self.engine.best_entry_ready_asset(
+            rankings=ranked,
+            min_momentum_score=float(settings.get("min_momentum_score", 0.0)),
+            exclude_symbols=exclude,
+        )
 
     def _structure_broken(self, row: dict[str, Any] | None) -> bool:
-        if not row:
-            return True
-        exit_tf = str((row.get("exit_structure_interval") or "5m"))
-        return row.get("structure_5m_status") == "broken_bearish" or row.get("structure_15m_status") == "broken_bearish" and exit_tf == "15m" or bool(row.get("structure_5m_bearish"))
+        return self.engine.structure_broken(row)
 
     def _open_position(self, row: dict[str, Any], ts: int, cash: float, settings: dict[str, Any]) -> dict[str, Any]:
         fee = float(settings["fee_pct"])

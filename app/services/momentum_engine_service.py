@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
@@ -24,14 +24,14 @@ class MomentumEngineService:
 
     STRATEGY = "momentum_rotation_v1"
     MODE = "paper"
-    VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
-    BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
-    ENTRY_RSI_MIN = 45.0
-    ENTRY_RSI_MAX = 55.0
-    ENTRY_RSI_FIELD = "rsi_1h"
-    ENTRY_RSI_TIMEFRAME = "1h"
-    ENTRY_POOL_TOP_N = 10
-    ENTRY_POOL_MIN_LEADER_RATIO = 0.80
+    VALID_STRUCTURE_STATUSES = MomentumService.VALID_STRUCTURE_STATUSES
+    BROKEN_STRUCTURE_STATUSES = MomentumService.BROKEN_STRUCTURE_STATUSES
+    ENTRY_RSI_MIN = MomentumService.ENTRY_RSI_MIN
+    ENTRY_RSI_MAX = MomentumService.ENTRY_RSI_MAX
+    ENTRY_RSI_FIELD = MomentumService.ENTRY_RSI_FIELD
+    ENTRY_RSI_TIMEFRAME = MomentumService.ENTRY_RSI_TIMEFRAME
+    ENTRY_POOL_TOP_N = MomentumService.ENTRY_POOL_TOP_N
+    ENTRY_POOL_MIN_LEADER_RATIO = MomentumService.ENTRY_POOL_MIN_LEADER_RATIO
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -93,15 +93,19 @@ class MomentumEngineService:
                 else:
                     self._record_trade(action="CHECK_NO_CASH", symbol=next_entry["symbol"], price=float(next_entry.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for entry-ready rotation")
             else:
-                price = self._price_for(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
+                price, price_source = self._price_with_source(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
+                value, pnl = self._position_mark_to_market(position=open_position, mark_price=price)
+                open_position.mark_price = price
+                open_position.unrealized_pnl = pnl
                 self._record_trade(
                     action="HOLD_NO_NEXT_ENTRY",
                     symbol=open_position.symbol,
                     price=price,
                     quantity=open_position.quantity,
-                    value=open_position.quantity * price,
-                    pnl=0.0,
+                    value=value,
+                    pnl=pnl,
                     reason=self._hold_reason(current_asset),
+                    meta={"price_source": price_source, "pnl_basis": "mark_to_market"},
                 )
             self.db.commit()
             return self._build_status(
@@ -144,6 +148,17 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
 
+
+    def best_entry_ready_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str]) -> dict[str, Any] | None:
+        return self._best_entry_ready_asset(
+            rankings=rankings,
+            min_momentum_score=min_momentum_score,
+            exclude_symbols=exclude_symbols,
+        )
+
+    def structure_broken(self, asset: dict[str, Any] | None) -> bool:
+        return self._structure_broken(asset)
+
     def _rankings(self) -> list[dict[str, Any]]:
         return MomentumService(self.db).list_rankings(limit=300)
 
@@ -156,7 +171,7 @@ class MomentumEngineService:
         open_position_payload = self._position_payload(open_position, rankings=rankings, current_asset=current_asset) if open_position else None
         last_trade = self._last_check_trade()
         now = datetime.now(timezone.utc)
-        last_check_at = last_trade.created_at if last_trade else None
+        last_check_at = self._as_utc(last_trade.created_at) if last_trade else None
         next_check_at = last_check_at + timedelta(hours=cadence_hours) if last_check_at else None
         due_now = next_check_at is None or now >= next_check_at
         cash = self._cash_balance(starting_capital=starting_capital)
@@ -187,6 +202,13 @@ class MomentumEngineService:
             "recommendation": recommendation,
             "trades": self._recent_trades(limit=50),
         }
+
+    def _as_utc(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _asset_for(self, symbol: str, *, rankings: list[dict[str, Any]]) -> dict[str, Any] | None:
         for row in rankings:
@@ -325,18 +347,23 @@ class MomentumEngineService:
         return self.db.scalars(stmt).first()
 
     def _cash_balance(self, *, starting_capital: float) -> float:
-        trades = list(self.db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.strategy == self.STRATEGY)).all())
-        cash = starting_capital
-        for trade in trades:
-            if trade.action.startswith("BUY"):
-                cash -= float(trade.value or 0)
-            if trade.action.startswith("SELL"):
-                cash += float(trade.value or 0)
-        return cash
+        sell_value, buy_value = self.db.execute(
+            select(
+                func.coalesce(
+                    func.sum(case((MomentumEngineTrade.action.like("SELL%"), MomentumEngineTrade.value), else_=0.0)),
+                    0.0,
+                ),
+                func.coalesce(
+                    func.sum(case((MomentumEngineTrade.action.like("BUY%"), MomentumEngineTrade.value), else_=0.0)),
+                    0.0,
+                ),
+            ).where(MomentumEngineTrade.strategy == self.STRATEGY)
+        ).one()
+        return starting_capital + float(sell_value or 0.0) - float(buy_value or 0.0)
 
     def _position_payload(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]], current_asset: dict[str, Any] | None) -> dict[str, Any]:
-        mark_price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
-        unrealized_pnl = (float(position.quantity or 0) * mark_price) - float(position.entry_value or 0)
+        mark_price, mark_price_source = self._price_with_source(position.symbol, rankings=rankings, fallback=position.entry_price)
+        _, unrealized_pnl = self._position_mark_to_market(position=position, mark_price=mark_price)
         return {
             "position_id": position.position_id,
             "symbol": position.symbol,
@@ -347,6 +374,7 @@ class MomentumEngineService:
             "entry_score": position.entry_score,
             "entry_rank": position.entry_rank,
             "mark_price": mark_price,
+            "mark_price_source": mark_price_source,
             "unrealized_pnl": unrealized_pnl,
             "opened_at": position.opened_at,
             "closed_at": position.closed_at,
@@ -362,37 +390,46 @@ class MomentumEngineService:
         if not position:
             return 0.0
         mark_price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
-        return float(position.quantity or 0) * float(mark_price or 0)
+        value, _ = self._position_mark_to_market(position=position, mark_price=mark_price)
+        return value
 
-    def _latest_market_price(self, symbol: str) -> float | None:
+    def _position_mark_to_market(self, *, position: MomentumEnginePosition, mark_price: float) -> tuple[float, float]:
+        value = float(position.quantity or 0) * float(mark_price or 0)
+        pnl = value - float(position.entry_value or 0)
+        return value, pnl
+
+    def _latest_market_price(self, symbol: str) -> tuple[float, str] | None:
         normalized = symbol.upper()
-        for interval in ("15m", "1h", "4h"):
-            stmt = (
-                select(MarketCandle.close)
-                .where(MarketCandle.symbol == normalized, MarketCandle.interval == interval)
-                .order_by(MarketCandle.open_time.desc())
-                .limit(1)
-            )
-            price = self.db.scalars(stmt).first()
-            if price is not None and float(price) > 0:
-                return float(price)
-        return None
+        stmt = (
+            select(MarketCandle.close, MarketCandle.interval)
+            .where(MarketCandle.symbol == normalized, MarketCandle.close > 0)
+            .order_by(MarketCandle.close_time.desc(), MarketCandle.open_time.desc())
+            .limit(1)
+        )
+        row = self.db.execute(stmt).first()
+        if not row:
+            return None
+        price, interval = row
+        return float(price), f"market_candle:{interval}"
 
-    def _price_for(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> float:
-        # A rotation sell must be marked with the latest known market close, not
-        # the entry-price fallback. The current asset can disappear from the
-        # ranking snapshot, and using fallback then records artificial 0-PnL
-        # sells with exactly the same price as the buy.
+    def _price_with_source(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> tuple[float, str]:
+        # Momentum PnL must be marked with the freshest known market close, not
+        # the entry-price fallback or an old ranking snapshot. Otherwise HOLD or
+        # rotation events can show artificial 0-PnL while the market moved.
         market_price = self._latest_market_price(symbol)
         if market_price is not None:
             return market_price
         for row in rankings:
             if row.get("symbol") == symbol and row.get("price"):
-                return float(row["price"])
-        return float(fallback or 0)
+                return float(row["price"]), "ranking_snapshot"
+        return float(fallback or 0), "fallback"
+
+    def _price_for(self, symbol: str, *, rankings: list[dict[str, Any]], fallback: float) -> float:
+        price, _ = self._price_with_source(symbol, rankings=rankings, fallback=fallback)
+        return price
 
     def _open_new_position(self, asset: dict[str, Any], cash: float, *, action: str) -> MomentumEnginePosition:
-        price = float(asset["price"])
+        price, price_source = self._price_with_source(asset["symbol"], rankings=[asset], fallback=float(asset["price"]))
         quantity = cash / price
         now = datetime.now(timezone.utc)
         position = MomentumEnginePosition(
@@ -419,20 +456,37 @@ class MomentumEngineService:
             opened_at=now,
         )
         self.db.add(position)
-        self._record_trade(action=action, symbol=asset["symbol"], price=price, quantity=quantity, value=cash, pnl=0.0, reason=f"Top-pool momentum rank #{asset.get('rank')} with valid 15m structure and RSI 1h {asset.get('rsi_1h')} in {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}")
+        self._record_trade(
+            action=action,
+            symbol=asset["symbol"],
+            price=price,
+            quantity=quantity,
+            value=cash,
+            pnl=0.0,
+            reason=f"Top-pool momentum rank #{asset.get('rank')} with valid 15m structure and RSI 1h {asset.get('rsi_1h')} in {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}",
+            meta={"price_source": price_source, "pnl_basis": "entry"},
+        )
         return position
 
     def _close_position(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]], reason: str) -> None:
-        price = self._price_for(position.symbol, rankings=rankings, fallback=position.entry_price)
-        value = position.quantity * price
-        pnl = value - position.entry_value
+        price, price_source = self._price_with_source(position.symbol, rankings=rankings, fallback=position.entry_price)
+        value, pnl = self._position_mark_to_market(position=position, mark_price=price)
         position.status = "closed"
         position.mark_price = price
         position.unrealized_pnl = pnl
         position.closed_at = datetime.now(timezone.utc)
-        self._record_trade(action="SELL_ROTATE_OR_STRUCTURE_BREAK", symbol=position.symbol, price=price, quantity=position.quantity, value=value, pnl=pnl, reason=reason)
+        self._record_trade(
+            action="SELL_ROTATE_OR_STRUCTURE_BREAK",
+            symbol=position.symbol,
+            price=price,
+            quantity=position.quantity,
+            value=value,
+            pnl=pnl,
+            reason=reason,
+            meta={"price_source": price_source, "pnl_basis": "realized"},
+        )
 
-    def _record_trade(self, *, action: str, symbol: str, price: float, quantity: float, value: float, pnl: float, reason: str) -> MomentumEngineTrade:
+    def _record_trade(self, *, action: str, symbol: str, price: float, quantity: float, value: float, pnl: float, reason: str, meta: dict[str, Any] | None = None) -> MomentumEngineTrade:
         trade = MomentumEngineTrade(
             trade_id=f"momtrade-{uuid4().hex}",
             strategy=self.STRATEGY,
@@ -443,7 +497,7 @@ class MomentumEngineService:
             value=float(value or 0),
             pnl=float(pnl or 0),
             reason=reason,
-            meta={},
+            meta=meta or {},
             created_at=datetime.now(timezone.utc),
         )
         self.db.add(trade)

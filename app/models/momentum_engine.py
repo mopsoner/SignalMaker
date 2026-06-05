@@ -11,6 +11,7 @@ class MomentumEnginePosition(Base):
     __table_args__ = (
         Index("ix_momentum_engine_positions_status", "status"),
         Index("ix_momentum_engine_positions_symbol", "symbol"),
+        Index("ix_momentum_engine_positions_strategy_status_opened", "strategy", "status", "opened_at"),
     )
 
     position_id: Mapped[str] = mapped_column(String(96), primary_key=True)
@@ -35,6 +36,8 @@ class MomentumEngineTrade(Base):
         Index("ix_momentum_engine_trades_action", "action"),
         Index("ix_momentum_engine_trades_symbol", "symbol"),
         Index("ix_momentum_engine_trades_created_at", "created_at"),
+        Index("ix_momentum_engine_trades_strategy_created", "strategy", "created_at"),
+        Index("ix_momentum_engine_trades_strategy_action", "strategy", "action"),
     )
 
     trade_id: Mapped[str] = mapped_column(String(96), primary_key=True)
@@ -48,3 +51,18 @@ class MomentumEngineTrade(Base):
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    @property
+    def price_source(self) -> str | None:
+        metadata = self.meta or {}
+        source = metadata.get("price_source")
+        return str(source) if source else None
+
+    @property
+    def pnl_pct(self) -> float | None:
+        if not self.value:
+            return None
+        entry_value = float(self.value or 0.0) - float(self.pnl or 0.0)
+        if entry_value <= 0:
+            return None
+        return round((float(self.pnl or 0.0) / entry_value) * 100, 4)

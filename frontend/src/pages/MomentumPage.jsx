@@ -78,6 +78,21 @@ function scoreBadgeClass(value) {
   return 'badge gray'
 }
 
+function tradeReadyBadge(row) {
+  if (row.trade_ready) return <span className="badge green" title={row.trade_ready_reason || 'Ready'}>✅ Trade ready</span>
+  const status = row.trade_ready_status || ''
+  const label = status.startsWith('wait_') ? '⏳ Watch' : '🚫 Not ready'
+  const badgeClass = status.startsWith('wait_') ? 'badge orange' : 'badge gray'
+  return <span className={badgeClass} title={row.trade_ready_reason || status || 'Not ready'}>{label}</span>
+}
+
+function tradeReadySort(row) {
+  if (row.trade_ready) return 3
+  if ((row.trade_ready_status || '').startsWith('wait_')) return 2
+  if (row.in_entry_pool) return 1
+  return 0
+}
+
 function trendLabel(value) {
   if (value === 'above_ema') return 'Above EMA'
   if (value === 'below_ema') return 'Below EMA'
@@ -91,8 +106,13 @@ export default function MomentumPage() {
   const [cadenceHours, setCadenceHours] = useState(DEFAULT_CADENCE_HOURS)
   const [engineOverride, setEngineOverride] = useState(null)
   const [engineActionError, setEngineActionError] = useState(null)
+  const [enginePanelOpen, setEnginePanelOpen] = useState(false)
   const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => fetchMomentum(300), []), 30000)
-  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
+  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(
+    useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]),
+    30000,
+    { enabled: enginePanelOpen },
+  )
   const engine = engineOverride || engineData
 
   const counts = useMemo(() => ({
@@ -102,11 +122,13 @@ export default function MomentumPage() {
     neutral: rows.filter((row) => ['neutral_bull', 'neutral_bear'].includes(row.classification)).length,
     bear: rows.filter((row) => row.classification === 'bear').length,
     complete: rows.filter((row) => row.data_quality === 'complete').length,
+    trade_ready: rows.filter((row) => row.trade_ready).length,
   }), [rows])
 
   const filteredRows = useMemo(() => {
     if (filter === 'all') return rows
     if (filter === 'neutral') return rows.filter((row) => ['neutral_bull', 'neutral_bear'].includes(row.classification))
+    if (filter === 'trade_ready') return rows.filter((row) => row.trade_ready)
     return rows.filter((row) => row.classification === filter)
   }, [filter, rows])
 
@@ -127,6 +149,7 @@ export default function MomentumPage() {
   const filters = [
     ['all', `All (${counts.all})`],
     ['strong_bull', `Strong Bull (${counts.strong_bull})`],
+    ['trade_ready', `Trade ready (${counts.trade_ready})`],
     ['bull', `Bull (${counts.bull})`],
     ['neutral', `Neutral (${counts.neutral})`],
     ['bear', `Bear (${counts.bear})`],
@@ -136,6 +159,7 @@ export default function MomentumPage() {
     { key: 'rank', title: 'Rank', render: (row) => row.rank, sortValue: (row) => row.rank, defaultSortDir: 'asc' },
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 6), sortValue: (row) => Number(row.price ?? -1) },
+    { key: 'ready', title: 'Trade ready', render: (row) => <div style={{ display: 'grid', gap: 6 }}>{tradeReadyBadge(row)}<small className="market-toolbar-hint">{row.trade_ready_status || '—'}</small></div>, sortValue: tradeReadySort },
     { key: 'score', title: 'Momentum score', render: (row) => <strong>{fmtNumber(row.momentum_score, 2)}</strong>, sortValue: (row) => Number(row.momentum_score ?? -999) },
     { key: 'classification', title: 'Class', render: (row) => <span className={scoreBadgeClass(row.classification)}>{classLabel(row.classification)}</span>, sortValue: (row) => row.classification || '' },
     { key: 'm15', title: '15m', render: (row) => fmtNumber(row.momentum_15m, 2), sortValue: (row) => Number(row.momentum_15m ?? -999) },
@@ -148,6 +172,7 @@ export default function MomentumPage() {
     { key: 'change1h', title: 'Change 1h %', render: (row) => fmtNumber(row.change_1h, 2), sortValue: (row) => Number(row.change_1h ?? -999) },
     { key: 'change4h', title: 'Change 4h %', render: (row) => fmtNumber(row.change_4h, 2), sortValue: (row) => Number(row.change_4h ?? -999) },
     { key: 'ema', title: 'EMA trend', render: (row) => `${trendLabel(row.ema_trend_15m)} / ${trendLabel(row.ema_trend_1h)} / ${trendLabel(row.ema_trend_4h)}`, sortValue: (row) => `${row.ema_trend_15m}-${row.ema_trend_1h}-${row.ema_trend_4h}` },
+    { key: 'structure', title: 'Structure 15m', render: (row) => <div style={{ display: 'grid', gap: 6 }}><strong>{row.structure_15m_status || 'unknown'}</strong><small className="market-toolbar-hint">{row.structure_reason || '—'}</small></div>, sortValue: (row) => row.structure_15m_status || '' },
     { key: 'quality', title: 'Data', render: (row) => row.data_quality || '—', sortValue: (row) => row.data_quality || '' },
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.updated_at), sortValue: (row) => row.updated_at || '' },
   ]
@@ -160,6 +185,8 @@ export default function MomentumPage() {
     { key: 'quantity', title: 'Qty', render: (row) => fmtNumber(row.quantity, 6), sortValue: (row) => Number(row.quantity || 0) },
     { key: 'value', title: 'Value', render: (row) => fmtNumber(row.value, 2), sortValue: (row) => Number(row.value || 0) },
     { key: 'pnl', title: 'PnL', render: (row) => fmtNumber(row.pnl, 2), sortValue: (row) => Number(row.pnl || 0) },
+    { key: 'pnl_pct', title: 'PnL %', render: (row) => row.pnl_pct == null ? '—' : `${fmtNumber(row.pnl_pct, 2)}%`, sortValue: (row) => Number(row.pnl_pct || 0) },
+    { key: 'price_source', title: 'Price source', render: (row) => row.price_source || '—', sortValue: (row) => row.price_source || '' },
     { key: 'reason', title: 'Reason', render: (row) => row.reason || '—', sortValue: (row) => row.reason || '' },
   ]
 
@@ -169,6 +196,7 @@ export default function MomentumPage() {
       <StatCard label="Tracked assets" value={counts.all} hint={`${counts.complete} complete data sets`} />
       <StatCard label="Strong Bull" value={counts.strong_bull} />
       <StatCard label="Bull" value={counts.bull} />
+      <StatCard label="Trade ready" value={counts.trade_ready} hint="Top pool + structure 15m valide + RSI 1h en zone" />
       <StatCard label="Average momentum" value={fmtNumber(avgScore, 2)} />
     </div>
     {loading ? <div className="panel">Loading momentum ranking…</div> : null}
@@ -176,8 +204,8 @@ export default function MomentumPage() {
 
     <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
 
-    <details className="panel collapsible-panel" open>
-      <summary><h2>Positions momentum · backend paper engine</h2><span className="collapse-indicator">⌄</span></summary>
+    <details className="panel collapsible-panel" onToggle={(event) => setEnginePanelOpen(event.currentTarget.open)}>
+      <summary><div><h2>Positions momentum · backend paper engine</h2><p className="market-toolbar-hint">Lazy-loaded: open this panel only when you need the paper-engine status.</p></div><span className="collapse-indicator">⌄</span></summary>
       {engineLoading ? <div className="panel">Loading momentum engine…</div> : null}
       {engineError ? <div className="panel error">{engineError}</div> : null}
       {engineActionError ? <div className="panel error">{engineActionError}</div> : null}

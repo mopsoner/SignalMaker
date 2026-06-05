@@ -107,7 +107,7 @@ export default function MomentumBacktestPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader title="Momentum Backtesting" subtitle="Run a one-off background backtest on stored crypto candles, with trades and equity curve." />
+      <PageHeader title="Momentum Backtesting" subtitle="Run a one-off backtest using the same momentum engine and rules as live execution." />
 
       <div className="stats-grid">
         <StatCard label="Status" value={run?.status || '—'} hint={run?.run_id || error || ''} />
@@ -132,7 +132,7 @@ export default function MomentumBacktestPage() {
           {message ? <span style={{ color: 'var(--muted)' }}>{message}</span> : null}
         </div>
         <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 12 }}>
-          The run is queued once and processed by the background worker. Refreshes only read stored results.
+          The run is queued once and processed by the background worker. Strategy decisions call the live MomentumEngineService; only simulation parameters such as capital, fees, slippage and cadence are local to backtest.
         </p>
       </section>
 
