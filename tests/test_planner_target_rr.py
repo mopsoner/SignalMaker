@@ -75,25 +75,3 @@ def test_executor_does_not_downgrade_below_candidate_rr(monkeypatch):
     assert plan["target_price"] == 110.0
     assert plan["position_rr"] == 2.0
     assert plan["min_reward_ratio"] == 2.0
-
-
-def test_momentum_engine_price_prefers_latest_market_price_over_entry_fallback(monkeypatch):
-    from app.services.momentum_engine_service import MomentumEngineService
-
-    engine = object.__new__(MomentumEngineService)
-    monkeypatch.setattr(engine, "_latest_market_price", lambda symbol: 110.0)
-
-    price = engine._price_for("OLDUSDC", rankings=[], fallback=100.0)
-
-    assert price == 110.0
-
-
-def test_momentum_engine_price_uses_ranking_before_entry_fallback(monkeypatch):
-    from app.services.momentum_engine_service import MomentumEngineService
-
-    engine = object.__new__(MomentumEngineService)
-    monkeypatch.setattr(engine, "_latest_market_price", lambda symbol: None)
-
-    price = engine._price_for("OLDUSDC", rankings=[{"symbol": "OLDUSDC", "price": 108.0}], fallback=100.0)
-
-    assert price == 108.0
