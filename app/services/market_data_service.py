@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
@@ -28,8 +28,15 @@ class MarketDataService:
             "taker_buy_base_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
             "taker_buy_quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         }
-        for column, definition in columns.items():
-            self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}"))
+        inspector = inspect(self.db.get_bind())
+        if not inspector.has_table("market_candles"):
+            return
+        existing_columns = {column["name"] for column in inspector.get_columns("market_candles")}
+        missing_columns = [(column, definition) for column, definition in columns.items() if column not in existing_columns]
+        if not missing_columns:
+            return
+        for column, definition in missing_columns:
+            self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN {column} {definition}"))
         self.db.commit()
 
     def list_symbols(self, limit: int | None = None) -> list[str]:

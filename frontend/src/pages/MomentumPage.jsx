@@ -91,8 +91,13 @@ export default function MomentumPage() {
   const [cadenceHours, setCadenceHours] = useState(DEFAULT_CADENCE_HOURS)
   const [engineOverride, setEngineOverride] = useState(null)
   const [engineActionError, setEngineActionError] = useState(null)
+  const [enginePanelOpen, setEnginePanelOpen] = useState(false)
   const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => fetchMomentum(300), []), 30000)
-  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
+  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(
+    useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]),
+    30000,
+    { enabled: enginePanelOpen },
+  )
   const engine = engineOverride || engineData
 
   const counts = useMemo(() => ({
@@ -160,6 +165,8 @@ export default function MomentumPage() {
     { key: 'quantity', title: 'Qty', render: (row) => fmtNumber(row.quantity, 6), sortValue: (row) => Number(row.quantity || 0) },
     { key: 'value', title: 'Value', render: (row) => fmtNumber(row.value, 2), sortValue: (row) => Number(row.value || 0) },
     { key: 'pnl', title: 'PnL', render: (row) => fmtNumber(row.pnl, 2), sortValue: (row) => Number(row.pnl || 0) },
+    { key: 'pnl_pct', title: 'PnL %', render: (row) => row.pnl_pct == null ? '—' : `${fmtNumber(row.pnl_pct, 2)}%`, sortValue: (row) => Number(row.pnl_pct || 0) },
+    { key: 'price_source', title: 'Price source', render: (row) => row.price_source || '—', sortValue: (row) => row.price_source || '' },
     { key: 'reason', title: 'Reason', render: (row) => row.reason || '—', sortValue: (row) => row.reason || '' },
   ]
 
@@ -176,8 +183,14 @@ export default function MomentumPage() {
 
     <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
 
-    <details className="panel collapsible-panel" open>
-      <summary><h2>Positions momentum · backend paper engine</h2><span className="collapse-indicator">⌄</span></summary>
+    <details className="panel collapsible-panel" open={enginePanelOpen} onToggle={(event) => setEnginePanelOpen(event.currentTarget.open)}>
+      <summary>
+        <div>
+          <h2>Positions momentum · backend paper engine</h2>
+          <p className="stat-hint" style={{ marginTop: 4 }}>Lazy-loaded: open this panel only when you need the paper-engine status.</p>
+        </div>
+        <span className="collapse-indicator">⌄</span>
+      </summary>
       {engineLoading ? <div className="panel">Loading momentum engine…</div> : null}
       {engineError ? <div className="panel error">{engineError}</div> : null}
       {engineActionError ? <div className="panel error">{engineActionError}</div> : null}
@@ -203,7 +216,7 @@ export default function MomentumPage() {
       </div>
       <div className="stats-grid">
         <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Entry ${fmtNumber(engine.open_position.entry_price, 6)} · rank #${engine.open_position.entry_rank}` : 'No open paper position'} />
-        <StatCard label="Open PnL" value={`${fmtNumber(engine?.open_position?.unrealized_pnl, 2)} USDC`} hint={engine?.open_position?.mark_price ? `Mark ${fmtNumber(engine.open_position.mark_price, 6)}` : 'No mark'} />
+        <StatCard label="Open PnL" value={`${fmtNumber(engine?.open_position?.unrealized_pnl, 2)} USDC`} hint={engine?.open_position?.mark_price ? `Mark ${fmtNumber(engine.open_position.mark_price, 6)} · ${engine.open_position.mark_price_source || 'price source unknown'}` : 'No mark'} />
         <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
         <StatCard label="Recommendation" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={engine?.recommendation || '—'} />
       </div>
