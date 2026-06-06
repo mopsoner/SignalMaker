@@ -95,6 +95,11 @@ function actionTone(action) {
   return '#a78bfa'
 }
 
+function shouldShowChartActionLabel(action) {
+  const normalized = String(action || '').toUpperCase()
+  return normalized.startsWith('BUY') || normalized.startsWith('SELL') || normalized.includes('ROTATE')
+}
+
 function shortActionLabel(action) {
   const normalized = String(action || '').toUpperCase()
   if (normalized.startsWith('BUY_AFTER')) return 'BUY ↻'
@@ -186,8 +191,7 @@ function MomentumTradeChart({ points }) {
         const tone = actionTone(point.action)
         return <g key={point.id || index}>
           <circle cx={x} cy={y} r={index === points.length - 1 ? 6 : 4} fill={tone} stroke="rgba(15, 23, 42, 0.9)" strokeWidth="2" />
-          {index > 0 ? <text x={Math.min(x + 8, width - 100)} y={Math.max(y - 8, 14)} fill={tone} fontSize="11" fontWeight="700">{point.label}{point.symbol ? ` ${point.symbol}` : ''}</text> : null}
-          {index > 0 && point.pnl ? <text x={Math.min(x + 8, width - 100)} y={Math.min(y + 18, height - 8)} fill="var(--muted)" fontSize="10">PnL {fmtNumber(point.pnl, 2)}</text> : null}
+          {index > 0 && shouldShowChartActionLabel(point.action) ? <text x={Math.min(x + 8, width - 72)} y={Math.max(y - 8, 14)} fill={tone} fontSize="11" fontWeight="700">{point.label}</text> : null}
         </g>
       })}
     </svg>
