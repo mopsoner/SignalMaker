@@ -91,7 +91,7 @@ function actionTone(action) {
   if (normalized.startsWith('BUY')) return '#22c55e'
   if (normalized.startsWith('SELL')) return '#f97316'
   if (normalized.includes('ROTATE')) return '#38bdf8'
-  if (normalized.includes('HOLD') || normalized.includes('WAIT')) return '#94a3b8'
+  if (normalized.includes('NOOP') || normalized.includes('CHECK')) return '#94a3b8'
   return '#a78bfa'
 }
 
@@ -106,25 +106,13 @@ function shortActionLabel(action) {
   return normalized || 'EVENT'
 }
 
-function isPerformedMomentumAction(action) {
-  const normalized = String(action || '').toUpperCase()
-  return normalized.startsWith('BUY') || normalized.startsWith('SELL') || normalized.includes('ROTATE') || normalized.includes('HOLD') || normalized.includes('WAIT')
-}
-
-function shouldShowActionLabel(action) {
-  const normalized = String(action || '').toUpperCase()
-  if (normalized.includes('HOLD') || normalized.includes('WAIT')) return false
-  return normalized.startsWith('BUY') || normalized.startsWith('SELL') || normalized.includes('ROTATE')
-}
-
 function buildMomentumTimeline(engine) {
   if (!engine) return []
 
-  const trades = [...(engine?.trades || [])]
-    .filter((trade) => isPerformedMomentumAction(trade.action))
-    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+  const startingCapital = Number(engine?.starting_capital || STARTING_CAPITAL)
+  const trades = [...(engine?.trades || [])].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
   let realizedPnl = 0
-  const points = [{ id: 'start', label: 'Start', created_at: null, profit: 0, delta: 0, action: 'START' }]
+  const points = [{ id: 'start', label: 'Start', created_at: null, equity: startingCapital, pnl: 0, action: 'START' }]
 
   trades.forEach((trade, index) => {
     realizedPnl += Number(trade.pnl || 0)
@@ -132,8 +120,8 @@ function buildMomentumTimeline(engine) {
       id: trade.trade_id || `${trade.created_at || 'trade'}-${index}`,
       label: shortActionLabel(trade.action),
       created_at: trade.created_at,
-      profit: realizedPnl,
-      delta: Number(trade.pnl || 0),
+      equity: startingCapital + realizedPnl,
+      pnl: Number(trade.pnl || 0),
       pnl_pct: trade.pnl_pct,
       action: trade.action,
       symbol: trade.symbol,
@@ -142,66 +130,68 @@ function buildMomentumTimeline(engine) {
     })
   })
 
-  const currentPnl = Number(engine.total_pnl ?? realizedPnl)
-  const lastProfit = points[points.length - 1]?.profit
-  if (Math.abs(currentPnl - Number(lastProfit || 0)) > 0.00000001 || engine.open_position) {
-    points.push({
-      id: 'mark-to-market',
-      label: engine.open_position ? 'MARK' : 'PNL',
-      created_at: engine.last_check_at || new Date().toISOString(),
-      profit: currentPnl,
-      delta: currentPnl - realizedPnl,
-      action: engine.open_position ? 'MARK_TO_MARKET' : 'PNL_UPDATE',
-      symbol: engine.open_position?.symbol,
-      price: engine.open_position?.mark_price,
-      price_source: engine.open_position?.mark_price_source,
-    })
+  if (engine) {
+    const currentEquity = Number(engine.equity ?? startingCapital + realizedPnl)
+    const currentPnl = Number(engine.total_pnl ?? currentEquity - startingCapital)
+    const lastEquity = points[points.length - 1]?.equity
+    if (points.length === 1 || Math.abs(currentEquity - Number(lastEquity || 0)) > 0.00000001 || engine.open_position) {
+      points.push({
+        id: 'mark-to-market',
+        label: engine.open_position ? 'MARK' : 'EQUITY',
+        created_at: engine.last_check_at || new Date().toISOString(),
+        equity: currentEquity,
+        pnl: currentPnl - realizedPnl,
+        action: engine.open_position ? 'MARK_TO_MARKET' : 'EQUITY',
+        symbol: engine.open_position?.symbol,
+        price: engine.open_position?.mark_price,
+        price_source: engine.open_position?.mark_price_source,
+      })
+    }
   }
 
   return points
 }
 
 function MomentumTradeChart({ points }) {
-  if (!points.length) return <div className="panel">Loading momentum profit chart…</div>
+  if (!points.length) return <div className="panel">No momentum engine events yet.</div>
 
   const width = 720
   const height = 260
   const pad = 34
-  const profits = points.map((point) => Number(point.profit || 0))
-  const minProfit = Math.min(...profits, 0)
-  const maxProfit = Math.max(...profits, 0)
-  const span = Math.max(maxProfit - minProfit, 1)
+  const equities = points.map((point) => Number(point.equity || 0))
+  const minEquity = Math.min(...equities)
+  const maxEquity = Math.max(...equities)
+  const span = Math.max(maxEquity - minEquity, 1)
   const xFor = (index) => pad + (points.length === 1 ? 0 : (index / (points.length - 1)) * (width - pad * 2))
-  const yFor = (profit) => height - pad - ((Number(profit || 0) - minProfit) / span) * (height - pad * 2)
-  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index).toFixed(2)} ${yFor(point.profit).toFixed(2)}`).join(' ')
-  const zeroY = yFor(0)
+  const yFor = (equity) => height - pad - ((Number(equity || 0) - minEquity) / span) * (height - pad * 2)
+  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index).toFixed(2)} ${yFor(point.equity).toFixed(2)}`).join(' ')
   const last = points[points.length - 1]
-  const performedCount = points.filter((point) => point.action !== 'START' && point.action !== 'MARK_TO_MARKET' && point.action !== 'PNL_UPDATE').length
+  const startingEquity = Number(points[0]?.equity || STARTING_CAPITAL)
 
   return <div style={{ display: 'grid', gap: 12 }}>
     <div className="stats-grid">
-      <StatCard label="Latest PnL" value={`${fmtNumber(last.profit, 2)} USDC`} hint={last.symbol ? `${last.label} ${last.symbol}` : last.label} />
-      <StatCard label="Profit range" value={`${fmtNumber(minProfit, 2)} → ${fmtNumber(maxProfit, 2)}`} hint="USDC cumulative profit" />
-      <StatCard label="Actions" value={performedCount} hint="BUY / SELL / ROTATE labels only" />
+      <StatCard label="Chart equity" value={fmtNumber(last.equity, 2)} hint={`Range ${fmtNumber(minEquity, 2)} → ${fmtNumber(maxEquity, 2)} USDC`} />
+      <StatCard label="Logged events" value={Math.max(points.length - 1, 0)} hint="BUY / SELL / ROTATE / mark-to-market" />
+      <StatCard label="Latest chart PnL" value={`${fmtNumber(last.equity - startingEquity, 2)} USDC`} hint={last.symbol ? `${last.label} ${last.symbol}` : last.label} />
     </div>
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Momentum profit evolution with buy sell rotate action labels" style={{ width: '100%', minHeight: 260, background: 'rgba(15, 23, 42, 0.35)', borderRadius: 16 }}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Momentum buy sell rotation profit chart" style={{ width: '100%', minHeight: 260, background: 'rgba(15, 23, 42, 0.35)', borderRadius: 16 }}>
       <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(148, 163, 184, 0.35)" />
       <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(148, 163, 184, 0.35)" />
-      <line x1={pad} y1={zeroY} x2={width - pad} y2={zeroY} stroke="rgba(148, 163, 184, 0.25)" strokeDasharray="5 5" />
-      <text x={pad} y={20} fill="var(--muted)" fontSize="12">{fmtNumber(maxProfit, 2)} USDC</text>
-      <text x={pad} y={height - 8} fill="var(--muted)" fontSize="12">{fmtNumber(minProfit, 2)} USDC</text>
+      <text x={pad} y={20} fill="var(--muted)" fontSize="12">{fmtNumber(maxEquity, 2)} USDC</text>
+      <text x={pad} y={height - 8} fill="var(--muted)" fontSize="12">{fmtNumber(minEquity, 2)} USDC</text>
       <path d={path} fill="none" stroke="#38bdf8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
       {points.map((point, index) => {
         const x = xFor(index)
-        const y = yFor(point.profit)
+        const y = yFor(point.equity)
         const tone = actionTone(point.action)
         return <g key={point.id || index}>
           <circle cx={x} cy={y} r={index === points.length - 1 ? 6 : 4} fill={tone} stroke="rgba(15, 23, 42, 0.9)" strokeWidth="2" />
-          {shouldShowActionLabel(point.action) ? <text x={Math.min(x + 8, width - 80)} y={Math.max(y - 8, 14)} fill={tone} fontSize="11" fontWeight="700">{point.label}</text> : null}
+          {index > 0 ? <text x={Math.min(x + 8, width - 100)} y={Math.max(y - 8, 14)} fill={tone} fontSize="11" fontWeight="700">{point.label}{point.symbol ? ` ${point.symbol}` : ''}</text> : null}
+          {index > 0 && point.pnl ? <text x={Math.min(x + 8, width - 100)} y={Math.min(y + 18, height - 8)} fill="var(--muted)" fontSize="10">PnL {fmtNumber(point.pnl, 2)}</text> : null}
         </g>
       })}
     </svg>
-    <div className="market-toolbar-hint">Profit chart labels only BUY, SELL, and ROTATE actions; HOLD/WAIT points stay unlabeled to keep the chart readable.</div>
+    <div className="market-toolbar-hint">Chart derived from the backend momentum trade log; BUY entries stay flat until realized/marked profit moves equity.</div>
   </div>
 }
 
@@ -335,6 +325,10 @@ export default function MomentumPage() {
         <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
         <StatCard label="Recommendation" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={engine?.recommendation || '—'} />
       </div>
+      <section style={{ display: 'grid', gap: 12 }}>
+        <h3 style={{ margin: 0 }}>Momentum buy / rotate / profit chart</h3>
+        <MomentumTradeChart points={engineTimeline} />
+      </section>
       <FoldableTable title="Backend momentum trade log" columns={tradeColumns} rows={engine?.trades || []} empty="No backend paper trades yet" defaultSortKey="created_at" defaultSortDir="desc" paginated initialPageSize={10} />
     </details>
 

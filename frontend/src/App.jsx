@@ -37,14 +37,14 @@ export default function App() {
           </button>
         </div>
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
+          <div style={groupTitleStyle}>Momentum</div>
+          <NavLink to="/momentum" onClick={closeMenu}>Momentum</NavLink>
+          <NavLink to="/momentum-backtest" onClick={closeMenu}>Momentum Backtest</NavLink>
+
           <div style={groupTitleStyle}>Wyckoff / SMC</div>
           <NavLink to="/" end onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
-
-          <div style={groupTitleStyle}>Momentum</div>
-          <NavLink to="/momentum" onClick={closeMenu}>Momentum</NavLink>
-          <NavLink to="/momentum-backtest" onClick={closeMenu}>Momentum Backtest</NavLink>
 
           <div style={groupTitleStyle}>Ops / Admin</div>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
