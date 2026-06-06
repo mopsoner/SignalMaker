@@ -95,6 +95,14 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_engine_cadence_hours": 4,
         "momentum_engine_starting_capital": 1000.0,
         "momentum_engine_min_score": 0.0,
+        "momentum_executor_enabled": base_settings.momentum_executor_enabled,
+        "momentum_executor_mode": base_settings.momentum_executor_mode,
+        "momentum_executor_interval_sec": base_settings.momentum_executor_interval_sec,
+        "momentum_executor_api_base": base_settings.momentum_executor_api_base,
+        "momentum_executor_decision_path": base_settings.momentum_executor_decision_path,
+        "momentum_executor_quote_asset": base_settings.momentum_executor_quote_asset,
+        "momentum_executor_notional": base_settings.momentum_executor_notional,
+        "momentum_executor_apply_remote_run": base_settings.momentum_executor_apply_remote_run,
     },
     "live": {
         "live_trading_enabled": base_settings.live_trading_enabled,
@@ -129,9 +137,18 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             payload.get("bot", {}).get("bot_momentum_engine_enabled", True),
             default=True,
         )
-        payload.setdefault("momentum", {})["momentum_engine_enabled"] = _as_bool(
-            payload.get("momentum", {}).get("momentum_engine_enabled", True),
+        momentum = payload.setdefault("momentum", {})
+        momentum["momentum_engine_enabled"] = _as_bool(
+            momentum.get("momentum_engine_enabled", True),
             default=True,
+        )
+        momentum["momentum_executor_enabled"] = _as_bool(
+            momentum.get("momentum_executor_enabled", False),
+            default=False,
+        )
+        momentum["momentum_executor_apply_remote_run"] = _as_bool(
+            momentum.get("momentum_executor_apply_remote_run", False),
+            default=False,
         )
         return payload
     finally:
@@ -157,6 +174,10 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     momentum = payload.get("momentum")
     if isinstance(momentum, dict) and "momentum_engine_enabled" in momentum:
         momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
+    if isinstance(momentum, dict) and "momentum_executor_enabled" in momentum:
+        momentum["momentum_executor_enabled"] = _as_bool(momentum["momentum_executor_enabled"], default=False)
+    if isinstance(momentum, dict) and "momentum_executor_apply_remote_run" in momentum:
+        momentum["momentum_executor_apply_remote_run"] = _as_bool(momentum["momentum_executor_apply_remote_run"], default=False)
 
     for category, values in payload.items():
         if not isinstance(values, dict):
@@ -193,3 +214,7 @@ def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
             "price_near_extreme_pct": strategy["signal_price_near_extreme_pct"],
         },
     }
+
+
+def get_runtime_momentum_config(db: Session | None = None) -> dict[str, Any]:
+    return load_runtime_settings(db)["momentum"]
