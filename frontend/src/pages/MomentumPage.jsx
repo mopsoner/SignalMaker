@@ -200,13 +200,8 @@ export default function MomentumPage() {
   const [cadenceHours, setCadenceHours] = useState(DEFAULT_CADENCE_HOURS)
   const [engineOverride, setEngineOverride] = useState(null)
   const [engineActionError, setEngineActionError] = useState(null)
-  const [enginePanelOpen, setEnginePanelOpen] = useState(false)
   const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => fetchMomentum(300), []), 30000)
-  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(
-    useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]),
-    30000,
-    { enabled: enginePanelOpen },
-  )
+  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
   const engine = engineOverride || engineData
   const engineTimeline = useMemo(() => buildMomentumTimeline(engine), [engine])
 
@@ -291,16 +286,16 @@ export default function MomentumPage() {
     {loading ? <div className="panel">Loading momentum ranking…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
 
+    <section className="panel" style={{ display: 'grid', gap: 12 }}>
+      <h2 style={{ margin: 0 }}>Momentum profit evolution</h2>
+      {engineLoading ? <div className="market-toolbar-hint">Loading momentum engine…</div> : null}
+      <MomentumTradeChart points={engineTimeline} />
+    </section>
+
     <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
 
-    <details className="panel collapsible-panel" open={enginePanelOpen} onToggle={(event) => setEnginePanelOpen(event.currentTarget.open)}>
-      <summary>
-        <div>
-          <h2>Positions momentum · backend paper engine</h2>
-          <p className="stat-hint" style={{ marginTop: 4 }}>Lazy-loaded: open this panel only when you need the paper-engine status.</p>
-        </div>
-        <span className="collapse-indicator">⌄</span>
-      </summary>
+    <details className="panel collapsible-panel" open>
+      <summary><h2>Positions momentum · backend paper engine</h2><span className="collapse-indicator">⌄</span></summary>
       {engineLoading ? <div className="panel">Loading momentum engine…</div> : null}
       {engineError ? <div className="panel error">{engineError}</div> : null}
       {engineActionError ? <div className="panel error">{engineActionError}</div> : null}
