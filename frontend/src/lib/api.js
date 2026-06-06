@@ -35,6 +35,7 @@ export const api = {
   assets: (params = '') => request(`/api/v1/assets${params}`),
   asset: (symbol) => request(`/api/v1/assets/${encodeURIComponent(symbol)}`),
   candidates: (params = '') => request(`/api/v1/trade-candidates${params}`),
+  momentumCandidates: (params = '') => request(`/api/v1/momentum-candidates${params}`),
   clearCandidates: (status = '') => request(`/api/v1/trade-candidates${status ? `?status=${encodeURIComponent(status)}` : ''}`, { method: 'DELETE' }),
   clearOpenCandidates: () => request('/api/v1/trade-candidates/open', { method: 'DELETE' }),
   positions: (params = '') => request(`/api/v1/positions${params}`),
