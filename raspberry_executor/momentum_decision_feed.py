@@ -7,6 +7,7 @@ import requests
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
 from raspberry_executor.config import load_settings
+from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.state import StateStore
 
@@ -22,16 +23,26 @@ def _bool(value: str | None, default: bool = True) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    try:
+        return read_env().get(name, default)
+    except Exception:
+        return default
+
+
 def _int_env(name: str, default: int) -> int:
     try:
-        return int(os.getenv(name, str(default)) or default)
+        return int(_env(name, str(default)) or default)
     except Exception:
         return default
 
 
 def _float_env(name: str, default: float) -> float:
     try:
-        return float(os.getenv(name, str(default)) or default)
+        return float(_env(name, str(default)) or default)
     except Exception:
         return default
 
@@ -46,11 +57,11 @@ def _url(base_url: str, path: str) -> str:
 
 
 def _decision_path() -> str:
-    return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
+    return _env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
 
 
 def _candidates_path() -> str:
-    return os.getenv("MOMENTUM_CANDIDATES_PATH", DEFAULT_CANDIDATES_PATH) or DEFAULT_CANDIDATES_PATH
+    return _env("MOMENTUM_CANDIDATES_PATH", DEFAULT_CANDIDATES_PATH) or DEFAULT_CANDIDATES_PATH
 
 
 def _read_json_payload(response: requests.Response) -> Any:
@@ -353,7 +364,7 @@ def _buy_result_ok(result: str) -> bool:
 
 
 def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
-    if not _bool(os.getenv("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
+    if not _bool(_env("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
         symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
         return buy_symbol(settings, binance, rules, state, symbol, decision, use_available_quote=True)
 
@@ -410,7 +421,7 @@ def _decision_targets_held_symbol(decision: dict[str, Any], held_symbol: str) ->
 
 
 def execute_decision(decision: dict[str, Any]) -> str:
-    if not _bool(os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
+    if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
     settings = load_settings()
     binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
@@ -460,24 +471,39 @@ def record_decision(decision: dict[str, Any], execution_result: str | None = Non
     })
 
 
+def _log_decision(prefix: str, decision: dict[str, Any], execution_result: str | None = None) -> None:
+    logger.info(
+        "%s action=%s symbol=%s should_trade=%s buy_symbol=%s sell_symbol=%s execution_result=%s",
+        prefix,
+        decision.get("action"),
+        decision.get("symbol"),
+        decision.get("should_trade"),
+        decision.get("buy_symbol"),
+        decision.get("sell_symbol"),
+        execution_result,
+    )
+
+
 def run_once() -> dict[str, Any]:
     decision = fetch_decision()
+    _log_decision("momentum decision received", decision)
     result = execute_decision(decision)
+    _log_decision("momentum decision executed", decision, result)
     record_decision(decision, result)
     return {"decision": decision, "execution_result": result}
 
 
 def run_loop() -> None:
-    if not _bool(os.getenv("MOMENTUM_DECISION_ENABLED"), default=True):
+    if not _bool(_env("MOMENTUM_DECISION_ENABLED"), default=True):
         logger.info("momentum decision feed disabled")
         return
-    poll_seconds = max(30, _int_env("MOMENTUM_DECISION_POLL_SECONDS", 60))
-    logger.info("momentum decision feed started poll_seconds=%s execute=%s path=%s", poll_seconds, os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED", "true"), _decision_path())
+    poll_seconds = max(30, _int_env("MOMENTUM_DECISION_POLL_SECONDS", 300))
+    logger.info("momentum decision feed started poll_seconds=%s execute=%s path=%s", poll_seconds, _env("MOMENTUM_DECISION_EXECUTE_ENABLED", "true"), _decision_path())
     while True:
         try:
             output = run_once()
             decision = output["decision"]
-            logger.info("momentum decision action=%s symbol=%s should_trade=%s candidates=%s result=%s", decision.get("action"), decision.get("symbol"), decision.get("should_trade"), len(decision_buy_candidates(decision)), output.get("execution_result"))
+            logger.info("momentum decision action=%s symbol=%s should_trade=%s buy_symbol=%s sell_symbol=%s candidates=%s result=%s", decision.get("action"), decision.get("symbol"), decision.get("should_trade"), decision.get("buy_symbol"), decision.get("sell_symbol"), len(decision_buy_candidates(decision)), output.get("execution_result"))
         except Exception as exc:
             logger.error("momentum decision feed error=%s", str(exc))
             try:
@@ -488,4 +514,4 @@ def run_loop() -> None:
 
 
 if __name__ == "__main__":
-    print(run_once())
+    run_loop()
