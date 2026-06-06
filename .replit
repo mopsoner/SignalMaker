@@ -1,0 +1,37 @@
+modules = ["nodejs-20", "python-3.11"]
+
+[deployment]
+deploymentTarget = "vm"
+run = ["bash", "scripts/start_reserved_vm.sh"]
+build = ["bash", "-c", "cd frontend && npm install && npm run build"]
+
+[agent]
+expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd ~/workspace && bash scripts/start_reserved_vm.sh"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
