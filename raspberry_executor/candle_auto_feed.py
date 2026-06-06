@@ -224,10 +224,26 @@ def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, sym
     return {"kind": "pushed", "symbol": symbol, "interval": interval, "count": len(candles), "start_time": start_time, "upserted": response.get("upserted")}
 
 
+def _record_feed_status(status: str, **extra) -> None:
+    payload = {"status": status, "pushed": [], "skipped": [], "errors": [], **extra}
+    try:
+        record_feed_run(payload)
+    except Exception as exc:
+        logger.warning("unable to record candle feed status=%s error=%s", status, str(exc))
+
+
 def run_once() -> dict:
     ensure_env()
     env = read_env()
     settings = load_settings()
+    intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
+    _record_feed_status(
+        "running",
+        reason="run_started",
+        execution_mode=execution_mode(),
+        quote_assets=_csv(env.get("QUOTE_ASSETS", "USDT")),
+        intervals=intervals,
+    )
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     endpoint_check = client.check_candle_ingest_endpoint()
     if not endpoint_check.get("ok"):
@@ -236,7 +252,6 @@ def run_once() -> dict:
         return result
 
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
-    intervals = _csv(env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), upper=False)
     limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
     max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
     requests_per_minute, binance_doc_weight_limit_1m, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
@@ -288,6 +303,7 @@ def run_loop() -> None:
     enabled = _bool(env.get("CANDLE_FEED_ENABLED"), default=True)
     if not enabled:
         logger.info("candle feed disabled by CANDLE_FEED_ENABLED=false")
+        _record_feed_status("disabled", reason="CANDLE_FEED_ENABLED=false")
         return
 
     poll_seconds = int(env.get("CANDLE_FEED_POLL_SECONDS", "60") or "60")

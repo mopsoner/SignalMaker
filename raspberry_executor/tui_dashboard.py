@@ -108,6 +108,15 @@ def fetch_candidates(limit: int | None = None):
         return [], str(exc)
 
 
+def position_strategy(candidate_id: str, row: dict) -> str:
+    if str(candidate_id).startswith("momentum-") or isinstance(row.get("momentum_decision"), dict) or str(row.get("strategy") or "").lower() == "momentum_rotation":
+        return "mom"
+    mode = str(row.get("mode") or "").lower()
+    if "margin" in mode or mode in {"cross", "isolated"}:
+        return "mgn"
+    return "sig"
+
+
 def enrich_positions_with_pnl(positions, settings):
     binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run or margin_dry_run())
     enriched = []
@@ -116,6 +125,7 @@ def enrich_positions_with_pnl(positions, settings):
     price_cache = {}
     for candidate_id, row in positions:
         pos = dict(row)
+        pos["strategy_label"] = position_strategy(candidate_id, pos)
         symbol = str(pos.get("execution_symbol") or pos.get("signal_symbol") or "").upper()
         side = str(pos.get("side") or "").lower()
         qty = _float(pos.get("quantity"))
@@ -221,7 +231,7 @@ def render_positions(stdscr, y, x, h, w, data):
     total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
     box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl:+.4f}")
     rows = data["positions"][: max(0, h - 4)]
-    add(stdscr, y + 1, x + 2, "Symbol     Side   Qty        Entry      Mark       PNL        TP/SL", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        TP/SL", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
         return
@@ -231,7 +241,7 @@ def render_positions(stdscr, y, x, h, w, data):
         mark = row.get("mark_price")
         pnl_text = f"{pnl:+.4f}" if pnl is not None else "PNL?"
         mark_text = f"{mark:.8g}" if mark is not None else "-"
-        line = f"{safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))}"
+        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))}"
         color = curses.color_pair(2) if pnl is not None and pnl >= 0 else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 

@@ -14,6 +14,17 @@ def cell(value):
     return "" if value is None else escape(str(value))
 
 
+def position_strategy(candidate_id, row):
+    if str(candidate_id).startswith("momentum-") or isinstance(row.get("momentum_decision"), dict) or str(row.get("strategy") or "").lower() == "momentum_rotation":
+        return "momentum"
+    return row.get("mode") or "signal"
+
+
+def position_pnl(row):
+    value = row.get("unrealized_pnl") if row.get("unrealized_pnl") is not None else row.get("pnl")
+    return value
+
+
 def order_status(payload):
     if not isinstance(payload, dict):
         return ""
@@ -25,10 +36,10 @@ def order_status(payload):
 def synced_positions_table(rows):
     if not rows:
         return "<p class='muted'>No positions.</p>"
-    cols = ["Status", "Candidate", "Symbol", "Side", "Qty", "Entry", "Stop", "Target", "TP", "TP status", "SL", "SL status", "Reason"]
+    cols = ["Status", "Strategy", "Candidate", "Symbol", "Side", "Qty", "Entry", "Mark", "PNL", "Stop", "Target", "TP", "TP status", "SL", "SL status", "Reason"]
     html = "<table><tr>" + "".join(f"<th>{cell(col)}</th>" for col in cols) + "</tr>"
     for candidate_id, row in rows:
-        values = [row.get("status"), candidate_id, row.get("execution_symbol") or row.get("signal_symbol"), row.get("side"), row.get("quantity"), row.get("entry_price"), row.get("stop_price"), row.get("target_price"), row.get("tp_order_id"), order_status(row.get("binance_tp_status")), row.get("sl_order_id"), order_status(row.get("binance_sl_status")), row.get("close_reason")]
+        values = [row.get("status"), position_strategy(candidate_id, row), candidate_id, row.get("execution_symbol") or row.get("signal_symbol"), row.get("side"), row.get("quantity"), row.get("entry_price"), row.get("mark_price"), position_pnl(row), row.get("stop_price"), row.get("target_price"), row.get("tp_order_id"), order_status(row.get("binance_tp_status")), row.get("sl_order_id"), order_status(row.get("binance_sl_status")), row.get("close_reason")]
         html += "<tr>" + "".join(f"<td>{cell(value)}</td>" for value in values) + "</tr>"
     return html + "</table>"
 
@@ -36,7 +47,7 @@ def synced_positions_table(rows):
 def positions_page_v2():
     try:
         sync = sync_open_positions()
-        sync_html = "<p class='muted'>Binance sync: checked={checked}, closed={closed}, missing_oco={missing_oco}, repaired_oco={repaired_oco}</p>".format(**sync)
+        sync_html = "<p class='muted'>Binance sync: checked={checked}, closed={closed}, momentum_tracked={momentum_tracked}, missing_oco={missing_oco}, repaired_oco={repaired_oco}</p>".format(**{**{"momentum_tracked": 0}, **sync})
     except Exception as exc:
         sync_html = f"<p class='pill bad'>Binance sync unavailable: {cell(exc)}</p>"
     state = StateStore()
