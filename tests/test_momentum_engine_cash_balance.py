@@ -202,3 +202,123 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
     assert position.quantity == pytest.approx(240.0 / 130.0)
     assert trade.price == 130.0
     assert trade.price_source == "market_candle:4h"
+
+
+def _base_decision_status(**overrides: object) -> dict:
+    status = {
+        "strategy": MomentumEngineService.STRATEGY,
+        "recommendation": "test recommendation",
+        "due_now": True,
+        "last_check_at": None,
+        "next_check_at": None,
+        "open_position": None,
+        "best_asset": None,
+    }
+    status.update(overrides)
+    return status
+
+
+def test_executor_contract_buys_best_asset_when_due_without_position() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    best_asset = {"symbol": "ETHUSDC", "rank": 1}
+    decision = build_executor_contract(_base_decision_status(best_asset=best_asset))
+
+    assert decision["source"] == "momentum_engine_status"
+    assert decision["action"] == "BUY"
+    assert decision["symbol"] == "ETHUSDC"
+    assert decision["buy_symbol"] == "ETHUSDC"
+    assert decision["sell_symbol"] is None
+    assert decision["should_trade"] is True
+    assert decision["buy_candidates"] == [best_asset]
+    assert decision["executor_contract"]["order_sequence"] == [{"type": "BUY", "symbol": "ETHUSDC"}]
+    assert decision["status"]["best_asset"] == best_asset
+
+
+def test_executor_contract_holds_when_not_due_with_open_position() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    decision = build_executor_contract(
+        _base_decision_status(
+            due_now=False,
+            open_position={"symbol": "BTCUSDC", "structure_broken": True},
+            best_asset={"symbol": "ETHUSDC"},
+        )
+    )
+
+    assert decision["action"] == "HOLD"
+    assert decision["symbol"] == "BTCUSDC"
+    assert decision["buy_symbol"] is None
+    assert decision["sell_symbol"] is None
+    assert decision["should_trade"] is False
+    assert decision["executor_contract"]["order_sequence"] == []
+
+
+def test_executor_contract_rotates_broken_position_to_best_asset() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    decision = build_executor_contract(
+        _base_decision_status(
+            open_position={"symbol": "BTCUSDC", "structure_broken": True},
+            best_asset={"symbol": "ETHUSDC"},
+        )
+    )
+
+    assert decision["action"] == "ROTATE"
+    assert decision["symbol"] == "ETHUSDC"
+    assert decision["buy_symbol"] == "ETHUSDC"
+    assert decision["sell_symbol"] == "BTCUSDC"
+    assert decision["should_trade"] is True
+    assert decision["executor_contract"]["order_sequence"] == [
+        {"type": "SELL", "symbol": "BTCUSDC"},
+        {"type": "BUY", "symbol": "ETHUSDC"},
+    ]
+
+
+def test_executor_contract_sells_broken_position_without_best_asset() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    decision = build_executor_contract(
+        _base_decision_status(open_position={"symbol": "BTCUSDC", "structure_broken": True})
+    )
+
+    assert decision["action"] == "SELL"
+    assert decision["symbol"] == "BTCUSDC"
+    assert decision["buy_symbol"] is None
+    assert decision["sell_symbol"] == "BTCUSDC"
+    assert decision["should_trade"] is True
+    assert decision["executor_contract"]["order_sequence"] == [{"type": "SELL", "symbol": "BTCUSDC"}]
+
+
+def test_executor_contract_rotates_to_different_best_asset() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    decision = build_executor_contract(
+        _base_decision_status(
+            open_position={"symbol": "BTCUSDC", "structure_broken": False},
+            best_asset={"symbol": "ETHUSDC"},
+        )
+    )
+
+    assert decision["action"] == "ROTATE"
+    assert decision["symbol"] == "ETHUSDC"
+    assert decision["buy_symbol"] == "ETHUSDC"
+    assert decision["sell_symbol"] == "BTCUSDC"
+    assert decision["should_trade"] is True
+    assert decision["executor_contract"]["order_sequence"] == [
+        {"type": "SELL", "symbol": "BTCUSDC"},
+        {"type": "BUY", "symbol": "ETHUSDC"},
+    ]
+
+
+def test_executor_contract_waits_when_not_due_without_position() -> None:
+    from app.api.routes.momentum_engine import build_executor_contract
+
+    decision = build_executor_contract(_base_decision_status(due_now=False, best_asset={"symbol": "ETHUSDC"}))
+
+    assert decision["action"] == "WAIT"
+    assert decision["symbol"] is None
+    assert decision["buy_symbol"] is None
+    assert decision["sell_symbol"] is None
+    assert decision["should_trade"] is False
+    assert decision["executor_contract"]["order_sequence"] == []
