@@ -1,0 +1,15 @@
+[Unit]
+Description=SignalMaker Raspberry Executor App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker/raspberry/executor-app
+EnvironmentFile=/opt/signalmaker/raspberry/executor-app/.env
+ExecStart=/bin/bash /opt/signalmaker/raspberry/executor-app/scripts/start_executor_app.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
