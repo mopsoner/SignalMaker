@@ -15,17 +15,23 @@ function pnlPct(row) {
   if (!Number.isFinite(entry) || !Number.isFinite(mark) || entry === 0) return null
   return row?.side === 'short' ? ((entry - mark) / entry) * 100 : ((mark - entry) / entry) * 100
 }
-function distanceToStopPct(row) {
-  const mark = Number(row?.mark_price), stop = Number(row?.stop_price)
-  if (!Number.isFinite(mark) || !Number.isFinite(stop) || mark === 0) return null
-  return row?.side === 'short' ? ((stop - mark) / mark) * 100 : ((mark - stop) / mark) * 100
-}
 function distanceToTargetPct(row) {
   const mark = Number(row?.mark_price), target = Number(row?.target_price)
   if (!Number.isFinite(mark) || !Number.isFinite(target) || mark === 0) return null
   return row?.side === 'short' ? ((mark - target) / mark) * 100 : ((target - mark) / mark) * 100
 }
-function pnlTone(value) {
+function targetReached(row) {
+  const mark = Number(row?.mark_price), target = Number(row?.target_price)
+  if (!Number.isFinite(mark) || !Number.isFinite(target)) return false
+  return row?.side === 'short' ? mark <= target : mark >= target
+}
+function positionResult(row) {
+  if (targetReached(row)) return 'Gagnante (TP)'
+  if (row?.status === 'closed') return 'Closed'
+  return 'En attente TP'
+}
+function pnlTone(value, row) {
+  if (row && targetReached(row)) return { color: 'var(--green)', fontWeight: 700 }
   if (value === null || value === undefined) return {}
   if (value > 0) return { color: 'var(--green)', fontWeight: 700 }
   if (value < 0) return { color: 'var(--red)', fontWeight: 700 }
@@ -67,14 +73,12 @@ export default function PositionsPage() {
   }
 
   const positionColumns = [
-    { key: 'symbol', title: 'Symbol' }, { key: 'side', title: 'Side' }, { key: 'status', title: 'Status' },
+    { key: 'symbol', title: 'Symbol' }, { key: 'side', title: 'Side' }, { key: 'result', title: 'Résultat', render: (row) => <span className={`badge ${targetReached(row) ? 'green' : 'gray'}`}>{positionResult(row)}</span>, sortValue: (row) => targetReached(row) ? 1 : 0 }, { key: 'status', title: 'Status' },
     { key: 'quantity', title: 'Qty', render: (row) => fmtNumber(row.quantity, 2) },
     { key: 'entry_price', title: 'Entry', render: (row) => fmtNumber(row.entry_price, 4) },
     { key: 'mark_price', title: 'Mark', render: (row) => fmtNumber(row.mark_price, 4) },
-    { key: 'pnl', title: 'PnL', render: (row) => <span style={pnlTone(pnlValue(row))}>{fmtNumber(pnlValue(row), 4)}</span>, sortValue: (row) => pnlValue(row) ?? -999999 },
-    { key: 'pnl_pct', title: 'PnL %', render: (row) => <span style={pnlTone(pnlPct(row))}>{fmtNumber(pnlPct(row), 2)}</span>, sortValue: (row) => pnlPct(row) ?? -999999 },
-    { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
-    { key: 'dist_stop', title: 'Dist stop %', render: (row) => fmtNumber(distanceToStopPct(row), 2), sortValue: (row) => distanceToStopPct(row) ?? -999999 },
+    { key: 'pnl', title: 'PnL', render: (row) => <span style={pnlTone(pnlValue(row), row)}>{fmtNumber(pnlValue(row), 4)}</span>, sortValue: (row) => pnlValue(row) ?? -999999 },
+    { key: 'pnl_pct', title: 'PnL %', render: (row) => <span style={pnlTone(pnlPct(row), row)}>{fmtNumber(pnlPct(row), 2)}</span>, sortValue: (row) => pnlPct(row) ?? -999999 },
     { key: 'target_price', title: 'Target', render: (row) => fmtNumber(row.target_price, 4) },
     { key: 'dist_target', title: 'Dist target %', render: (row) => fmtNumber(distanceToTargetPct(row), 2), sortValue: (row) => distanceToTargetPct(row) ?? -999999 },
     { key: 'opened_at', title: 'Opened', render: (row) => fmtDate(row.opened_at) },
@@ -89,7 +93,7 @@ export default function PositionsPage() {
   return <div className="page-stack">
     <PageHeader
       title="Positions"
-      subtitle="Paper execution state, orders, fills, PnL and stop/target distances"
+      subtitle="Paper/live execution state, orders, fills, PnL and take-profit progress"
       actions={<><StatusBadge enabled={shortsEnabled} /><button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button></>}
     />
     {message ? <div className="panel info">{message}</div> : null}

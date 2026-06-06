@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 from app.models.app_setting import AppSetting
+from app.models.order import Order
 from app.models.trade_candidate import TradeCandidate
 from app.services.executor_service import ExecutorService
 from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
@@ -103,16 +104,90 @@ def test_sync_momentum_candidates_success(db_session, monkeypatch):
     assert row.payload["remote_candidate_id"] == "remote-btc"
 
 
-def test_skip_candidate_without_entry_stop_target(db_session, monkeypatch):
+def test_skip_candidate_without_entry_target(db_session, monkeypatch):
     patch_get(monkeypatch, [remote_candidate(entry_price=None)])
 
     summary = MomentumCandidateSyncService(db_session).sync()
 
     assert summary["fetched"] == 1
     assert summary["upserted"] == 0
-    assert summary["skipped"][0]["reason"] == "missing_entry_stop_or_target"
+    assert summary["skipped"][0]["reason"] == "missing_entry_or_target"
     assert db_session.get(TradeCandidate, "momentum-BTCUSDT-open") is None
 
+
+
+def test_sync_accepts_candidate_without_stop_loss(db_session, monkeypatch):
+    patch_get(monkeypatch, [remote_candidate(stop_price=None)])
+
+    summary = MomentumCandidateSyncService(db_session).sync()
+
+    row = db_session.get(TradeCandidate, "momentum-BTCUSDT-open")
+    assert summary["upserted"] == 1
+    assert summary["skipped"] == []
+    assert row is not None
+    assert row.stop_price is None
+    assert row.target_price == 120.0
+
+
+def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monkeypatch):
+    class FakeBinance:
+        def __init__(self):
+            self.oco_calls = []
+            self.limit_sell_calls = []
+
+        def current_price(self, symbol):
+            return 100.0
+
+        def is_configured(self):
+            return True
+
+        def normalize_order(self, symbol, quantity, target_price, stop_price):
+            assert stop_price is None
+            return {"quantity": quantity, "mark_price": 100.0, "target_price": target_price}
+
+        def place_market_buy(self, symbol, quantity):
+            return {"orderId": 101, "status": "FILLED", "executedQty": quantity, "cummulativeQuoteQty": quantity * 100.0}
+
+        def average_fill_price(self, order_payload):
+            return 100.0
+
+        def place_limit_sell(self, symbol, quantity, price):
+            self.limit_sell_calls.append({"symbol": symbol, "quantity": quantity, "price": price})
+            return {"orderId": 202, "status": "NEW"}
+
+        def place_oco_sell(self, *args, **kwargs):
+            self.oco_calls.append({"args": args, "kwargs": kwargs})
+            raise AssertionError("OCO stop-loss order should not be used")
+
+    monkeypatch.setattr("app.services.risk_service.settings.live_trading_enabled", True)
+    TradeCandidateService(db_session).upsert_open_candidate(
+        candidate_id="BTCUSDT-momentum",
+        symbol="BTCUSDT",
+        side="long",
+        stage="momentum",
+        score=8.0,
+        entry_price=100.0,
+        stop_price=90.0,
+        target_price=120.0,
+        rr_ratio=2.0,
+        execution_target=None,
+        liquidity_context=None,
+        notes=None,
+        payload={"source": "test"},
+    )
+    service = ExecutorService(db_session)
+    fake_binance = FakeBinance()
+    service.binance = fake_binance
+
+    result = service.execute_open_candidates(limit=10, quantity=0.25, mode="live")
+
+    assert result["executed"], result
+    assert result["executed"][0]["exchange_tp_order_id"] == 202
+    assert fake_binance.limit_sell_calls == [{"symbol": "BTCUSDT", "quantity": 0.25, "price": 120.0}]
+    assert fake_binance.oco_calls == []
+    orders = db_session.query(Order).order_by(Order.created_at).all()
+    assert [order.order_type for order in orders] == ["market", "take_profit"]
+    assert all(order.order_type != "stop_loss" for order in orders)
 
 def test_remote_status_momentum_ready_becomes_local_open(db_session, monkeypatch):
     patch_get(monkeypatch, [remote_candidate(status="momentum_ready")])

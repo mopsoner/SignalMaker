@@ -127,6 +127,17 @@ class BinanceTradingService:
             'newOrderRespType': 'FULL',
         })
 
+    def place_limit_sell(self, symbol: str, quantity: float, price: float) -> dict[str, Any]:
+        return self._signed_request('POST', '/api/v3/order', {
+            'symbol': symbol.upper(),
+            'side': 'SELL',
+            'type': 'LIMIT',
+            'timeInForce': 'GTC',
+            'quantity': quantity,
+            'price': price,
+            'newOrderRespType': 'FULL',
+        })
+
     def place_oco_sell(self, symbol: str, quantity: float, take_profit_price: float, stop_price: float, stop_limit_price: float | None = None) -> dict[str, Any]:
         stop_limit_price = stop_limit_price or stop_price
         return self._signed_request('POST', '/api/v3/orderList/oco', {
