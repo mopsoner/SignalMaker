@@ -2,6 +2,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from uuid import uuid4
+import logging
 import re
 
 from sqlalchemy import select
@@ -23,6 +24,8 @@ from app.services.trade_candidate_service import TradeCandidateService
 
 EXECUTION_INTERVAL = "15m"
 LEGACY_ENGINE_INTERVAL = "5m"
+
+logger = logging.getLogger(__name__)
 
 PUBLIC_STATUS_REPLACEMENTS = {
     "blocked_no_5m_confirm": "blocked_no_confirm",
@@ -206,6 +209,7 @@ class PipelineService:
         candidates = 0
         candles_written = 0
         momentum_rows_upserted = 0
+        asset_states_upserted = 0
         errors: list[dict] = []
         collected_symbols: set[str] = set()
         latest_close_times = self.market_data.get_latest_close_times(symbols)
@@ -221,12 +225,22 @@ class PipelineService:
         data_quality_counts = Counter()
         structure_counts = Counter()
         interval_write_counts = Counter()
+        error_counts = Counter()
+
+        def record_error(error: dict) -> None:
+            errors.append(error)
+            key = str(error.get("error") or error.get("warning") or error.get("phase") or "unknown")
+            error_counts[key] += 1
+            logger.warning("Pipeline issue run_id=%s details=%s", run_id, error)
+
+        logger.info("Pipeline run started run_id=%s symbols_requested=%s limit=%s", run_id, len(symbols), limit)
 
         max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
 
         fetched_exec, collect_errors = self._collect_interval_parallel(symbols, execution_interval, latest_close_times, worker_count)
-        errors.extend(collect_errors)
+        for error in collect_errors:
+            record_error(error)
         for symbol in symbols:
             rows = fetched_exec.get(symbol)
             if rows is None:
@@ -237,11 +251,13 @@ class PipelineService:
                     interval_write_counts[execution_interval] += len(rows)
                     collected_symbols.add(symbol)
             except Exception as exc:
-                errors.append({"symbol": symbol, "phase": f"store_{execution_interval}", "error": str(exc)})
+                self.db.rollback()
+                record_error({"symbol": symbol, "phase": f"store_{execution_interval}", "error": str(exc)})
 
         for interval in ("1h", "4h"):
             fetched_htf, collect_errors = self._collect_interval_parallel(symbols, interval, latest_close_times, worker_count)
-            errors.extend(collect_errors)
+            for error in collect_errors:
+                record_error(error)
             for symbol in symbols:
                 rows = fetched_htf.get(symbol)
                 if rows is None:
@@ -252,13 +268,15 @@ class PipelineService:
                         interval_write_counts[interval] += len(rows)
                         collected_symbols.add(symbol)
                 except Exception as exc:
-                    errors.append({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
+                    self.db.rollback()
+                    record_error({"symbol": symbol, "phase": f"store_{interval}", "error": str(exc)})
 
         try:
             momentum_result = self.momentum.recalculate_and_store(symbols=list(collected_symbols or symbols))
             momentum_rows_upserted = int(momentum_result.get("momentum_rows_upserted", 0))
         except Exception as exc:
-            errors.append({"phase": "momentum_recalculate", "error": str(exc)})
+            self.db.rollback()
+            record_error({"phase": "momentum_recalculate", "error": str(exc)})
 
         limits = self._bundle_limits(execution_interval)
         analyzed_symbols = self._order_symbols_for_analysis(symbols)
@@ -268,20 +286,31 @@ class PipelineService:
                 execution_candles = candles.get(execution_interval, [])
                 quality_exec = self.market_data.validate_candle_series(execution_interval, execution_candles, min_count=30)
                 if not quality_exec["valid"]:
-                    errors.append({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{execution_interval}_quality", "issues": quality_exec["issues"]})
+                    record_error({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{execution_interval}_quality", "issues": quality_exec["issues"]})
                     for issue in quality_exec["issues"]:
                         data_quality_counts[issue] += 1
                 if not candles.get("1h"):
-                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing_1h_candles"})
+                    record_error({"symbol": symbol, "phase": "analyze", "error": "missing_1h_candles"})
                     data_quality_counts["missing_1h_bundle"] += 1
                     continue
                 if not candles.get("4h"):
-                    errors.append({"symbol": symbol, "phase": "analyze", "error": "missing_4h_candles"})
+                    record_error({"symbol": symbol, "phase": "analyze", "error": "missing_4h_candles"})
                     data_quality_counts["missing_4h_bundle"] += 1
                     continue
 
+                for interval in ("1h", "4h"):
+                    quality_htf = self.market_data.validate_candle_series(interval, candles.get(interval, []), min_count=30)
+                    if not quality_htf["valid"]:
+                        record_error({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{interval}_quality", "issues": quality_htf["issues"]})
+                        for issue in quality_htf["issues"]:
+                            data_quality_counts[f"{interval}:{issue}"] += 1
+
                 candles[LEGACY_ENGINE_INTERVAL] = execution_candles
-                raw_signal = self.engine.compute_signal(symbol, candles)
+                try:
+                    raw_signal = self.engine.compute_signal(symbol, candles)
+                except Exception as exc:
+                    record_error({"symbol": symbol, "phase": "compute_signal", "error": "compute_signal_error", "detail": str(exc)})
+                    continue
                 raw_signal = apply_context_driven_progression(raw_signal)
                 raw_signal[f"candle_quality_{execution_interval}"] = quality_exec
                 raw_signal["execution_timeframe"] = execution_interval
@@ -311,13 +340,23 @@ class PipelineService:
                     raw_signal['planner_candidate_reason'] = self._clean_public_text(assessment['reason'])
                     raw_signal['planner_candidate_rr'] = assessment.get('rr_ratio')
                 signal = self._public_signal(raw_signal)
-                self.asset_states.upsert_from_signal(signal)
+                try:
+                    self.asset_states.upsert_from_signal(signal)
+                    asset_states_upserted += 1
+                except Exception as exc:
+                    self.db.rollback()
+                    record_error({"symbol": symbol, "phase": "asset_state_upsert", "error": "asset_state_upsert_error", "detail": str(exc)})
+                    continue
                 candidate = assessment['candidate']
                 if candidate:
-                    candidate['payload'] = signal
-                    candidate['notes'] = self._clean_public_text(candidate.get('notes'))
-                    self.trade_candidates.upsert_open_candidate(**candidate)
-                    candidates += 1
+                    try:
+                        candidate['payload'] = signal
+                        candidate['notes'] = self._clean_public_text(candidate.get('notes'))
+                        self.trade_candidates.upsert_open_candidate(**candidate)
+                        candidates += 1
+                    except Exception as exc:
+                        self.db.rollback()
+                        record_error({"symbol": symbol, "phase": "trade_candidate_upsert", "error": "trade_candidate_upsert_error", "detail": str(exc)})
 
                 pipeline = signal.get('pipeline', {}) or {}
                 pipeline_counts['collect'] += 1
@@ -365,13 +404,16 @@ class PipelineService:
 
                 scanned += 1
             except Exception as exc:
-                errors.append({"symbol": symbol, "phase": "analyze", "error": str(exc)})
+                self.db.rollback()
+                record_error({"symbol": symbol, "phase": "analyze", "error": str(exc)})
 
         stats = {
             "candidates_created": candidates,
             "candles_written": candles_written,
             "momentum_rows_upserted": momentum_rows_upserted,
+            "asset_states_upserted": asset_states_upserted,
             "errors": errors,
+            "error_counts": dict(error_counts),
             "symbols_requested": len(symbols),
             "symbols_collected": len(collected_symbols),
             "symbols_scanned": scanned,
@@ -393,21 +435,42 @@ class PipelineService:
             "interval_write_counts": dict(interval_write_counts),
         }
         self.live_runs.complete_run(run_id, symbols_scanned=scanned, stats=stats)
+        logger.info(
+            "Pipeline run completed run_id=%s symbols_requested=%s symbols_collected=%s symbols_scanned=%s candles_written=%s momentum_rows_upserted=%s asset_states_upserted=%s errors=%s",
+            run_id,
+            len(symbols),
+            len(collected_symbols),
+            scanned,
+            candles_written,
+            momentum_rows_upserted,
+            asset_states_upserted,
+            len(errors),
+        )
         return {
             "run_id": run_id,
             "symbols_total": len(symbols),
+            "symbols_requested": len(symbols),
             "symbols_collected": len(collected_symbols),
             "symbols_scanned": scanned,
             "candles_written": candles_written,
             "momentum_rows_upserted": momentum_rows_upserted,
+            "asset_states_upserted": asset_states_upserted,
             "candidates_created": candidates,
             "collect_workers": worker_count,
             "execution_interval": execution_interval,
             "analysis_ordering": "score_desc_existing_asset_state",
             "analysis_top_symbols": analyzed_symbols[:10],
             "errors": errors,
+            "error_counts": dict(error_counts),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
+            "state_counts": dict(state_counts),
+            "bias_counts": dict(bias_counts),
+            "trigger_counts": dict(trigger_counts),
+            "confirm_source_counts": dict(confirm_source_counts),
+            "zone_quality_counts": dict(zone_quality_counts),
+            "session_counts": dict(session_counts),
+            "structure_counts": dict(structure_counts),
             "data_quality_counts": dict(data_quality_counts),
             "interval_write_counts": dict(interval_write_counts),
         }
