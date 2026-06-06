@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from app.services.runtime_settings import get_runtime_signal_config
-from app.strategy.legacy_engine import build_signal
+from app.strategy.legacy_engine import ENTRY_RSI_MAX, ENTRY_RSI_MIN, ENTRY_RSI_TIMEFRAME, build_signal
 
 
 class SignalEngineService:
@@ -11,7 +11,7 @@ class SignalEngineService:
             'status': 'ready',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'strategy': 'legacy_wyckoff_v231',
-            'primary_interval': '5m',
+            'primary_interval': '15m',
         }
 
     def _range_position(self, price: float, low: float | None, high: float | None) -> float | None:
@@ -193,6 +193,20 @@ class SignalEngineService:
             'equal_highs_1h': eq_highs,
             'equal_lows_1h': eq_lows,
         }
+
+    def _entry_rsi_profile(self, signal: dict) -> dict:
+        entry_value = signal.get('rsi_htf')
+        preferred = entry_value is not None and ENTRY_RSI_MIN <= float(entry_value) <= ENTRY_RSI_MAX
+        return {
+            'value': entry_value,
+            'timeframe': ENTRY_RSI_TIMEFRAME,
+            'source': 'rsi_htf',
+            'preferred': preferred,
+            'min': ENTRY_RSI_MIN,
+            'max': ENTRY_RSI_MAX,
+            'reason': 'preferred_45_55_rsi_entry' if preferred else 'entry_rsi_outside_45_55_band',
+        }
+
 
     def _wyckoff_event_level(self, signal: dict) -> dict:
         bias = signal.get('bias') or 'neutral'
@@ -463,6 +477,7 @@ class SignalEngineService:
             'trade': 0.0,
             'state_fit': 0.0,
             'block_penalty': 0.0,
+            'entry_rsi': 0.0,
         }
 
         if macro_window.get('valid'):
@@ -493,6 +508,12 @@ class SignalEngineService:
             adjustments['zone_validity'] += 1.5
         else:
             adjustments['zone_validity'] -= 1.0
+
+        entry_rsi = signal.get('entry_rsi') or {}
+        if entry_rsi.get('preferred'):
+            adjustments['entry_rsi'] += 1.25
+        elif entry_rsi.get('value') is not None:
+            adjustments['entry_rsi'] -= 0.25
 
         if exec_trigger.get('valid'):
             adjustments['confirm'] += 2.0
@@ -531,6 +552,7 @@ class SignalEngineService:
         signal['macro_window_4h'] = macro_window
         signal['refinement_context_1h'] = refinement
         signal['execution_trigger_5m'] = exec_trigger
+        signal['entry_rsi'] = signal.get('entry_rsi') or self._entry_rsi_profile(signal)
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']
@@ -599,7 +621,10 @@ class SignalEngineService:
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
         cfg = get_runtime_signal_config()
-        candles_main = candles['5m']
+        execution_interval = cfg.get('execution_interval', '15m')
+        candles_main = candles.get(execution_interval) or candles.get('15m') or candles.get('5m')
+        if not candles_main:
+            raise KeyError(f'missing_{execution_interval}_candles')
         signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)
         signal = self._apply_hierarchy(signal, candles['1h'], candles_main, cfg)
         return signal
