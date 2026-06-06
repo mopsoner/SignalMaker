@@ -78,11 +78,14 @@ PY
   momentum-executor-loop)
     python -m scripts.run_momentum_executor_loop
     ;;
+  momentum-decision-loop)
+    python -m raspberry_executor.momentum_decision_feed
+    ;;
   momentum-executor-tui)
     python -m scripts.run_momentum_executor_tui
     ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|momentum-executor-once|pipeline-loop|executor-loop|scheduler-loop|momentum-executor-loop|momentum-executor-tui]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|momentum-executor-once|pipeline-loop|executor-loop|scheduler-loop|momentum-executor-loop|momentum-decision-loop|momentum-executor-tui]"
     exit 1
     ;;
 esac
