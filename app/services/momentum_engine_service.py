@@ -337,19 +337,22 @@ class MomentumEngineService:
         return self.db.scalars(stmt).first()
 
     def _cash_balance(self, *, starting_capital: float) -> float:
-        sell_value, buy_value = self.db.execute(
+        realized_pnl = self.db.scalar(
             select(
                 func.coalesce(
-                    func.sum(case((MomentumEngineTrade.action.like("SELL%"), MomentumEngineTrade.value), else_=0.0)),
+                    func.sum(case((MomentumEngineTrade.action.like("SELL%"), MomentumEngineTrade.pnl), else_=0.0)),
                     0.0,
-                ),
-                func.coalesce(
-                    func.sum(case((MomentumEngineTrade.action.like("BUY%"), MomentumEngineTrade.value), else_=0.0)),
-                    0.0,
-                ),
+                )
             ).where(MomentumEngineTrade.strategy == self.STRATEGY)
-        ).one()
-        return starting_capital + float(sell_value or 0.0) - float(buy_value or 0.0)
+        )
+        open_entry_value = self.db.scalar(
+            select(func.coalesce(func.sum(MomentumEnginePosition.entry_value), 0.0)).where(
+                MomentumEnginePosition.strategy == self.STRATEGY,
+                MomentumEnginePosition.status == "open",
+            )
+        )
+        paper_cash = starting_capital + float(realized_pnl or 0.0) - float(open_entry_value or 0.0)
+        return max(0.0, paper_cash)
 
     def _position_payload(self, position: MomentumEnginePosition, *, rankings: list[dict[str, Any]], current_asset: dict[str, Any] | None) -> dict[str, Any]:
         mark_price, mark_price_source = self._price_with_source(position.symbol, rankings=rankings, fallback=position.entry_price)
