@@ -82,6 +82,12 @@ def _is_not_found_error(payload: dict | None) -> bool:
     return any(x in text for x in ["-2013", "order does not exist", "unknown order", "not found"])
 
 
+def _is_momentum_position(candidate_id: str, position: dict) -> bool:
+    mode = str(position.get("mode") or "").lower()
+    strategy = str(position.get("strategy") or "").lower()
+    return str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict) or strategy == "momentum_rotation" or mode.startswith("momentum")
+
+
 def _is_margin_position(position: dict) -> bool:
     mode = str(position.get("mode") or "").lower()
     return "margin" in mode
@@ -96,6 +102,43 @@ def _is_isolated_position(position: dict) -> bool:
     if "isolated" in mode:
         return True
     return margin_isolated()
+
+
+def momentum_dust_value() -> float:
+    try:
+        return max(0.0, float(os.getenv("MOMENTUM_POSITION_DUST_VALUE", "5.0") or "5.0"))
+    except Exception:
+        return 5.0
+
+
+def _track_momentum_position(candidate_id: str, position: dict, symbol: str, binance, rules, state) -> bool:
+    qty = _float(position.get("quantity"))
+    entry = _float(position.get("entry_price"))
+    side = str(position.get("side") or "long").lower()
+    try:
+        mark = binance.current_price(symbol)
+    except Exception as exc:
+        state.update_open_position(candidate_id, {"position_tracker": "momentum", "mark_price_error": str(exc)})
+        logger.warning("momentum mark lookup failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
+        return False
+
+    pnl = ((mark - entry) * qty) if side != "short" else ((entry - mark) * qty)
+    updates = {"position_tracker": "momentum", "strategy": position.get("strategy") or "momentum_rotation", "mark_price": mark, "unrealized_pnl": pnl, "last_position_sync_ts": time.time()}
+    if not binance.dry_run:
+        try:
+            base = rules.base_asset(symbol)
+            available_base = binance.free_balance(base)
+            value = available_base * mark
+            updates.update({"base_asset": base, "available_base_balance": available_base, "available_base_value": value})
+            if value < momentum_dust_value():
+                payload = {"symbol": symbol, "base_asset": base, "available_base_balance": available_base, "available_base_value": value, "dust_value": momentum_dust_value(), "mark_price": mark, "unrealized_pnl": pnl, "position": position}
+                state.close_position(candidate_id, "momentum_balance_missing", payload)
+                logger.info("closed momentum position candidate=%s symbol=%s reason=balance_missing value=%s", candidate_id, symbol, value)
+                return True
+        except Exception as exc:
+            updates["balance_sync_error"] = str(exc)
+    state.update_open_position(candidate_id, updates)
+    return False
 
 
 def _order(binance, margin, symbol, order_id, *, use_margin: bool):
@@ -319,7 +362,7 @@ def sync_open_positions():
     rules = BinanceSymbolRules(settings.binance_base_url)
     spot_manager = SpotOrderManager(binance, rules)
     state = StateStore()
-    checked = closed = missing_oco = repaired_oco = attached_existing = repair_skipped = repair_blocked = ghost_removed = 0
+    checked = closed = missing_oco = repaired_oco = attached_existing = repair_skipped = repair_blocked = ghost_removed = momentum_tracked = 0
 
     for candidate_id, position in list(state.open_positions().items()):
         checked += 1
@@ -330,6 +373,13 @@ def sync_open_positions():
         use_margin = _is_margin_position(position)
         margin = MarginClient(binance, isolated=_is_isolated_position(position), dry_run=settings.dry_run or margin_dry_run())
         margin_manager = MarginOrderManager(binance, margin, rules)
+
+        if _is_momentum_position(candidate_id, position):
+            if _track_momentum_position(candidate_id, position, symbol, binance, rules, state):
+                closed += 1
+            else:
+                momentum_tracked += 1
+            continue
 
         if _ghost_check(candidate_id, position, symbol, binance, margin, rules, state, use_margin=use_margin):
             ghost_removed += 1
@@ -359,7 +409,7 @@ def sync_open_positions():
             state.close_position(candidate_id, "stop_loss_filled", sl)
             closed += 1
 
-    summary = {"checked": checked, "closed": closed, "ghost_removed": ghost_removed, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped, "repair_blocked": repair_blocked}
+    summary = {"checked": checked, "closed": closed, "ghost_removed": ghost_removed, "momentum_tracked": momentum_tracked, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped, "repair_blocked": repair_blocked}
     if any(summary.values()):
         logger.info("position sync summary=%s", summary)
     return summary

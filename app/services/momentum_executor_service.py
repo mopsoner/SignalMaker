@@ -40,21 +40,31 @@ class MomentumExecutorService:
             "momentum_executor_apply_remote_run": bool(payload.get("momentum_executor_apply_remote_run", settings.momentum_executor_apply_remote_run)),
         }
 
-    def decision_url(self) -> str:
+    def _api_url(self, path: str) -> str:
         cfg = self.config()
         base = cfg["momentum_executor_api_base"].rstrip("/")
-        path = cfg["momentum_executor_decision_path"]
         if not path.startswith("/"):
             path = "/" + path
+        if base.endswith("/api/v1") and path.startswith("/api/v1"):
+            return base + path[len("/api/v1"):]
         return base + path
 
-    def _response_payload(self, response: requests.Response) -> dict[str, Any]:
+    def decision_url(self) -> str:
+        return self._api_url(self.config()["momentum_executor_decision_path"])
+
+    def candidates_url(self) -> str:
+        return self._api_url("/api/v1/momentum")
+
+    def _json_payload(self, response: requests.Response) -> Any:
         content_type = response.headers.get("content-type", "")
         try:
-            payload = response.json()
+            return response.json()
         except ValueError as exc:
             body = response.text[:500]
             raise RuntimeError(f"Remote momentum endpoint did not return JSON. status={response.status_code} content_type={content_type} body={body!r}") from exc
+
+    def _response_payload(self, response: requests.Response) -> dict[str, Any]:
+        payload = self._json_payload(response)
         if not isinstance(payload, dict):
             raise RuntimeError(f"Remote momentum endpoint returned non-object JSON: {type(payload).__name__}")
         return payload
@@ -87,6 +97,32 @@ class MomentumExecutorService:
             raise RuntimeError(f"Remote momentum endpoint error HTTP {response.status_code}: {payload}")
         return self._normalize_decision(payload)
 
+    def _extract_candidates(self, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            raw_candidates = payload
+        elif isinstance(payload, dict):
+            raw_candidates = payload.get("candidates") or payload.get("items") or payload.get("data") or payload.get("rankings") or []
+        else:
+            raw_candidates = []
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in raw_candidates:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or row.get("buy_symbol") or "").upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            rows.append({**row, "symbol": symbol, "source": row.get("source") or "momentum_rankings_endpoint"})
+        return rows
+
+    def read_candidates(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        response = requests.get(self.candidates_url(), params={"limit": limit}, timeout=20, headers={"accept": "application/json", "cache-control": "no-cache"})
+        payload = self._json_payload(response)
+        if not response.ok:
+            raise RuntimeError(f"Remote momentum endpoint error HTTP {response.status_code}: {payload}")
+        return self._extract_candidates(payload)
+
     def current_momentum_position(self):
         rows = self.positions.list_positions(limit=100, status="open")
         for row in rows:
@@ -101,6 +137,10 @@ class MomentumExecutorService:
             decision = self.read_decision()
         except Exception as exc:
             decision = {"action": "ERROR", "reason": str(exc), "url": self.decision_url()}
+        try:
+            candidates = self.read_candidates(limit=25)
+        except Exception as exc:
+            candidates = [{"error": str(exc), "url": self.candidates_url()}]
         position = self.current_momentum_position()
         return {
             "enabled": cfg["momentum_executor_enabled"],
@@ -108,6 +148,7 @@ class MomentumExecutorService:
             "api_base": cfg["momentum_executor_api_base"],
             "config": cfg,
             "decision": decision,
+            "candidates": candidates,
             "local_position": self._position_payload(position),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -126,18 +167,76 @@ class MomentumExecutorService:
         if action == "HOLD":
             return {"action": "HOLD", "decision": decision, "local_position": self._position_payload(local_position)}
         if action == "SELL":
+            if not self._decision_matches_position(decision, local_position):
+                return {"action": "BLOCKED", "decision": decision, "reason": "sell_decision_does_not_match_held_momentum_asset", "local_position": self._position_payload(local_position)}
             sold = self._sell_local_position(local_position, mode=mode, reason=decision.get("reason") or "momentum_sell")
             return {"action": "SELL", "decision": decision, "sold": sold}
         if action == "BUY":
-            bought = self._buy_symbol(str(decision.get("buy_symbol") or decision.get("symbol")), mode=mode, reason=decision.get("reason") or "momentum_buy", cfg=cfg)
+            if local_position:
+                return {"action": "HOLD", "decision": decision, "reason": "momentum_position_already_open", "local_position": self._position_payload(local_position)}
+            bought = self._buy_best_available(decision, mode=mode, reason=decision.get("reason") or "momentum_buy", cfg=cfg)
             return {"action": "BUY", "decision": decision, "bought": bought}
         if action == "ROTATE":
+            if not self._decision_matches_position(decision, local_position):
+                return {"action": "BLOCKED", "decision": decision, "reason": "rotate_decision_does_not_match_held_momentum_asset", "local_position": self._position_payload(local_position)}
+            sold_symbol = str(local_position.symbol).upper()
             sold = self._sell_local_position(local_position, mode=mode, reason=decision.get("reason") or "momentum_rotate_sell")
-            bought = self._buy_symbol(str(decision.get("buy_symbol") or decision.get("symbol")), mode=mode, reason=decision.get("reason") or "momentum_rotate_buy", cfg=cfg)
+            bought = self._buy_best_available(decision, mode=mode, reason=decision.get("reason") or "momentum_rotate_buy", cfg=cfg, exclude={sold_symbol})
             return {"action": "ROTATE", "decision": decision, "sold": sold, "bought": bought}
         if action == "ERROR":
             return {"action": "ERROR", "decision": decision, "reason": decision.get("reason")}
         return {"action": "UNKNOWN", "decision": decision, "reason": f"Unsupported action {action}"}
+
+    def _decision_matches_position(self, decision: dict[str, Any], position) -> bool:
+        if not position:
+            return False
+        held = str(position.symbol or "").upper()
+        decision_symbols = {
+            str(decision.get("sell_symbol") or "").upper(),
+            str(decision.get("symbol") or "").upper(),
+        }
+        return held in decision_symbols
+
+    def _decision_candidates(self, decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+        exclude = {item.upper() for item in (exclude or set()) if item}
+        rows: list[dict[str, Any]] = []
+        try:
+            rows.extend(self.read_candidates(limit=50))
+        except Exception as exc:
+            rows.append({"error": str(exc), "source": "momentum_rankings_endpoint"})
+        contract = decision.get("executor_contract") if isinstance(decision.get("executor_contract"), dict) else {}
+        rows.extend(self._extract_candidates(decision.get("buy_candidates") or contract.get("buy_candidates") or []))
+        primary = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
+        if primary:
+            rows.append({"symbol": primary, "source": "decision_primary"})
+        seen: set[str] = set()
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            symbol = str(row.get("symbol") or row.get("buy_symbol") or "").upper() if isinstance(row, dict) else ""
+            if not symbol or symbol in seen or symbol in exclude:
+                continue
+            seen.add(symbol)
+            candidates.append({**row, "symbol": symbol})
+        return candidates
+
+    def _buy_result_ok(self, result: dict[str, Any]) -> bool:
+        return bool(result) and not result.get("skipped") and bool(result.get("position_id"))
+
+    def _buy_best_available(self, decision: dict[str, Any], *, mode: str, reason: str, cfg: dict[str, Any], exclude: set[str] | None = None) -> dict[str, Any]:
+        attempts: list[dict[str, Any]] = []
+        candidates = self._decision_candidates(decision, exclude=exclude)
+        if not candidates:
+            return {"skipped": True, "reason": "no_momentum_rankings", "attempts": attempts}
+        for row in candidates:
+            symbol = str(row.get("symbol") or "").upper()
+            try:
+                result = self._buy_symbol(symbol, mode=mode, reason=reason, cfg=cfg)
+                attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score"), "source": row.get("source")})
+                if self._buy_result_ok(result):
+                    return {"selected_symbol": symbol, "result": result, "attempts": attempts}
+            except Exception as exc:
+                attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score"), "source": row.get("source")})
+        return {"skipped": True, "reason": "buy_not_confirmed_for_any_momentum_candidate", "attempts": attempts}
 
     def _buy_symbol(self, symbol: str, *, mode: str, reason: str, cfg: dict[str, Any]) -> dict[str, Any]:
         symbol = symbol.upper()

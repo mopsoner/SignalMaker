@@ -42,7 +42,7 @@ def momentum_events(events, limit=30):
 
 def _status_pill(status):
     status_text = str(status or "unknown")
-    klass = "ok" if status_text in {"ok", "BUY", "HOLD"} else "warn" if status_text in {"partial", "skipped", "blocked", "WAIT", "SELL", "ROTATE"} else "bad" if status_text == "error" else ""
+    klass = "ok" if status_text in {"ok", "running", "BUY", "HOLD"} else "warn" if status_text in {"partial", "skipped", "disabled", "blocked", "WAIT", "SELL", "ROTATE"} else "bad" if status_text == "error" else ""
     return f"<span class='pill {klass}'>{c(status_text)}</span>"
 
 

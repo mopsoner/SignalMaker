@@ -39,11 +39,14 @@ CANDIDATE_KEYS = [
 
 POSITION_LABELS = [
     "Status",
+    "Strategy",
     "Candidate",
     "Symbol",
     "Side",
     "Qty",
     "Entry",
+    "Mark",
+    "PNL",
     "Stop",
     "Target",
     "TP",
@@ -55,11 +58,14 @@ POSITION_LABELS = [
 
 POSITION_KEYS = [
     "status",
+    "strategy",
     "candidate",
     "symbol",
     "side",
     "qty",
     "entry",
+    "mark",
+    "pnl",
     "stop",
     "target",
     "tp",
@@ -136,14 +142,24 @@ def candidates_view(limit: int = 100) -> dict[str, Any]:
     }
 
 
+def position_strategy(candidate_id: str, row: dict[str, Any]) -> str:
+    if str(candidate_id).startswith("momentum-") or isinstance(row.get("momentum_decision"), dict) or str(row.get("strategy") or "").lower() == "momentum_rotation":
+        return "momentum"
+    mode = _string(row.get("mode"))
+    return mode or "signal"
+
+
 def position_row(candidate_id: str, row: dict[str, Any]) -> dict[str, str]:
     return {
         "status": _string(row.get("status")),
+        "strategy": position_strategy(candidate_id, row),
         "candidate": _string(candidate_id),
         "symbol": _string(row.get("execution_symbol") or row.get("signal_symbol")),
         "side": _string(row.get("side")),
         "qty": _string(row.get("quantity")),
         "entry": _string(row.get("entry_price")),
+        "mark": _string(row.get("mark_price")),
+        "pnl": _string(row.get("unrealized_pnl") if row.get("unrealized_pnl") is not None else row.get("pnl")),
         "stop": _string(row.get("stop_price")),
         "target": _string(row.get("target_price")),
         "tp": _string(row.get("tp_order_id")),

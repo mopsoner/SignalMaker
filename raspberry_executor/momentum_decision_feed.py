@@ -13,6 +13,7 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-momentum-decision")
 
 DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
+DEFAULT_CANDIDATES_PATH = "/api/v1/momentum"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -48,15 +49,23 @@ def _decision_path() -> str:
     return os.getenv("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
 
 
-def _read_json_response(response: requests.Response) -> dict[str, Any]:
+def _candidates_path() -> str:
+    return os.getenv("MOMENTUM_CANDIDATES_PATH", DEFAULT_CANDIDATES_PATH) or DEFAULT_CANDIDATES_PATH
+
+
+def _read_json_payload(response: requests.Response) -> Any:
     try:
-        data = response.json()
+        return response.json()
     except ValueError as exc:
         raise RuntimeError(
-            "momentum_decision_non_json_response "
+            "momentum_non_json_response "
             f"status={response.status_code} content_type={response.headers.get('content-type')} "
             f"url={response.url} body={response.text[:500]!r}"
         ) from exc
+
+
+def _read_json_response(response: requests.Response) -> dict[str, Any]:
+    data = _read_json_payload(response)
     if not isinstance(data, dict):
         raise RuntimeError(f"unexpected_momentum_decision_response:{type(data).__name__}:url={response.url}")
     return data
@@ -164,11 +173,45 @@ def _candidate_symbol(row: dict[str, Any]) -> str:
     return str(row.get("symbol") or row.get("buy_symbol") or "").upper()
 
 
+def _extract_candidate_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        raw_candidates = payload.get("candidates") or payload.get("items") or payload.get("data") or payload.get("rankings") or []
+    elif isinstance(payload, list):
+        raw_candidates = payload
+    else:
+        raw_candidates = []
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in raw_candidates:
+        if not isinstance(row, dict):
+            continue
+        symbol = _candidate_symbol(row)
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        rows.append({**row, "symbol": symbol, "source": row.get("source") or "momentum_rankings_endpoint"})
+    return rows
+
+
+def fetch_momentum_candidates(limit: int = 50) -> list[dict[str, Any]]:
+    settings = load_settings()
+    response = requests.get(
+        _url(settings.signalmaker_base_url, _candidates_path()),
+        params={"limit": limit},
+        timeout=30,
+        headers={"accept": "application/json", "cache-control": "no-cache"},
+    )
+    data = _read_json_payload(response)
+    if not response.ok:
+        raise RuntimeError(f"momentum_rankings_http_error status={response.status_code} url={response.url} payload={data}")
+    return _extract_candidate_rows(data)
+
+
 def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
     """Return the ordered buy candidates embedded in the persisted main decision.
 
-    The Raspberry must not fetch /api/v1/momentum during execution. Main already
-    validates and persists buy_candidates during the momentum pipeline.
+    Local fallback for older main deployments. The preferred source is now
+    /api/v1/momentum, fetched immediately before buying.
     """
     exclude = {item.upper() for item in (exclude or set()) if item}
     contract = decision.get("executor_contract") if isinstance(decision.get("executor_contract"), dict) else {}
@@ -288,6 +331,8 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
         "signal_symbol": symbol,
         "execution_symbol": symbol,
         "side": "long",
+        "strategy": "momentum_rotation",
+        "mode": "momentum_rotation",
         "quantity": qty,
         "entry_price": float(fill_price),
         "stop_price": None,
@@ -314,10 +359,16 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
 
     attempts: list[dict[str, Any]] = []
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
-    candidates = decision_buy_candidates(decision, exclude=exclude)
+    exclude_set = {item.upper() for item in (exclude or set()) if item}
+    try:
+        candidates = [row for row in fetch_momentum_candidates(limit=max_attempts * 2) if _candidate_symbol(row) not in exclude_set]
+    except Exception as exc:
+        candidates = []
+        state.add_event("momentum-decision", "momentum_rankings_fetch_failed", {"error": str(exc), "decision": decision})
+    candidates.extend(decision_buy_candidates(decision, exclude=exclude_set | {_candidate_symbol(row) for row in candidates}))
     if not candidates:
-        state.add_event("momentum-decision", "momentum_fallback_no_decision_candidates", {"decision": decision})
-        return "fallback_buy_exhausted:no_decision_candidates"
+        state.add_event("momentum-decision", "momentum_fallback_no_candidates", {"decision": decision})
+        return "fallback_buy_exhausted:no_candidates"
 
     for row in candidates[:max_attempts]:
         symbol = _candidate_symbol(row)
@@ -337,6 +388,27 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
     return f"fallback_buy_exhausted:attempts={len(attempts)}"
 
 
+def current_momentum_position(state: StateStore) -> dict[str, Any] | None:
+    for candidate_id, position in state.open_positions().items():
+        if str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict):
+            return position
+    return None
+
+
+def _position_symbol(position: dict[str, Any] | None) -> str:
+    if not position:
+        return ""
+    return str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
+
+
+def _decision_targets_held_symbol(decision: dict[str, Any], held_symbol: str) -> bool:
+    held_symbol = held_symbol.upper()
+    if not held_symbol:
+        return False
+    symbols = {str(decision.get("sell_symbol") or "").upper(), str(decision.get("symbol") or "").upper()}
+    return held_symbol in symbols
+
+
 def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(os.getenv("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
@@ -346,18 +418,25 @@ def execute_decision(decision: dict[str, Any]) -> str:
     state = StateStore()
     action = str(decision.get("action") or "WAIT").upper()
     should_trade = bool(decision.get("should_trade"))
-    buy = str(decision.get("buy_symbol") or "").upper()
     sell = str(decision.get("sell_symbol") or "").upper()
+    held_position = current_momentum_position(state)
+    held_symbol = _position_symbol(held_position)
 
     if not should_trade or action in {"WAIT", "HOLD"}:
         return f"wait:{action}"
-    if action == "BUY" and buy:
+    if action == "BUY":
+        if held_symbol:
+            return f"hold_existing_momentum_position:{held_symbol}"
         return buy_best_available(settings, binance, rules, state, decision, exclude={sell})
-    if action == "SELL" and sell:
-        return sell_symbol(binance, rules, state, sell, decision, require_confirmed=True)
+    if action == "SELL":
+        if not _decision_targets_held_symbol(decision, held_symbol):
+            return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
+        return sell_symbol(binance, rules, state, held_symbol, decision, require_confirmed=True)
     if action == "ROTATE":
-        sell_result = sell_symbol(binance, rules, state, sell, decision, require_confirmed=True) if sell else "no_sell_symbol"
-        buy_result = buy_best_available(settings, binance, rules, state, decision, exclude={sell}) if buy else "no_buy_symbol"
+        if not _decision_targets_held_symbol(decision, held_symbol):
+            return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
+        sell_result = sell_symbol(binance, rules, state, held_symbol, decision, require_confirmed=True)
+        buy_result = buy_best_available(settings, binance, rules, state, decision, exclude={held_symbol})
         return f"rotate:{sell_result}:{buy_result}"
     return f"unsupported_action:{action}"
 
