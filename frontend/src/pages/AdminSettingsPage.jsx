@@ -9,7 +9,7 @@ const EMPTY_SETTINGS = {
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   live: { live_trading_enabled: false, binance_use_testnet: true, binance_testnet_rest_base: 'https://testnet.binance.vision', live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: true },
-  momentum: { momentum_executor_enabled: false, momentum_executor_mode: 'paper', momentum_executor_interval_sec: 30, momentum_executor_api_base: 'https://mysginalmaker.replit.app', momentum_executor_decision_path: '/api/v1/momentum-engine/decision', momentum_executor_quote_asset: 'USDC', momentum_executor_notional: 25, momentum_executor_apply_remote_run: false },
+  momentum: { signalmaker_base_url: 'https://mysginalmaker.replit.app', momentum_candidates_sync_enabled: false, momentum_candidates_limit: 100, momentum_candidates_min_score: 0, momentum_candidates_min_rr: '', momentum_candidates_require_wyckoff_context: true, momentum_candidates_http_timeout_sec: 20 },
 }
 
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
@@ -116,15 +116,14 @@ export default function AdminSettingsPage() {
         {message ? <p className="stat-hint" style={{ marginTop: 14 }}>{message}</p> : null}
       </section>
 
-      <Section title="Momentum executor" description="Raspberry momentum rotation settings saved in the database like the other runtime settings.">
-        <Field label="Momentum executor enabled"><input type="checkbox" checked={Boolean(settings.momentum.momentum_executor_enabled)} onChange={(e) => updateField('momentum', 'momentum_executor_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
-        <Field label="Execution mode"><select style={inputStyle} value={settings.momentum.momentum_executor_mode || 'paper'} onChange={(e) => updateField('momentum', 'momentum_executor_mode', e.target.value)} disabled={loading}><option value="paper">paper</option><option value="live">live</option></select></Field>
-        <Field label="Interval seconds"><input style={inputStyle} type="number" value={settings.momentum.momentum_executor_interval_sec} onChange={(e) => updateField('momentum', 'momentum_executor_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="SignalMaker API base"><input style={inputStyle} value={settings.momentum.momentum_executor_api_base} onChange={(e) => updateField('momentum', 'momentum_executor_api_base', e.target.value)} disabled={loading} /></Field>
-        <Field label="Decision path"><input style={inputStyle} value={settings.momentum.momentum_executor_decision_path} onChange={(e) => updateField('momentum', 'momentum_executor_decision_path', e.target.value)} disabled={loading} /></Field>
-        <Field label="Quote asset"><input style={inputStyle} value={settings.momentum.momentum_executor_quote_asset} onChange={(e) => updateField('momentum', 'momentum_executor_quote_asset', e.target.value)} disabled={loading} /></Field>
-        <Field label="Notional per trade"><input style={inputStyle} type="number" step="0.01" value={settings.momentum.momentum_executor_notional} onChange={(e) => updateField('momentum', 'momentum_executor_notional', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Apply remote run"><input type="checkbox" checked={Boolean(settings.momentum.momentum_executor_apply_remote_run)} onChange={(e) => updateField('momentum', 'momentum_executor_apply_remote_run', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+      <Section title="Momentum candidates sync" description="Fetch central Momentum Candidates and store them as local executor trade candidates.">
+        <Field label="Sync enabled"><input type="checkbox" checked={Boolean(settings.momentum.momentum_candidates_sync_enabled)} onChange={(e) => updateField('momentum', 'momentum_candidates_sync_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="SignalMaker API base"><input style={inputStyle} value={settings.momentum.signalmaker_base_url} onChange={(e) => updateField('momentum', 'signalmaker_base_url', e.target.value)} disabled={loading} /></Field>
+        <Field label="Limit"><input style={inputStyle} type="number" value={settings.momentum.momentum_candidates_limit} onChange={(e) => updateField('momentum', 'momentum_candidates_limit', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Min score"><input style={inputStyle} type="number" step="0.01" value={settings.momentum.momentum_candidates_min_score} onChange={(e) => updateField('momentum', 'momentum_candidates_min_score', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Min RR"><input style={inputStyle} type="number" step="0.01" value={settings.momentum.momentum_candidates_min_rr ?? ''} onChange={(e) => updateField('momentum', 'momentum_candidates_min_rr', e.target.value === '' ? null : Number(e.target.value))} disabled={loading} /></Field>
+        <Field label="Require Wyckoff context"><input type="checkbox" checked={Boolean(settings.momentum.momentum_candidates_require_wyckoff_context)} onChange={(e) => updateField('momentum', 'momentum_candidates_require_wyckoff_context', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="HTTP timeout sec"><input style={inputStyle} type="number" step="0.1" value={settings.momentum.momentum_candidates_http_timeout_sec} onChange={(e) => updateField('momentum', 'momentum_candidates_http_timeout_sec', e.target.value, 'number')} disabled={loading} /></Field>
       </Section>
 
       <Section title="Live trading" description="Safety switches and testnet/live execution controls.">
@@ -165,7 +164,7 @@ export default function AdminSettingsPage() {
       <section className="panel">
         <h2>Workers</h2>
         <div style={gridStyle}>
-          {['pipeline', 'executor', 'scheduler', 'momentum_executor'].map((name) => (
+          {['pipeline', 'executor', 'scheduler'].map((name) => (
             <div key={name} className="stat-card">
               <div className="stat-label">{name}</div>
               <div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div>

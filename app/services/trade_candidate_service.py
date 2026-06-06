@@ -19,17 +19,36 @@ class TradeCandidateService:
 
     def get_open_candidates(self, limit: int = 100) -> list[TradeCandidate]:
         # Raspberry executor backlog mode: play older unexecuted candidates first.
-        # This prevents valid open candidates from being starved by newer, higher
+        # This prevents freshly-updated local candidates from starving previous high
         # score candidates when balance or executor limit is temporarily tight.
         stmt = select(TradeCandidate).where(TradeCandidate.status == "open").order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
-    def upsert_open_candidate(self, *, symbol: str, side: str, stage: str, score: float, entry_price: float | None, stop_price: float | None, target_price: float | None, rr_ratio: float | None, execution_target: dict | None, liquidity_context: dict | None, notes: str | None, payload: dict | None) -> TradeCandidate:
-        candidate_id = f"{symbol.upper()}-open"
+    def upsert_open_candidate(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        stage: str,
+        score: float,
+        entry_price: float | None,
+        stop_price: float | None,
+        target_price: float | None,
+        rr_ratio: float | None,
+        execution_target: dict | None,
+        liquidity_context: dict | None,
+        notes: str | None,
+        payload: dict | None,
+        candidate_id: str | None = None,
+    ) -> TradeCandidate:
+        candidate_id = candidate_id or f"{symbol.upper()}-{stage}"
         row = self.db.get(TradeCandidate, candidate_id)
+        if row is not None and row.status == "executed":
+            return row
         if row is None:
             row = TradeCandidate(candidate_id=candidate_id, symbol=symbol.upper(), created_at=datetime.now(timezone.utc))
             self.db.add(row)
+        row.symbol = symbol.upper()
         row.side = side
         row.stage = stage
         row.status = "open"

@@ -77,14 +77,13 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "live_reconcile_enabled": base_settings.live_reconcile_enabled,
     },
     "momentum": {
-        "momentum_executor_enabled": base_settings.momentum_executor_enabled,
-        "momentum_executor_mode": base_settings.momentum_executor_mode,
-        "momentum_executor_interval_sec": base_settings.momentum_executor_interval_sec,
-        "momentum_executor_api_base": base_settings.momentum_executor_api_base,
-        "momentum_executor_decision_path": base_settings.momentum_executor_decision_path,
-        "momentum_executor_quote_asset": base_settings.momentum_executor_quote_asset,
-        "momentum_executor_notional": base_settings.momentum_executor_notional,
-        "momentum_executor_apply_remote_run": base_settings.momentum_executor_apply_remote_run,
+        "signalmaker_base_url": base_settings.signalmaker_base_url,
+        "momentum_candidates_sync_enabled": base_settings.momentum_candidates_sync_enabled,
+        "momentum_candidates_limit": base_settings.momentum_candidates_limit,
+        "momentum_candidates_min_score": base_settings.momentum_candidates_min_score,
+        "momentum_candidates_min_rr": base_settings.momentum_candidates_min_rr,
+        "momentum_candidates_require_wyckoff_context": base_settings.momentum_candidates_require_wyckoff_context,
+        "momentum_candidates_http_timeout_sec": base_settings.momentum_candidates_http_timeout_sec,
     },
 }
 
@@ -100,8 +99,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             payload.setdefault(row.category, {})[row.key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
-        payload.setdefault("momentum", {})["momentum_executor_enabled"] = bool(payload.get("momentum", {}).get("momentum_executor_enabled", False))
-        payload.setdefault("momentum", {})["momentum_executor_apply_remote_run"] = bool(payload.get("momentum", {}).get("momentum_executor_apply_remote_run", False))
+        payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
+        payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
         return payload
     finally:
         if owns_session:
