@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes } from 'react-router-dom'
 import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
 import MomentumBacktestV2Page from './pages/MomentumBacktestV2Page'
-import MomentumExecutorPage from './pages/MomentumExecutorPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -39,16 +38,15 @@ export default function App() {
         </div>
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
           <div style={groupTitleStyle}>Momentum</div>
-          <NavLink to="/momentum-executor" onClick={closeMenu}>Executor</NavLink>
-          <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
           <NavLink to="/momentum" onClick={closeMenu}>Momentum</NavLink>
-          <NavLink to="/momentum-backtest" onClick={closeMenu}>Momentum Backtest V2</NavLink>
+          <NavLink to="/momentum-backtest" onClick={closeMenu}>Momentum Backtest</NavLink>
 
           <div style={groupTitleStyle}>Wyckoff / SMC</div>
           <NavLink to="/" end onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
+          <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
 
-          <div style={groupTitleStyle}>Admin</div>
+          <div style={groupTitleStyle}>Ops / Admin</div>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
           <NavLink to="/logs" onClick={closeMenu}>Logs</NavLink>
           <NavLink to="/settings" onClick={closeMenu}>Admin Settings</NavLink>
@@ -59,8 +57,6 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
-          <Route path="/momentum-executor" element={<MomentumExecutorPage />} />
-          <Route path="/executor" element={<Navigate to="/momentum-executor" replace />} />
           <Route path="/momentum-backtest" element={<MomentumBacktestV2Page />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
