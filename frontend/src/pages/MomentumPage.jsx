@@ -304,10 +304,10 @@ export default function MomentumPage() {
       {engineError ? <div className="panel error">{engineError}</div> : null}
       {engineActionError ? <div className="panel error">{engineActionError}</div> : null}
       <div className="stats-grid">
-        <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start: ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} USDC`} />
-        <StatCard label="Total PnL" value={`${fmtNumber(engine?.total_pnl, 2)} USDC`} hint={`${fmtNumber(engine?.total_pnl_pct, 2)}%`} />
-        <StatCard label="Cash" value={fmtNumber(engine?.cash, 2)} />
-        <StatCard label="Next check" value={engine?.next_check_at ? fmtDate(engine.next_check_at) : 'Now'} hint={`Cadence: ${cadenceHours}h`} />
+        <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} · PnL ${fmtNumber(engine?.total_pnl, 2)} USDC (${fmtNumber(engine?.total_pnl_pct, 2)}%)`} />
+        <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Open PnL ${fmtNumber(engine.open_position.unrealized_pnl, 2)} USDC · mark ${fmtNumber(engine.open_position.mark_price, 6)}` : `Cash ${fmtNumber(engine?.cash, 2)} USDC`} />
+        <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
+        <StatCard label="Next action" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={`${engine?.recommendation || '—'} · cadence ${cadenceHours}h${engine?.next_check_at ? ` · next ${fmtDate(engine.next_check_at)}` : ''}`} />
       </div>
       <div className="market-toolbar">
         <div className="filter-chips">
@@ -323,16 +323,6 @@ export default function MomentumPage() {
         </div>
         <div className="market-toolbar-hint">Default 4h is aligned with the macro 4H momentum and avoids noisy 15m over-rotation.</div>
       </div>
-      <div className="stats-grid">
-        <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Entry ${fmtNumber(engine.open_position.entry_price, 6)} · rank #${engine.open_position.entry_rank}` : 'No open paper position'} />
-        <StatCard label="Open PnL" value={`${fmtNumber(engine?.open_position?.unrealized_pnl, 2)} USDC`} hint={engine?.open_position?.mark_price ? `Mark ${fmtNumber(engine.open_position.mark_price, 6)} · ${engine.open_position.mark_price_source || 'price source unknown'}` : 'No mark'} />
-        <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
-        <StatCard label="Recommendation" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={engine?.recommendation || '—'} />
-      </div>
-      <section style={{ display: 'grid', gap: 12 }}>
-        <h3 style={{ margin: 0 }}>Momentum buy / rotate / profit chart</h3>
-        <MomentumTradeChart points={engineTimeline} />
-      </section>
       <FoldableTable title="Backend momentum trade log" columns={tradeColumns} rows={engine?.trades || []} empty="No backend paper trades yet" defaultSortKey="created_at" defaultSortDir="desc" paginated initialPageSize={10} />
     </details>
 
