@@ -83,19 +83,41 @@ def _latest_local_pivot(candles: list[dict[str, Any]], *, direction: str, left: 
     return None
 
 
-def _rsi_in_entry_band(value: float | None) -> bool:
-    return value is not None and ENTRY_RSI_MIN <= value <= ENTRY_RSI_MAX
+def _entry_rsi_config(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = (cfg or {}).get("entry_rsi") if isinstance(cfg, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    min_value = float(raw.get("min", ENTRY_RSI_MIN))
+    max_value = float(raw.get("max", ENTRY_RSI_MAX))
+    if min_value > max_value:
+        min_value, max_value = max_value, min_value
+    timeframe = str(raw.get("timeframe", ENTRY_RSI_TIMEFRAME) or ENTRY_RSI_TIMEFRAME).lower()
+    if timeframe not in {"1h", "4h"}:
+        timeframe = ENTRY_RSI_TIMEFRAME
+    return {"min": min_value, "max": max_value, "timeframe": timeframe}
 
 
-def _rsi_entry_profile(value: float | None, timeframe: str = ENTRY_RSI_TIMEFRAME) -> dict[str, Any]:
+def _entry_rsi_source(timeframe: str) -> str:
+    return "rsi_macro" if timeframe == "4h" else "rsi_htf"
+
+
+def _rsi_in_entry_band(value: float | None, cfg: dict[str, Any] | None = None) -> bool:
+    entry_cfg = _entry_rsi_config(cfg)
+    return value is not None and entry_cfg["min"] <= float(value) <= entry_cfg["max"]
+
+
+def _rsi_entry_profile(value: float | None, timeframe: str = ENTRY_RSI_TIMEFRAME, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    entry_cfg = _entry_rsi_config({"entry_rsi": {**(_entry_rsi_config(cfg)), "timeframe": timeframe}})
+    preferred = _rsi_in_entry_band(value, {"entry_rsi": entry_cfg})
+    min_label = f"{entry_cfg['min']:g}"
+    max_label = f"{entry_cfg['max']:g}"
     return {
         "value": value,
-        "timeframe": timeframe,
-        "source": "rsi_htf" if timeframe == ENTRY_RSI_TIMEFRAME else "rsi",
-        "preferred": _rsi_in_entry_band(value),
-        "min": ENTRY_RSI_MIN,
-        "max": ENTRY_RSI_MAX,
-        "reason": "preferred_45_55_rsi_entry" if _rsi_in_entry_band(value) else "entry_rsi_outside_45_55_band",
+        "timeframe": entry_cfg["timeframe"],
+        "source": _entry_rsi_source(entry_cfg["timeframe"]),
+        "preferred": preferred,
+        "min": entry_cfg["min"],
+        "max": entry_cfg["max"],
+        "reason": f"preferred_{min_label}_{max_label}_rsi_entry" if preferred else f"entry_rsi_outside_{min_label}_{max_label}_band",
     }
 
 
@@ -637,7 +659,9 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     utad_watch = False
     spring_watch = False
-    rsi_entry_ok = _rsi_in_entry_band(rsi_htf)
+    entry_rsi_cfg = _entry_rsi_config(cfg)
+    entry_rsi_value = rsi_macro if entry_rsi_cfg["timeframe"] == "4h" else rsi_htf
+    rsi_entry_ok = _rsi_in_entry_band(entry_rsi_value, cfg)
     rsi_main_overbought = rsi_main is not None and rsi_main >= cfg["signals"]["overbought"]
     rsi_main_oversold = rsi_main is not None and rsi_main <= cfg["signals"]["oversold"]
     near_sell_liquidity = near_recent_high or near_htf_high or near_macro_high or eq_main["equal_highs"] or eq_htf["equal_highs"] or eq_macro["equal_highs"]
@@ -912,7 +936,7 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "rsi_htf_timeframe": "1h",
         "rsi_macro": rsi_macro,
         "rsi_macro_timeframe": "4h",
-        "entry_rsi": _rsi_entry_profile(rsi_htf, ENTRY_RSI_TIMEFRAME),
+        "entry_rsi": _rsi_entry_profile(entry_rsi_value, entry_rsi_cfg["timeframe"], cfg),
         "state": state,
         "trigger": trigger,
         "bias": bias,

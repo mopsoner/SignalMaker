@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from app.services.runtime_settings import get_runtime_signal_config
-from app.strategy.legacy_engine import ENTRY_RSI_MAX, ENTRY_RSI_MIN, ENTRY_RSI_TIMEFRAME, build_signal
+from app.strategy.legacy_engine import build_signal
 
 
 class SignalEngineService:
@@ -194,17 +194,29 @@ class SignalEngineService:
             'equal_lows_1h': eq_lows,
         }
 
-    def _entry_rsi_profile(self, signal: dict) -> dict:
-        entry_value = signal.get('rsi_htf')
-        preferred = entry_value is not None and ENTRY_RSI_MIN <= float(entry_value) <= ENTRY_RSI_MAX
+    def _entry_rsi_profile(self, signal: dict, cfg: dict | None = None) -> dict:
+        raw_cfg = (cfg or {}).get('entry_rsi') if isinstance(cfg, dict) else None
+        raw_cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+        min_value = float(raw_cfg.get('min', 45.0))
+        max_value = float(raw_cfg.get('max', 55.0))
+        if min_value > max_value:
+            min_value, max_value = max_value, min_value
+        timeframe = str(raw_cfg.get('timeframe', '1h') or '1h').lower()
+        if timeframe not in {'1h', '4h'}:
+            timeframe = '1h'
+        source = 'rsi_macro' if timeframe == '4h' else 'rsi_htf'
+        entry_value = signal.get(source)
+        preferred = entry_value is not None and min_value <= float(entry_value) <= max_value
+        min_label = f'{min_value:g}'
+        max_label = f'{max_value:g}'
         return {
             'value': entry_value,
-            'timeframe': ENTRY_RSI_TIMEFRAME,
-            'source': 'rsi_htf',
+            'timeframe': timeframe,
+            'source': source,
             'preferred': preferred,
-            'min': ENTRY_RSI_MIN,
-            'max': ENTRY_RSI_MAX,
-            'reason': 'preferred_45_55_rsi_entry' if preferred else 'entry_rsi_outside_45_55_band',
+            'min': min_value,
+            'max': max_value,
+            'reason': f'preferred_{min_label}_{max_label}_rsi_entry' if preferred else f'entry_rsi_outside_{min_label}_{max_label}_band',
         }
 
 
@@ -552,7 +564,7 @@ class SignalEngineService:
         signal['macro_window_4h'] = macro_window
         signal['refinement_context_1h'] = refinement
         signal['execution_trigger_5m'] = exec_trigger
-        signal['entry_rsi'] = signal.get('entry_rsi') or self._entry_rsi_profile(signal)
+        signal['entry_rsi'] = signal.get('entry_rsi') or self._entry_rsi_profile(signal, cfg)
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']

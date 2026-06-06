@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     def validate_execution_interval(cls, v: str) -> str:
         return "15m"
 
+    @field_validator("signal_entry_rsi_timeframe", mode="before")
+    @classmethod
+    def validate_entry_rsi_timeframe(cls, v: str) -> str:
+        value = str(v or "1h").strip().lower()
+        return value if value in {"1h", "4h"} else "1h"
+
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
@@ -76,6 +82,9 @@ class Settings(BaseSettings):
     signal_equal_level_tolerance_pct: float = Field(default=0.002, alias="SIGNAL_EQUAL_LEVEL_TOLERANCE_PCT")
     signal_overbought: float = Field(default=70, alias="SIGNAL_OVERBOUGHT")
     signal_oversold: float = Field(default=30, alias="SIGNAL_OVERSOLD")
+    signal_entry_rsi_min: float = Field(default=45.0, alias="SIGNAL_ENTRY_RSI_MIN")
+    signal_entry_rsi_max: float = Field(default=55.0, alias="SIGNAL_ENTRY_RSI_MAX")
+    signal_entry_rsi_timeframe: str = Field(default="1h", alias="SIGNAL_ENTRY_RSI_TIMEFRAME")
     signal_price_near_extreme_pct: float = Field(default=0.0025, alias="SIGNAL_PRICE_NEAR_EXTREME_PCT")
     signal_session_confirm_filter_enabled: bool = Field(default=False, alias="SIGNAL_SESSION_CONFIRM_FILTER_ENABLED")
 
@@ -107,6 +116,11 @@ class Settings(BaseSettings):
             "equal_level_tolerance_pct": self.signal_equal_level_tolerance_pct,
             "session_timezone_offset_hours": self.session_timezone_offset_hours,
             "session_confirm_filter_enabled": self.signal_session_confirm_filter_enabled,
+            "entry_rsi": {
+                "min": self.signal_entry_rsi_min,
+                "max": self.signal_entry_rsi_max,
+                "timeframe": self.signal_entry_rsi_timeframe,
+            },
             "signals": {
                 "overbought": self.signal_overbought,
                 "oversold": self.signal_oversold,

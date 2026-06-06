@@ -94,3 +94,27 @@ def test_rsi_htf_50_can_create_wyckoff_buy_watch_without_oversold_rsi(monkeypatc
     assert signal["entry_rsi"]["preferred"] is True
     assert signal["bias"] == "bull_watch"
     assert signal["pipeline"]["zone"] is True
+
+
+def test_entry_rsi_profile_can_use_configured_macro_rsi_band():
+    cfg = {"entry_rsi": {"min": 48.0, "max": 58.0, "timeframe": "4h"}}
+    profile = _rsi_entry_profile(52.0, "4h", cfg)
+
+    assert profile["preferred"] is True
+    assert profile["timeframe"] == "4h"
+    assert profile["source"] == "rsi_macro"
+    assert profile["min"] == 48.0
+    assert profile["max"] == 58.0
+
+
+def test_service_entry_rsi_profile_uses_runtime_entry_rsi_config():
+    cfg = {"entry_rsi": {"min": 48.0, "max": 58.0, "timeframe": "4h"}}
+    profile = SignalEngineService()._entry_rsi_profile(
+        {"rsi_main": 50.0, "rsi_htf": 30.0, "rsi_macro": 52.0},
+        cfg,
+    )
+
+    assert profile["value"] == 52.0
+    assert profile["timeframe"] == "4h"
+    assert profile["source"] == "rsi_macro"
+    assert profile["preferred"] is True
