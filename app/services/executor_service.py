@@ -6,6 +6,7 @@ from app.services.fill_service import FillService
 from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.risk_service import RiskService
+from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
 from app.services.trade_candidate_service import TradeCandidateService
 
 
@@ -142,9 +143,12 @@ class ExecutorService:
             'exchange_oco_order_list_id': oco_resp.get('orderListId'),
         }
 
-    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
+    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper', sync_momentum_first: bool = False) -> dict:
         executed = []
         skipped = []
+        sync_result = None
+        if sync_momentum_first:
+            sync_result = MomentumCandidateSyncService(self.db).sync(limit=limit)
         requested_mode = (mode or 'paper').lower()
         for candidate in self.candidates.get_open_candidates(limit=limit):
             if candidate.entry_price is None:
@@ -168,7 +172,10 @@ class ExecutorService:
                 executed.append(result)
             except Exception as exc:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
-        return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
+        result = {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
+        if sync_result is not None:
+            result['sync'] = sync_result
+        return result
 
     def reconcile_live_positions(self) -> dict:
         if not settings.live_reconcile_enabled:

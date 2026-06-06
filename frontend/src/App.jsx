@@ -3,7 +3,7 @@ import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
-import MomentumExecutorPage from './pages/MomentumExecutorPage'
+import MomentumCandidatesSyncPage from './pages/MomentumCandidatesSyncPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -37,7 +37,7 @@ export default function App() {
         </div>
         <nav className={`nav-links ${menuOpen ? 'open' : ''}`}>
           <div style={groupTitleStyle}>Momentum</div>
-          <NavLink to="/momentum-executor" onClick={closeMenu}>Executor</NavLink>
+          <NavLink to="/momentum-candidates" onClick={closeMenu}>Candidate Sync</NavLink>
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
           <NavLink to="/settings" onClick={closeMenu}>Momentum Settings</NavLink>
           <div style={groupTitleStyle}>Wyckoff / SMC</div>
@@ -50,13 +50,12 @@ export default function App() {
       </aside>
       <main className="content" onClick={menuOpen ? closeMenu : undefined}>
         <Routes>
-          <Route path="/" element={<Navigate to="/momentum-executor" replace />} />
+          <Route path="/" element={<Navigate to="/momentum-candidates" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
-          <Route path="/momentum-executor" element={<MomentumExecutorPage />} />
-          <Route path="/momentum/admin" element={<MomentumExecutorPage />} />
+          <Route path="/momentum-candidates" element={<MomentumCandidatesSyncPage />} />
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/settings" element={<AdminSettingsPage />} />
