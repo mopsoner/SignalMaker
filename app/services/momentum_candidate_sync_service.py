@@ -152,16 +152,15 @@ class MomentumCandidateSyncService:
         if status not in {"momentum_ready", "open"}:
             return f"unsupported_status:{status or 'missing'}"
         entry = self._float(candidate.get("entry_price"))
-        stop = self._float(candidate.get("stop_price"))
         target = self._float(candidate.get("target_price"))
-        if entry is None or stop is None or target is None:
-            return "missing_entry_stop_or_target"
+        if entry is None or target is None:
+            return "missing_entry_or_target"
         side = str(candidate.get("side") or "long").lower()
         if side in {"short", "sell", "bear"}:
-            if not target < entry < stop:
-                return "incoherent_short_entry_stop_target"
-        elif not stop < entry < target:
-            return "incoherent_long_entry_stop_target"
+            if not target < entry:
+                return "incoherent_short_entry_target"
+        elif not entry < target:
+            return "incoherent_long_entry_target"
         return None
 
     def _payload(self, candidate: dict[str, Any], *, remote_id: str) -> dict[str, Any]:

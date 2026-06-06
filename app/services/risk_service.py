@@ -24,15 +24,15 @@ class RiskService:
         self.validate_short_allowed(side)
         if entry_price is None:
             raise RuntimeError('Missing entry price')
-        if settings.live_require_tp_sl and (stop_price is None or target_price is None):
-            raise RuntimeError('TP/SL are required for live trading')
-        if stop_price is not None and target_price is not None:
+        if settings.live_require_tp_sl and target_price is None:
+            raise RuntimeError('Take profit is required for live trading')
+        if target_price is not None:
             if side == 'long':
-                if not (stop_price < entry_price < target_price):
-                    raise RuntimeError('Invalid long risk ladder: stop < entry < target required')
+                if not (entry_price < target_price):
+                    raise RuntimeError('Invalid long target: entry < target required')
             else:
-                if not (target_price < entry_price < stop_price):
-                    raise RuntimeError('Invalid short risk ladder: target < entry < stop required')
+                if not (target_price < entry_price):
+                    raise RuntimeError('Invalid short target: target < entry required')
 
         open_positions = self.db.execute(select(func.count()).select_from(Position).where(Position.status == 'open')).scalar_one()
         if int(open_positions or 0) >= settings.live_max_open_positions:
