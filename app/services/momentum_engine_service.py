@@ -45,6 +45,63 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
 
+    def decision(self, *, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+        status = self.status(
+            cadence_hours=cadence_hours,
+            starting_capital=starting_capital,
+            min_momentum_score=min_momentum_score,
+        )
+        action = "WAIT"
+        buy_symbol = None
+        sell_symbol = None
+        open_position = status.get("open_position")
+        best_asset = status.get("best_asset")
+        recommendation = status.get("recommendation") or ""
+        due_now = bool(status.get("due_now"))
+
+        if due_now and open_position and recommendation.lower().startswith("sell "):
+            sell_symbol = open_position.get("symbol")
+            buy_symbol = best_asset.get("symbol") if best_asset else None
+            action = "ROTATE" if buy_symbol else "SELL"
+        elif due_now and open_position and best_asset:
+            sell_symbol = open_position.get("symbol")
+            buy_symbol = best_asset.get("symbol")
+            action = "ROTATE" if buy_symbol and buy_symbol != sell_symbol else "HOLD"
+        elif due_now and open_position:
+            action = "HOLD"
+            sell_symbol = open_position.get("symbol")
+        elif due_now and best_asset:
+            action = "BUY"
+            buy_symbol = best_asset.get("symbol")
+        elif open_position:
+            action = "HOLD"
+            sell_symbol = open_position.get("symbol")
+
+        symbol = buy_symbol or sell_symbol
+        executor_contract = {
+            "action": action,
+            "raw_action": action,
+            "symbol": symbol,
+            "buy_symbol": buy_symbol,
+            "sell_symbol": sell_symbol,
+            "reason": recommendation,
+            "should_trade": action in {"BUY", "SELL", "ROTATE"},
+            "order_sequence": [item for item in (("SELL", sell_symbol), ("BUY", buy_symbol)) if item[1]],
+            "buy_candidates": [row for row in (best_asset, status.get("top_watch_asset")) if row],
+            "fallback_policy": {"enabled": True, "source": "/api/v1/momentum"},
+        }
+        return {
+            **status,
+            "mode": "momentum_rotation",
+            "action": action,
+            "symbol": symbol,
+            "buy_symbol": buy_symbol,
+            "sell_symbol": sell_symbol,
+            "reason": recommendation,
+            "should_trade": executor_contract["should_trade"],
+            "executor_contract": executor_contract,
+        }
+
     def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         before = self._build_status(
