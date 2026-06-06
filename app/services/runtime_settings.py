@@ -22,6 +22,11 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _entry_rsi_timeframe(value: Any) -> str:
+    value = str(value or "1h").strip().lower()
+    return value if value in {"1h", "4h"} else "1h"
+
+
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
         "app_name": base_settings.app_name,
@@ -59,6 +64,9 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "signal_equal_level_tolerance_pct": base_settings.signal_equal_level_tolerance_pct,
         "signal_overbought": base_settings.signal_overbought,
         "signal_oversold": base_settings.signal_oversold,
+        "signal_entry_rsi_min": base_settings.signal_entry_rsi_min,
+        "signal_entry_rsi_max": base_settings.signal_entry_rsi_max,
+        "signal_entry_rsi_timeframe": base_settings.signal_entry_rsi_timeframe,
         "signal_price_near_extreme_pct": base_settings.signal_price_near_extreme_pct,
         "signal_session_confirm_filter_enabled": base_settings.signal_session_confirm_filter_enabled,
         "planner_min_score": base_settings.planner_min_score,
@@ -110,7 +118,9 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
-        payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
+        strategy = payload.setdefault("strategy", {})
+        strategy["signal_execution_interval"] = "15m"
+        strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy.get("signal_entry_rsi_timeframe"))
         payload.setdefault("binance", {})["binance_collector_enabled"] = _as_bool(
             payload.get("binance", {}).get("binance_collector_enabled", True),
             default=True,
@@ -133,6 +143,8 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     strategy = payload.get("strategy")
     if isinstance(strategy, dict):
         strategy["signal_execution_interval"] = "15m"
+        if "signal_entry_rsi_timeframe" in strategy:
+            strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy["signal_entry_rsi_timeframe"])
 
     binance = payload.get("binance")
     if isinstance(binance, dict) and "binance_collector_enabled" in binance:
@@ -170,6 +182,11 @@ def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
         "equal_level_tolerance_pct": strategy["signal_equal_level_tolerance_pct"],
         "session_timezone_offset_hours": strategy["session_timezone_offset_hours"],
         "session_confirm_filter_enabled": strategy["signal_session_confirm_filter_enabled"],
+        "entry_rsi": {
+            "min": strategy.get("signal_entry_rsi_min", 45.0),
+            "max": strategy.get("signal_entry_rsi_max", 55.0),
+            "timeframe": strategy.get("signal_entry_rsi_timeframe", "1h"),
+        },
         "signals": {
             "overbought": strategy["signal_overbought"],
             "oversold": strategy["signal_oversold"],

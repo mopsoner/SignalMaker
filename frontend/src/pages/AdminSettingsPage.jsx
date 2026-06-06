@@ -23,7 +23,7 @@ const EMPTY_SETTINGS = {
     binance_lookback_1h: 180,
     binance_lookback_4h: 120,
   },
-  strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
+  strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_entry_rsi_min: 45, signal_entry_rsi_max: 55, signal_entry_rsi_timeframe: '1h', signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   live: { live_trading_enabled: false, binance_use_testnet: true, binance_testnet_rest_base: 'https://testnet.binance.vision', live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: true },
@@ -211,8 +211,8 @@ export default function AdminSettingsPage() {
         <Field label="Reconcile enabled"><input type="checkbox" checked={Boolean(settings.live.live_reconcile_enabled)} onChange={(e) => updateField('live', 'live_reconcile_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
       </Section>
 
-      <Section title="Strategy" description="Signal engine, execution timeframe and planner thresholds.">
-        <Field label="Execution timeframe"><select style={inputStyle} value={settings.strategy.signal_execution_interval || '15m'} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></Field>
+      <Section title="Strategy" description="Signal engine, execution timeframe and planner thresholds. Main RSI/execution is pinned to 15m; entry RSI preference is evaluated on 1h by default.">
+        <Field label="Execution timeframe"><select style={inputStyle} value={settings.strategy.signal_execution_interval || '15m'} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}><option value="15m">15 minutes</option></select></Field>
         <Field label="Session timezone offset"><input style={inputStyle} type="number" value={settings.strategy.session_timezone_offset_hours} onChange={(e) => updateField('strategy', 'session_timezone_offset_hours', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Session confirm filter enabled"><input type="checkbox" checked={Boolean(settings.strategy.signal_session_confirm_filter_enabled)} onChange={(e) => updateField('strategy', 'signal_session_confirm_filter_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="RSI period"><input style={inputStyle} type="number" value={settings.strategy.signal_rsi_period} onChange={(e) => updateField('strategy', 'signal_rsi_period', e.target.value, 'number')} disabled={loading} /></Field>
@@ -220,6 +220,9 @@ export default function AdminSettingsPage() {
         <Field label="Equal level tolerance pct"><input style={inputStyle} type="number" step="0.0001" value={settings.strategy.signal_equal_level_tolerance_pct} onChange={(e) => updateField('strategy', 'signal_equal_level_tolerance_pct', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Overbought"><input style={inputStyle} type="number" value={settings.strategy.signal_overbought} onChange={(e) => updateField('strategy', 'signal_overbought', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Oversold"><input style={inputStyle} type="number" value={settings.strategy.signal_oversold} onChange={(e) => updateField('strategy', 'signal_oversold', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Entry RSI min"><input style={inputStyle} type="number" step="0.1" value={settings.strategy.signal_entry_rsi_min} onChange={(e) => updateField('strategy', 'signal_entry_rsi_min', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Entry RSI max"><input style={inputStyle} type="number" step="0.1" value={settings.strategy.signal_entry_rsi_max} onChange={(e) => updateField('strategy', 'signal_entry_rsi_max', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Entry RSI timeframe"><select style={inputStyle} value={settings.strategy.signal_entry_rsi_timeframe || '1h'} onChange={(e) => updateField('strategy', 'signal_entry_rsi_timeframe', e.target.value)} disabled={loading}><option value="1h">1 hour (HTF)</option><option value="4h">4 hours (macro)</option></select></Field>
         <Field label="Planner min score"><input style={inputStyle} type="number" step="0.1" value={settings.strategy.planner_min_score} onChange={(e) => updateField('strategy', 'planner_min_score', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Planner min RR"><input style={inputStyle} type="number" step="0.1" value={settings.strategy.planner_min_rr} onChange={(e) => updateField('strategy', 'planner_min_rr', e.target.value, 'number')} disabled={loading} /></Field>
       </Section>
