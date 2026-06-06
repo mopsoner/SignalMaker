@@ -18,30 +18,19 @@ def _make_session() -> Session:
     return Session(engine)
 
 
-def test_cash_balance_uses_buy_sell_trade_values() -> None:
+def test_cash_balance_simulates_paper_cash_from_realized_pnl_and_open_position() -> None:
     with _make_session() as db:
         db.add_all(
             [
                 MomentumEngineTrade(
-                    trade_id="buy-1",
-                    strategy=MomentumEngineService.STRATEGY,
-                    action="BUY_NEXT_ENTRY_READY",
-                    symbol="BTCUSDC",
-                    price=100.0,
-                    quantity=5.0,
-                    value=500.0,
-                    pnl=0.0,
-                    created_at=datetime.now(timezone.utc),
-                ),
-                MomentumEngineTrade(
-                    trade_id="sell-1",
+                    trade_id="closed-sell",
                     strategy=MomentumEngineService.STRATEGY,
                     action="SELL_ROTATE_OR_STRUCTURE_BREAK",
                     symbol="BTCUSDC",
                     price=125.0,
-                    quantity=2.0,
-                    value=250.0,
-                    pnl=50.0,
+                    quantity=10.0,
+                    value=1250.0,
+                    pnl=250.0,
                     created_at=datetime.now(timezone.utc),
                 ),
                 MomentumEngineTrade(
@@ -56,15 +45,25 @@ def test_cash_balance_uses_buy_sell_trade_values() -> None:
                     created_at=datetime.now(timezone.utc),
                 ),
                 MomentumEngineTrade(
-                    trade_id="other-strategy-buy",
+                    trade_id="other-strategy-sell",
                     strategy="other_strategy",
-                    action="BUY_NEXT_ENTRY_READY",
+                    action="SELL_ROTATE_OR_STRUCTURE_BREAK",
                     symbol="ETHUSDC",
                     price=10.0,
                     quantity=10.0,
                     value=100.0,
-                    pnl=0.0,
+                    pnl=500.0,
                     created_at=datetime.now(timezone.utc),
+                ),
+                MomentumEnginePosition(
+                    position_id="open-1",
+                    strategy=MomentumEngineService.STRATEGY,
+                    symbol="SOLUSDC",
+                    status="open",
+                    quantity=10.0,
+                    entry_price=100.0,
+                    entry_value=1000.0,
+                    opened_at=datetime.now(timezone.utc),
                 ),
             ]
         )
@@ -72,7 +71,52 @@ def test_cash_balance_uses_buy_sell_trade_values() -> None:
 
         cash = MomentumEngineService(db)._cash_balance(starting_capital=1000.0)
 
-    assert cash == 750.0
+    assert cash == 250.0
+
+
+def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -> None:
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumEngineTrade(
+                    trade_id="orphan-buy",
+                    strategy=MomentumEngineService.STRATEGY,
+                    action="BUY_RSI_1H_ENTRY_READY",
+                    symbol="BTCUSDC",
+                    price=100.0,
+                    quantity=10.0,
+                    value=1000.0,
+                    pnl=0.0,
+                    created_at=datetime.now(timezone.utc),
+                ),
+                MomentumCurrent(
+                    symbol="ETHUSDC",
+                    price=100.0,
+                    momentum_score=10.0,
+                    classification="strong_bull",
+                    rsi_1h=50.0,
+                    rank=1,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="ETHUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
+        position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
+
+    assert "CHECK_NO_CASH" not in actions
+    assert "BUY_RSI_1H_ENTRY_READY" in actions
+    assert position.symbol == "ETHUSDC"
+    assert status["open_position"]["symbol"] == "ETHUSDC"
 
 
 def test_hold_trade_records_mark_to_market_pnl_with_latest_market_price() -> None:
