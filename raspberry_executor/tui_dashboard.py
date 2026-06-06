@@ -172,6 +172,27 @@ def snapshot():
     }
 
 
+
+def target_reached(row: dict) -> bool:
+    mark = row.get("mark_price")
+    target = row.get("target_price")
+    try:
+        mark_value = float(mark)
+        target_value = float(target)
+    except Exception:
+        return False
+    side = str(row.get("side") or "").lower()
+    return mark_value <= target_value if side == "short" else mark_value >= target_value
+
+
+def position_result(row: dict) -> str:
+    if target_reached(row):
+        return "Gagnante TP"
+    if str(row.get("status") or "").lower() == "closed":
+        return "Closed"
+    return "Attente TP"
+
+
 def render_header(stdscr, width, data):
     add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, 0, 2, " SignalMaker Raspberry TUI ", curses.color_pair(1) | curses.A_BOLD)
@@ -231,7 +252,7 @@ def render_positions(stdscr, y, x, h, w, data):
     total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
     box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl:+.4f}")
     rows = data["positions"][: max(0, h - 4)]
-    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        TP/SL", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        Target     Result", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
         return
@@ -241,8 +262,9 @@ def render_positions(stdscr, y, x, h, w, data):
         mark = row.get("mark_price")
         pnl_text = f"{pnl:+.4f}" if pnl is not None else "PNL?"
         mark_text = f"{mark:.8g}" if mark is not None else "-"
-        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price'))}/{safe(row.get('stop_price'))}"
-        color = curses.color_pair(2) if pnl is not None and pnl >= 0 else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
+        result = position_result(row)
+        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price')):<10} {result}"
+        color = curses.color_pair(2) if target_reached(row) or (pnl is not None and pnl >= 0) else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
 
@@ -257,9 +279,9 @@ def render_candidates(stdscr, y, x, h, w, data):
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status   Stop        Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status   Target", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('stop_price')):<11} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('target_price'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
@@ -269,7 +291,7 @@ def _event_details(event: dict) -> str:
     if event_type.startswith("momentum_"):
         return "action={} sym={} buy={} sell={} result={} reason={}".format(payload.get("action"), payload.get("symbol"), payload.get("buy_symbol"), payload.get("sell_symbol"), payload.get("execution_result"), payload.get("reason") or payload.get("error"))
     parts = []
-    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp"), ("stop_price", "sl")]:
+    for key, label in [("symbol", "sym"), ("execution_symbol", "sym"), ("signal_symbol", "sig"), ("side", "side"), ("mode", "mode"), ("reason", "reason"), ("error", "err"), ("quantity", "qty"), ("entry_price", "entry"), ("target_price", "tp")]:
         value = payload.get(key)
         if value is not None and value != "":
             parts.append(f"{label}={value}")

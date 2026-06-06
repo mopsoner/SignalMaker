@@ -24,8 +24,6 @@ class RiskGuard:
             return False, f"unsupported_side:{side}"
         if candidate.get("entry_price") is None:
             return False, "missing_entry_price"
-        if candidate.get("stop_price") is None:
-            return False, "missing_stop_price"
         if candidate.get("target_price") is None:
             return False, "missing_target_price"
         created_at = candidate.get("created_at")

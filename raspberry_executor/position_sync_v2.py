@@ -362,7 +362,7 @@ def sync_open_positions():
     rules = BinanceSymbolRules(settings.binance_base_url)
     spot_manager = SpotOrderManager(binance, rules)
     state = StateStore()
-    checked = closed = missing_oco = repaired_oco = attached_existing = repair_skipped = repair_blocked = ghost_removed = momentum_tracked = 0
+    checked = closed = missing_tp = repaired_oco = attached_existing = repair_skipped = repair_blocked = ghost_removed = momentum_tracked = 0
 
     for candidate_id, position in list(state.open_positions().items()):
         checked += 1
@@ -386,30 +386,17 @@ def sync_open_positions():
             continue
 
         tp_id = position.get("tp_order_id")
-        sl_id = position.get("sl_order_id")
-        if not tp_id or not sl_id:
-            missing_oco += 1
-            try:
-                repair_result = _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=binance, rules=rules)
-                if repair_result == "repaired": repaired_oco += 1
-                elif repair_result == "attached_existing_orders": attached_existing += 1
-                elif repair_result == "blocked": repair_blocked += 1
-                elif repair_result in {"quantity_mismatch", "waiting_levels", "missing_quantity"}: repair_skipped += 1
-            except Exception as exc:
-                logger.error("oco repair failed candidate=%s symbol=%s mode=%s error=%s", candidate_id, symbol, position.get("mode"), str(exc))
+        if not tp_id:
+            missing_tp += 1
             continue
 
         tp = _order(binance, margin, symbol, tp_id, use_margin=use_margin)
-        sl = _order(binance, margin, symbol, sl_id, use_margin=use_margin)
-        state.update_open_position(candidate_id, {"binance_tp_status": tp, "binance_sl_status": sl, "order_monitor_mode": "margin" if use_margin else "spot"})
+        state.update_open_position(candidate_id, {"binance_tp_status": tp, "order_monitor_mode": "margin" if use_margin else "spot"})
         if _status(tp) == "FILLED":
             state.close_position(candidate_id, "take_profit_filled", tp)
             closed += 1
-        elif _status(sl) == "FILLED":
-            state.close_position(candidate_id, "stop_loss_filled", sl)
-            closed += 1
 
-    summary = {"checked": checked, "closed": closed, "ghost_removed": ghost_removed, "momentum_tracked": momentum_tracked, "missing_oco": missing_oco, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped, "repair_blocked": repair_blocked}
+    summary = {"checked": checked, "closed": closed, "ghost_removed": ghost_removed, "momentum_tracked": momentum_tracked, "missing_tp": missing_tp, "missing_oco": 0, "repaired_oco": repaired_oco, "attached_existing_orders": attached_existing, "repair_skipped": repair_skipped, "repair_blocked": repair_blocked}
     if any(summary.values()):
         logger.info("position sync summary=%s", summary)
     return summary

@@ -34,10 +34,8 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         symbol = position["execution_symbol"]
         tp_order_id = position.get("tp_order_id")
-        sl_order_id = position.get("sl_order_id")
         try:
             tp_status = binance.get_order(symbol, tp_order_id) if tp_order_id else None
-            sl_status = binance.get_order(symbol, sl_order_id) if sl_order_id else None
         except Exception as exc:
             logger.warning("order status failed candidate=%s error=%s", candidate_id, exc)
             continue
@@ -45,9 +43,6 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
         if tp_status and str(tp_status.get("status", "")).upper() == "FILLED":
             state.close_position(candidate_id, "take_profit_filled", tp_status)
             logger.info("local position closed candidate=%s reason=take_profit_filled", candidate_id)
-        elif sl_status and str(sl_status.get("status", "")).upper() == "FILLED":
-            state.close_position(candidate_id, "stop_loss_filled", sl_status)
-            logger.info("local position closed candidate=%s reason=stop_loss_filled", candidate_id)
 
 
 def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
@@ -71,7 +66,6 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
         executed_qty = _executed_qty(entry, quantity)
 
         tp = binance.place_exit_limit(execution_symbol, side, executed_qty, float(candidate["target_price"]))
-        sl = binance.place_stop_loss(execution_symbol, side, executed_qty, float(candidate["stop_price"]))
 
         state.mark_executed(candidate_id)
         state.add_open_position(candidate_id, {
@@ -81,15 +75,14 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
             "side": side,
             "quantity": executed_qty,
             "entry_price": float(entry_price),
-            "stop_price": float(candidate["stop_price"]),
+            "stop_price": candidate.get("stop_price"),
             "target_price": float(candidate["target_price"]),
             "entry_order_id": _order_id(entry),
             "tp_order_id": _order_id(tp),
-            "sl_order_id": _order_id(sl),
+            "exit_strategy": "take_profit_only",
             "candidate": candidate,
             "entry_payload": entry,
             "tp_payload": tp or {},
-            "sl_payload": sl or {},
         })
         logger.info("local position opened candidate=%s symbol=%s qty=%s", candidate_id, execution_symbol, executed_qty)
     except Exception as exc:
