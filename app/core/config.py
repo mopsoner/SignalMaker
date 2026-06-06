@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     live_require_tp_sl: bool = Field(default=True, alias="LIVE_REQUIRE_TP_SL")
     live_reconcile_enabled: bool = Field(default=True, alias="LIVE_RECONCILE_ENABLED")
 
+    momentum_executor_enabled: bool = Field(default=False, alias="MOMENTUM_EXECUTOR_ENABLED")
+    momentum_executor_mode: str = Field(default="paper", alias="MOMENTUM_EXECUTOR_MODE")
+    momentum_executor_interval_sec: int = Field(default=30, alias="MOMENTUM_EXECUTOR_INTERVAL_SEC")
+    momentum_executor_api_base: str = Field(default="https://mysginalmaker.replit.app", alias="MOMENTUM_EXECUTOR_API_BASE")
+    momentum_executor_decision_path: str = Field(default="/api/v1/momentum-engine/decision", alias="MOMENTUM_EXECUTOR_DECISION_PATH")
+    momentum_executor_quote_asset: str = Field(default="USDC", alias="MOMENTUM_EXECUTOR_QUOTE_ASSET")
+    momentum_executor_notional: float = Field(default=25.0, alias="MOMENTUM_EXECUTOR_NOTIONAL")
+    momentum_executor_apply_remote_run: bool = Field(default=False, alias="MOMENTUM_EXECUTOR_APPLY_REMOTE_RUN")
+
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
     discord_webhook_url: str = Field(default="", alias="DISCORD_WEBHOOK_URL")
