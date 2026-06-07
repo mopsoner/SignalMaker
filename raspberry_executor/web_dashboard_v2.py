@@ -36,10 +36,12 @@ def order_status(payload):
 def synced_positions_table(rows):
     if not rows:
         return "<p class='muted'>No positions.</p>"
-    cols = ["Status", "Strategy", "Candidate", "Symbol", "Side", "Qty", "Entry", "Mark", "PNL", "Target", "TP", "TP status", "Result", "Reason"]
+    cols = ["Status", "Strategy", "Candidate", "Symbol", "Side", "Qty", "Entry", "Mark", "PNL", "Target", "TP", "TP status", "TP replay", "Protected", "Result", "Reason"]
     html = "<table><tr>" + "".join(f"<th>{cell(col)}</th>" for col in cols) + "</tr>"
     for candidate_id, row in rows:
-        values = [row.get("status"), position_strategy(candidate_id, row), candidate_id, row.get("execution_symbol") or row.get("signal_symbol"), row.get("side"), row.get("quantity"), row.get("entry_price"), row.get("mark_price"), position_pnl(row), row.get("target_price"), row.get("tp_order_id"), order_status(row.get("binance_tp_status")), row.get("close_reason") or row.get("exit_strategy") or "take_profit_only", row.get("close_reason")]
+        replay = row.get("tp_replay_status") or ("blocked" if row.get("tp_replay_blocked") else "needed" if row.get("needs_tp_replay") else "")
+        protected = row.get("tp_protected_quantity") if row.get("tp_protected_quantity") is not None else ""
+        values = [row.get("status"), position_strategy(candidate_id, row), candidate_id, row.get("execution_symbol") or row.get("signal_symbol"), row.get("side"), row.get("quantity"), row.get("entry_price"), row.get("mark_price"), position_pnl(row), row.get("target_price"), row.get("tp_order_id"), order_status(row.get("binance_tp_status")), replay, protected, row.get("close_reason") or row.get("exit_strategy") or "take_profit_only", row.get("close_reason")]
         html += "<tr>" + "".join(f"<td>{cell(value)}</td>" for value in values) + "</tr>"
     return html + "</table>"
 
@@ -47,7 +49,7 @@ def synced_positions_table(rows):
 def positions_page_v2():
     try:
         sync = sync_open_positions()
-        sync_html = "<p class='muted'>Binance TP sync: checked={checked}, closed={closed}, momentum_tracked={momentum_tracked}, missing_tp={missing_tp}</p>".format(**{**{"momentum_tracked": 0, "missing_tp": 0}, **sync})
+        sync_html = "<p class='muted'>Binance TP sync: checked={checked}, closed={closed}, partial={partial_filled}, momentum_tracked={momentum_tracked}, missing_tp={missing_tp}, replayed={replayed_tp}, attached={attached_existing_tp}, skipped={replay_skipped}, blocked={replay_blocked}</p>".format(**{**{"momentum_tracked": 0, "missing_tp": 0, "partial_filled": 0, "replayed_tp": 0, "attached_existing_tp": 0, "replay_skipped": 0, "replay_blocked": 0}, **sync})
     except Exception as exc:
         sync_html = f"<p class='pill bad'>Binance sync unavailable: {cell(exc)}</p>"
     state = StateStore()

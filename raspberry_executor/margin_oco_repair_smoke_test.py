@@ -25,7 +25,7 @@ def fail(name: str, error, **extra):
 
 def _build_margin_position(symbol: str, quantity: str, current_price: float) -> dict:
     return {
-        "candidate_id": f"smoke-margin-oco-{symbol}",
+        "candidate_id": f"smoke-margin-tp-{symbol}",
         "signal_symbol": symbol,
         "execution_symbol": symbol,
         "side": "long",
@@ -39,7 +39,9 @@ def _build_margin_position(symbol: str, quantity: str, current_price: float) -> 
         "oco_order_list_id": None,
         "tp_order_id": None,
         "sl_order_id": None,
-        "source": "margin_oco_repair_smoke_test",
+        "exit_strategy": "take_profit_only",
+        "needs_tp_replay": True,
+        "source": "margin_tp_replay_smoke_test",
     }
 
 
@@ -51,14 +53,14 @@ def main() -> int:
 
     result = {
         "status": "pending",
-        "test": "margin_oco_repair_smoke_test",
+        "test": "margin_tp_replay_smoke_test",
         "symbol": symbol,
         "mode": "cross_margin",
         "dry_run": True,
         "checks": [],
     }
 
-    with tempfile.TemporaryDirectory(prefix="signalmaker-margin-oco-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="signalmaker-margin-tp-smoke-") as tmp:
         original_db_path = sqlite_db.DB_PATH
         sqlite_db.DB_PATH = Path(tmp) / "raspberry_executor_smoke.db"
         try:
@@ -94,9 +96,9 @@ def main() -> int:
                 position = _build_margin_position(symbol, quantity, current)
                 candidate_id = position["candidate_id"]
                 state.add_open_position(candidate_id, position)
-                result["checks"].append(ok("seed_cross_margin_position_without_oco", candidate_id=candidate_id, quantity=quantity, current_price=current))
+                result["checks"].append(ok("seed_cross_margin_position_without_tp", candidate_id=candidate_id, quantity=quantity, current_price=current))
             except Exception as exc:
-                result["checks"].append(fail("seed_cross_margin_position_without_oco", exc))
+                result["checks"].append(fail("seed_cross_margin_position_without_tp", exc))
                 result["status"] = "failed"
                 print(json.dumps(result, indent=2))
                 return 1
@@ -109,21 +111,21 @@ def main() -> int:
                     "oco_order_list_id": updated.get("oco_order_list_id"),
                     "tp_order_id": updated.get("tp_order_id"),
                     "sl_order_id": updated.get("sl_order_id"),
-                    "oco_repair_mode": updated.get("oco_repair_mode"),
-                    "oco_payload": updated.get("oco_payload"),
+                    "tp_replay_mode": updated.get("tp_replay_mode"),
+                    "tp_payload": updated.get("tp_payload"),
                 }
                 passed = (
-                    repair_result == "repaired"
-                    and updated.get("oco_repair_mode") == "margin"
-                    and str(updated.get("oco_order_list_id") or "").startswith("dry-margin-oco")
+                    repair_result == "replayed"
+                    and updated.get("tp_replay_mode") == "margin"
+                    and updated.get("oco_order_list_id") is None
                     and str(updated.get("tp_order_id") or "").startswith("dry-margin-tp")
-                    and str(updated.get("sl_order_id") or "").startswith("dry-margin-sl")
+                    and updated.get("sl_order_id") is None
                 )
                 if not passed:
-                    raise RuntimeError(f"margin_oco_repair_assertion_failed:{checks}")
-                result["checks"].append(ok("repair_uses_margin_oco", **checks))
+                    raise RuntimeError(f"margin_tp_replay_assertion_failed:{checks}")
+                result["checks"].append(ok("replay_uses_margin_take_profit", **checks))
             except Exception as exc:
-                result["checks"].append(fail("repair_uses_margin_oco", exc))
+                result["checks"].append(fail("replay_uses_margin_take_profit", exc))
                 result["status"] = "failed"
                 print(json.dumps(result, indent=2))
                 return 1
@@ -131,10 +133,9 @@ def main() -> int:
             try:
                 updated = state.open_positions().get(candidate_id) or {}
                 tp = _order(client, margin, symbol, updated.get("tp_order_id"), use_margin=True)
-                sl = _order(client, margin, symbol, updated.get("sl_order_id"), use_margin=True)
-                if not (str((tp or {}).get("orderId") or "").startswith("dry-margin-tp") and str((sl or {}).get("orderId") or "").startswith("dry-margin-sl")):
-                    raise RuntimeError({"tp": tp, "sl": sl})
-                result["checks"].append(ok("monitor_uses_margin_order_lookup", tp=tp, sl=sl))
+                if not str((tp or {}).get("orderId") or "").startswith("dry-margin-tp"):
+                    raise RuntimeError({"tp": tp})
+                result["checks"].append(ok("monitor_uses_margin_tp_order_lookup", tp=tp))
             except Exception as exc:
                 result["checks"].append(fail("monitor_uses_margin_order_lookup", exc))
                 result["status"] = "failed"

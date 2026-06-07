@@ -72,7 +72,7 @@ def _positions_page() -> str:
     if not local_positions:
         body += "<p class='muted'>No local open positions tracked by Raspberry.</p>"
     else:
-        body += "<table><tr><th>Candidate</th><th>Signal</th><th>Execution</th><th>Side</th><th>Qty</th><th>Entry order</th><th>TP order</th><th>SL order</th></tr>"
+        body += "<table><tr><th>Candidate</th><th>Signal</th><th>Execution</th><th>Side</th><th>Qty</th><th>Entry order</th><th>TP order</th><th>TP replay</th><th>Protected qty</th></tr>"
         for candidate_id, row in local_positions.items():
             body += "<tr>"
             body += f"<td>{_cell(candidate_id)}</td>"
@@ -82,7 +82,9 @@ def _positions_page() -> str:
             body += f"<td>{_cell(row.get('quantity'))}</td>"
             body += f"<td>{_cell(row.get('entry_order_id'))}</td>"
             body += f"<td>{_cell(row.get('tp_order_id'))}</td>"
-            body += f"<td>{_cell(row.get('sl_order_id'))}</td>"
+            replay = row.get('tp_replay_status') or ('blocked' if row.get('tp_replay_blocked') else 'needed' if row.get('needs_tp_replay') else '')
+            body += f"<td>{_cell(replay)}</td>"
+            body += f"<td>{_cell(row.get('tp_protected_quantity'))}</td>"
             body += "</tr>"
         body += "</table>"
     body += "</div>"

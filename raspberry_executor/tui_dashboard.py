@@ -186,10 +186,19 @@ def target_reached(row: dict) -> bool:
 
 
 def position_result(row: dict) -> str:
-    if target_reached(row):
-        return "Gagnante TP"
     if str(row.get("status") or "").lower() == "closed":
         return "Closed"
+    if not row.get("tp_order_id"):
+        if row.get("tp_replay_blocked"):
+            return "TP bloqué"
+        if row.get("needs_tp_replay") or row.get("last_tp_replay_skip_reason"):
+            return "Rejeu TP"
+        return "Sans TP"
+    replay_status = str(row.get("tp_replay_status") or "")
+    if replay_status == "partial_placed":
+        return "TP partiel"
+    if target_reached(row):
+        return "Gagnante TP"
     return "Attente TP"
 
 
@@ -252,7 +261,7 @@ def render_positions(stdscr, y, x, h, w, data):
     total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
     box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl:+.4f}")
     rows = data["positions"][: max(0, h - 4)]
-    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        Target     Result", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        Target     TP        Result", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
         return
@@ -263,7 +272,8 @@ def render_positions(stdscr, y, x, h, w, data):
         pnl_text = f"{pnl:+.4f}" if pnl is not None else "PNL?"
         mark_text = f"{mark:.8g}" if mark is not None else "-"
         result = position_result(row)
-        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price')):<10} {result}"
+        tp_text = safe(row.get('tp_order_id'), 'no-tp')
+        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price')):<10} {tp_text:<9} {result}"
         color = curses.color_pair(2) if target_reached(row) or (pnl is not None and pnl >= 0) else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
@@ -311,7 +321,7 @@ def render_events(stdscr, y, x, h, w, data):
         event_type = str(event.get("event_type", ""))
         details = _event_details(event)
         text = (event_type + " " + details).lower()
-        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "not_confirmed", "insufficient", "rejected", "mismatch"]) else curses.color_pair(2) if any(x in text for x in ["opened", "repaired", "filled", "bought", "sold"]) else curses.color_pair(4)
+        level = curses.color_pair(5) if any(x in text for x in ["error", "failed", "blocked", "not_confirmed", "insufficient", "rejected", "mismatch"]) else curses.color_pair(2) if any(x in text for x in ["opened", "replayed", "attached", "filled", "bought", "sold"]) else curses.color_pair(4)
         timestamp = fr_datetime(event.get("timestamp"))
         candidate_id = trunc(event.get("candidate_id"), 21)
         line = f"{timestamp:<14} {candidate_id:<21} {event_type} | {details}"

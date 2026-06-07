@@ -62,7 +62,7 @@ def main() -> None:
     logger.info("order monitor thread started for Binance position sync")
 
     threading.Thread(target=candidate_status_sync_loop, daemon=True).start()
-    logger.info("candidate status sync thread started for protected OCO positions")
+    logger.info("candidate status sync thread started for take-profit protected positions")
 
     executor_main()
 

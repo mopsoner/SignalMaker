@@ -163,7 +163,7 @@ def save_long_position(state: StateStore, candidate_id: str, fingerprint: str, c
         return
     mark_signal_done(state, candidate_id, fingerprint)
     remove_pending(candidate_id)
-    state.add_open_position(candidate_id, {"candidate_id": candidate_id, "signal_fingerprint": fingerprint, "signal_symbol": candidate["symbol"], "execution_symbol": symbol, "side": "long", "mode": "isolated_margin" if manager.margin.isolated else "cross_margin", "margin_isolated": manager.margin.isolated, "quantity": result["quantity"], "entry_price": float(result["entry_price"]), "stop_price": float(candidate["stop_price"]), "target_price": float(candidate["target_price"]), "entry_order_id": result.get("entry_order_id"), "oco_order_list_id": result.get("oco_order_list_id"), "tp_order_id": result.get("tp_order_id"), "sl_order_id": result.get("sl_order_id"), "candidate": candidate, "margin_payload": result, "entry_payload": result.get("entry_payload") or {}, "oco_payload": result.get("oco_payload") or {}, "needs_oco_repair": not bool(result.get("tp_order_id") and result.get("sl_order_id")), "oco_error": result.get("oco_error")})
+    state.add_open_position(candidate_id, {"candidate_id": candidate_id, "signal_fingerprint": fingerprint, "signal_symbol": candidate["symbol"], "execution_symbol": symbol, "side": "long", "mode": "isolated_margin" if manager.margin.isolated else "cross_margin", "margin_isolated": manager.margin.isolated, "quantity": result["quantity"], "entry_price": float(result["entry_price"]), "stop_price": candidate.get("stop_price"), "target_price": float(candidate["target_price"]), "entry_order_id": result.get("entry_order_id"), "oco_order_list_id": None, "tp_order_id": result.get("tp_order_id"), "sl_order_id": None, "exit_strategy": "take_profit_only", "candidate": candidate, "margin_payload": result, "entry_payload": result.get("entry_payload") or {}, "tp_payload": result.get("tp_payload") or {}, "needs_tp_replay": not bool(result.get("tp_order_id")), "tp_error": result.get("tp_error")})
 
 
 def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: dict, symbol: str, side: str, error: str, *, from_queue: bool = False) -> str:
@@ -250,7 +250,7 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
             return "error"
 
     try:
-        result = manager.open_long_with_margin_oco(symbol=symbol, quote_amount=float(settings.order_quote_amount), target_price=float(candidate["target_price"]), stop_price=float(candidate["stop_price"]))
+        result = manager.open_long_with_margin_take_profit(symbol=symbol, quote_amount=float(settings.order_quote_amount), target_price=float(candidate["target_price"]))
     except Exception as exc:
         text = str(exc)
         if is_margin_token_collateral_limit(text):
@@ -265,18 +265,18 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
         logger.error("margin long failed candidate=%s error=%s", candidate_id, text)
         return "error"
 
-    if result.get("oco_error") and is_margin_token_collateral_limit(result.get("oco_error")):
-        return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, result.get("oco_error"), from_queue=from_queue)
+    if result.get("tp_error") and is_margin_token_collateral_limit(result.get("tp_error")):
+        return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, result.get("tp_error"), from_queue=from_queue)
 
     save_long_position(state, candidate_id, fingerprint, candidate, symbol, manager, result)
     if result_is_dry_run(result):
         logger.info("margin long simulated dry-run candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
         return "simulated_dry_run"
-    if result.get("oco_error"):
-        state.add_event(candidate_id, "position_opened_needs_oco_repair", {"symbol": symbol, "error": result.get("oco_error"), "result": result})
-        logger.warning("margin long opened without oco candidate=%s symbol=%s qty=%s error=%s", candidate_id, symbol, result.get("quantity"), result.get("oco_error"))
-        return "opened_needs_oco_repair"
-    logger.info("margin long opened candidate=%s symbol=%s qty=%s oco=%s quote_guard=%s", candidate_id, symbol, result["quantity"], result.get("oco_order_list_id"), result.get("quote_balance_guard"))
+    if result.get("tp_error"):
+        state.add_event(candidate_id, "position_opened_needs_tp_replay", {"symbol": symbol, "error": result.get("tp_error"), "result": result})
+        logger.warning("margin long opened without tp candidate=%s symbol=%s qty=%s error=%s", candidate_id, symbol, result.get("quantity"), result.get("tp_error"))
+        return "opened_needs_tp_replay"
+    logger.info("margin long opened candidate=%s symbol=%s qty=%s tp=%s quote_guard=%s", candidate_id, symbol, result["quantity"], result.get("tp_order_id"), result.get("quote_balance_guard"))
     return "opened"
 
 
@@ -304,7 +304,7 @@ def process_pending(settings, binance, rules, manager, spot_manager, state, guar
             continue
         stats["pending_retried"] += 1
         result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, item["candidate"], from_queue=True)
-        if result in {"opened", "opened_needs_oco_repair", "sold"}:
+        if result in {"opened", "opened_needs_tp_replay", "sold"}:
             stats["pending_opened"] += 1
         elif result == "error":
             stats["pending_errors"] += 1
@@ -328,11 +328,11 @@ def main() -> None:
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_oco_repair": 0, "sold": 0, "errors": 0, "margin_unavailable": 0, "duplicate_signal": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0, "simulated_dry_run": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_tp_replay": 0, "sold": 0, "errors": 0, "margin_unavailable": 0, "duplicate_signal": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0, "simulated_dry_run": 0}
             for candidate in candidates:
                 result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
-                elif result == "opened_needs_oco_repair": stats["opened_needs_oco_repair"] += 1
+                elif result == "opened_needs_tp_replay": stats["opened_needs_tp_replay"] += 1
                 elif result == "sold": stats["sold"] += 1
                 elif result == "error": stats["errors"] += 1
                 elif result == "margin_unavailable_error": stats["margin_unavailable"] += 1

@@ -188,6 +188,33 @@ class SpotOrderManager:
         tp_order_id, sl_order_id = self._oco_order_ids(oco)
         return {"symbol": symbol, "quantity": exit_qty, "oco_order_list_id": oco.get("orderListId"), "tp_order_id": tp_order_id, "sl_order_id": sl_order_id, "oco_payload": oco, "oco_quantity_source": qty_info.get("quantity_source"), "oco_requested_quantity": qty_info.get("requested_quantity"), "oco_free_base_qty": qty_info.get("free_base_qty"), "oco_base_asset": qty_info.get("base_asset")}
 
+
+    def create_exit_take_profit_for_open_long(self, *, symbol: str, quantity: float | str, target_price: float) -> dict:
+        symbol = symbol.upper()
+        current_price = self.binance.current_price(symbol)
+        if not (float(target_price) > current_price):
+            raise RuntimeError(f"invalid_take_profit_price_order symbol={symbol} target={target_price} current={current_price}")
+        qty_info = self._available_oco_exit_quantity(symbol, quantity)
+        exit_qty = qty_info["quantity"]
+        tp = self.rules.normalize_exit_price(symbol, target_price)
+        self.rules.ensure_exit_notional(symbol, exit_qty, tp, label="take_profit_limit")
+        order = self.binance.place_exit_limit(symbol, "long", exit_qty, tp)
+        return {"symbol": symbol, "quantity": exit_qty, "tp_order_id": self._order_id(order), "tp_payload": order, "exit_strategy": "take_profit_only", "tp_quantity_source": qty_info.get("quantity_source"), "tp_requested_quantity": qty_info.get("requested_quantity"), "tp_free_base_qty": qty_info.get("free_base_qty"), "tp_base_asset": qty_info.get("base_asset")}
+
+    def open_long_with_take_profit(self, *, symbol: str, quote_amount: float, target_price: float) -> dict:
+        symbol = symbol.upper()
+        current_price = self.binance.current_price(symbol)
+        quantity = self.rules.quantity_from_quote(symbol, quote_amount, current_price, market=True)
+        entry = self.binance.place_market_entry(symbol, "long", quantity)
+        entry_order_id = self._order_id(entry)
+        confirm = self.confirm_spot_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
+        entry_price = float(confirm["entry_price"])
+        executed_qty = confirm["executed_qty"]
+        result = {"symbol": symbol, "side": "long", "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "entry_payload": entry, "exit_strategy": "take_profit_only"}
+        tp_result = self.create_exit_take_profit_for_open_long(symbol=symbol, quantity=executed_qty, target_price=target_price)
+        result.update({"quantity": tp_result["quantity"], "tp_order_id": tp_result.get("tp_order_id"), "sl_order_id": None, "oco_order_list_id": None, "tp_payload": tp_result.get("tp_payload") or {}, "tp_quantity_source": tp_result.get("tp_quantity_source"), "tp_requested_quantity": tp_result.get("tp_requested_quantity"), "tp_free_base_qty": tp_result.get("tp_free_base_qty"), "tp_base_asset": tp_result.get("tp_base_asset")})
+        return result
+
     def open_long_with_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
         current_price = self.binance.current_price(symbol)

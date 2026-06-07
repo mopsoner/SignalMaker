@@ -190,11 +190,11 @@ def raw_payload(event):
 def event_level(event):
     event_type = str(event.get("event_type", ""))
     text = (event_type + " " + raw_payload(event)).lower()
-    if event_type in {"position_opened", "oco_repaired", "take_profit_filled", "momentum_bought", "momentum_sold"}:
+    if event_type in {"position_opened", "tp_replayed", "tp_existing_order_attached", "take_profit_filled", "momentum_bought", "momentum_sold"}:
         return "ok", "OK"
-    if event_type in {"stop_loss_filled", "oco_repair_waiting_levels", "margin_skipped_insufficient_balance"} or "skipped" in event_type:
+    if event_type in {"tp_replay_waiting_levels", "tp_replay_blocked", "margin_skipped_insufficient_balance"} or "skipped" in event_type:
         return "warn", "Watch"
-    if any(x in text for x in ["error", "failed", "insufficient", "rejected", "invalid_oco"]):
+    if any(x in text for x in ["error", "failed", "insufficient", "rejected", "invalid_oco", "invalid_take_profit"]):
         return "bad", "Error"
     return "", "Info"
 

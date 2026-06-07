@@ -29,10 +29,10 @@ def quote_asset_for_symbol(symbol: str, quote_assets: list[str]) -> str | None:
     return None
 
 
-def oco_window_still_valid(binance: BinanceClient, symbol: str, target_price: float, stop_price: float) -> tuple[bool, float, str]:
+def take_profit_window_still_valid(binance: BinanceClient, symbol: str, target_price: float) -> tuple[bool, float, str]:
     current = binance.current_price(symbol)
-    if not (float(target_price) > current > float(stop_price)):
-        return False, current, f"invalid_window target={target_price} current={current} stop={stop_price}"
+    if not (float(target_price) > current):
+        return False, current, f"invalid_take_profit_window target={target_price} current={current}"
     return True, current, "ok"
 
 
@@ -61,11 +61,10 @@ def sell_all_spot_balance(binance: BinanceClient, rules: BinanceSymbolRules, sta
 
 def open_long(settings, order_manager: SpotOrderManager, state: StateStore, candidate: dict, symbol: str) -> str:
     candidate_id = candidate["candidate_id"]
-    result = order_manager.open_long_with_oco(
+    result = order_manager.open_long_with_take_profit(
         symbol=symbol,
         quote_amount=settings.order_quote_amount,
         target_price=float(candidate["target_price"]),
-        stop_price=float(candidate["stop_price"]),
     )
     state.mark_executed(candidate_id)
     state.add_open_position(candidate_id, {
@@ -75,17 +74,20 @@ def open_long(settings, order_manager: SpotOrderManager, state: StateStore, cand
         "side": "long",
         "quantity": result["quantity"],
         "entry_price": float(result["entry_price"]),
-        "stop_price": float(candidate["stop_price"]),
+        "stop_price": candidate.get("stop_price"),
         "target_price": float(candidate["target_price"]),
         "entry_order_id": result.get("entry_order_id"),
-        "oco_order_list_id": result.get("oco_order_list_id"),
+        "oco_order_list_id": None,
         "tp_order_id": result.get("tp_order_id"),
-        "sl_order_id": result.get("sl_order_id"),
+        "sl_order_id": None,
+        "exit_strategy": "take_profit_only",
         "candidate": candidate,
         "entry_payload": result.get("entry_payload") or {},
-        "oco_payload": result.get("oco_payload") or {},
+        "tp_payload": result.get("tp_payload") or {},
+        "needs_tp_replay": not bool(result.get("tp_order_id")),
+        "tp_error": result.get("tp_error"),
     })
-    logger.info("long opened candidate=%s symbol=%s qty=%s oco=%s", candidate_id, symbol, result["quantity"], result.get("oco_order_list_id"))
+    logger.info("long opened candidate=%s symbol=%s qty=%s tp=%s", candidate_id, symbol, result["quantity"], result.get("tp_order_id"))
     return "opened"
 
 
@@ -113,7 +115,7 @@ def process_candidate(settings, binance, rules, order_manager, state, guard, can
             remove_pending(candidate_id)
         return result
 
-    valid, current, why = oco_window_still_valid(binance, symbol, float(candidate["target_price"]), float(candidate["stop_price"]))
+    valid, current, why = take_profit_window_still_valid(binance, symbol, float(candidate["target_price"]))
     if not valid:
         if from_queue:
             bump_pending(candidate_id, why)
