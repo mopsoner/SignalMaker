@@ -25,9 +25,19 @@ function targetReached(row) {
   if (!Number.isFinite(mark) || !Number.isFinite(target)) return false
   return row?.side === 'short' ? mark <= target : mark >= target
 }
+function tpReplayStatus(row) {
+  const meta = row?.meta || {}
+  if (meta.tp_replay_blocked) return 'TP bloqué'
+  if (meta.tp_replay_status) return meta.tp_replay_status
+  if (meta.needs_tp_replay || meta.last_tp_replay_skip_reason) return 'Rejeu TP'
+  if (meta.exit_strategy === 'take_profit_only') return 'TP only'
+  return ''
+}
 function positionResult(row) {
-  if (targetReached(row)) return 'Gagnante (TP)'
   if (row?.status === 'closed') return 'Closed'
+  const meta = row?.meta || {}
+  if (!meta.tp_exchange_order_id && !meta.tp_order_id && (meta.needs_tp_replay || meta.tp_replay_blocked)) return tpReplayStatus(row)
+  if (targetReached(row)) return 'Gagnante (TP)'
   return 'En attente TP'
 }
 function pnlTone(value, row) {
@@ -80,6 +90,8 @@ export default function PositionsPage() {
     { key: 'pnl', title: 'PnL', render: (row) => <span style={pnlTone(pnlValue(row), row)}>{fmtNumber(pnlValue(row), 4)}</span>, sortValue: (row) => pnlValue(row) ?? -999999 },
     { key: 'pnl_pct', title: 'PnL %', render: (row) => <span style={pnlTone(pnlPct(row), row)}>{fmtNumber(pnlPct(row), 2)}</span>, sortValue: (row) => pnlPct(row) ?? -999999 },
     { key: 'target_price', title: 'Target', render: (row) => fmtNumber(row.target_price, 4) },
+    { key: 'tp_order', title: 'TP order', render: (row) => row?.meta?.tp_exchange_order_id || row?.meta?.tp_order_id || row?.meta?.tp_local_order_id || '' },
+    { key: 'tp_replay', title: 'TP replay', render: (row) => tpReplayStatus(row) },
     { key: 'dist_target', title: 'Dist target %', render: (row) => fmtNumber(distanceToTargetPct(row), 2), sortValue: (row) => distanceToTargetPct(row) ?? -999999 },
     { key: 'opened_at', title: 'Opened', render: (row) => fmtDate(row.opened_at) },
   ]

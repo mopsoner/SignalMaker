@@ -30,10 +30,11 @@ def positions_html():
 def positions_table(rows):
     if not rows:
         return "<p class='muted'>No positions.</p>"
-    out = "<table><tr><th>Status</th><th>Candidate</th><th>Signal</th><th>Execution</th><th>Side</th><th>Qty</th><th>Entry</th><th>Stop</th><th>Target</th><th>TP</th><th>SL</th><th>Reason</th></tr>"
+    out = "<table><tr><th>Status</th><th>Candidate</th><th>Signal</th><th>Execution</th><th>Side</th><th>Qty</th><th>Entry</th><th>Target</th><th>TP</th><th>TP replay</th><th>Protected</th><th>Reason</th></tr>"
     for cid, r in rows:
         out += '<tr>'
-        for v in [r.get('status'), cid, r.get('signal_symbol'), r.get('execution_symbol'), r.get('side'), r.get('quantity'), r.get('entry_price'), r.get('stop_price'), r.get('target_price'), r.get('tp_order_id'), r.get('sl_order_id'), r.get('close_reason')]:
+        replay = r.get('tp_replay_status') or ('blocked' if r.get('tp_replay_blocked') else 'needed' if r.get('needs_tp_replay') else '')
+        for v in [r.get('status'), cid, r.get('signal_symbol'), r.get('execution_symbol'), r.get('side'), r.get('quantity'), r.get('entry_price'), r.get('target_price'), r.get('tp_order_id'), replay, r.get('tp_protected_quantity'), r.get('close_reason')]:
             out += f'<td>{cell(v)}</td>'
         out += '</tr>'
     return out + '</table>'

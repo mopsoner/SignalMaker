@@ -75,13 +75,19 @@ class MarginClient:
             return self.binance._signed("POST", "/sapi/v1/margin/isolated/transfer", {"asset": asset.upper(), "symbol": symbol.upper(), "amount": amount, "transFrom": "SPOT", "transTo": "ISOLATED_MARGIN"})
         return self.binance._signed("POST", "/sapi/v1/margin/transfer", {"asset": asset.upper(), "amount": amount, "type": 1})
 
-    def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET") -> dict:
+    def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET", *, price: str | None = None, time_in_force: str | None = None) -> dict:
         payload = {"symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "isIsolated": self.is_isolated_value(), "newOrderRespType": "FULL"}
+        if price is not None:
+            payload["price"] = price
+        if time_in_force is not None:
+            payload["timeInForce"] = time_in_force
         if self.dry_run:
+            order_prefix = "dry-margin-entry" if order_type.upper() == "MARKET" else "dry-margin-tp"
+            payload_status = "FILLED" if order_type.upper() == "MARKET" else "NEW"
             return {
-                "orderId": f"dry-margin-entry-{int(time.time())}",
-                "status": "FILLED",
-                "executedQty": str(quantity),
+                "orderId": f"{order_prefix}-{int(time.time())}",
+                "status": payload_status,
+                "executedQty": str(quantity) if order_type.upper() == "MARKET" else "0",
                 "dry_run": True,
                 **payload,
             }

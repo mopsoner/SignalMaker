@@ -16,7 +16,7 @@ def sync_interval_seconds() -> int:
 
 
 def _protected(position: dict) -> bool:
-    return bool(position.get("tp_order_id") and position.get("sl_order_id"))
+    return bool(position.get("tp_order_id"))
 
 
 def _already_marked_local(state: StateStore, candidate_id: str, position: dict) -> bool:
@@ -26,7 +26,7 @@ def _already_marked_local(state: StateStore, candidate_id: str, position: dict) 
 
 
 def sync_executed_candidates() -> dict:
-    """Mark protected candidates as executed in local Raspberry SQLite only."""
+    """Mark candidates with a take-profit order as executed in local Raspberry SQLite only."""
     state = StateStore()
     checked = protected = marked = skipped = errors = 0
 
@@ -49,9 +49,9 @@ def sync_executed_candidates() -> dict:
             state.update_open_position(candidate_id, {
                 "local_candidate_status": "executed",
                 "local_candidate_executed_source": "candidate_status_sync",
-                "local_candidate_executed_reason": "position_has_tp_and_sl",
+                "local_candidate_executed_reason": "position_has_take_profit",
             }, event_type="candidate_marked_executed_local")
-            logger.info("candidate marked executed locally after OCO protection candidate=%s symbol=%s", candidate_id, symbol)
+            logger.info("candidate marked executed locally after take-profit placement candidate=%s symbol=%s", candidate_id, symbol)
             marked += 1
         except Exception as exc:
             errors += 1
