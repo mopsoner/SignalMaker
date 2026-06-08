@@ -153,25 +153,6 @@ def _wait_for_quote_increase(binance: BinanceClient, quote: str, before_quote: f
     return last
 
 
-def _wait_for_quote_notional(binance: BinanceClient, quote: str, minimum: float, *, attempts: int, sleep_sec: float) -> float:
-    """Wait for the quote balance to be spendable after a just-filled sell.
-
-    Binance spot balances can lag for a few account reads immediately after a
-    market sell. A rotation buy should not create a misleading no-cash event
-    until the post-sell quote balance has had the same confirmation window used
-    by the sell leg.
-    """
-    if binance.dry_run:
-        return minimum
-    last = 0.0
-    for _ in range(max(1, attempts)):
-        last = binance.free_balance(quote)
-        if last >= minimum:
-            return last
-        time.sleep(max(0.1, sleep_sec))
-    return last
-
-
 def _wallet_value(binance: BinanceClient, rules: BinanceSymbolRules, symbol: str) -> tuple[str, float, float, float]:
     base = rules.base_asset(symbol)
     qty = binance.free_balance(base)
@@ -310,7 +291,7 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
             details.append(detail)
             state.add_event(cid, "momentum_sell_attempt", {"decision": decision, **detail})
             if binance.dry_run or after_value < dust_value:
-                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details}, record_event=False)
+                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details})
                 state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote})
                 return f"sell_confirmed:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
         except Exception as exc:
@@ -346,14 +327,6 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
     desired_notional = float(settings.order_quote_amount)
     notional, free_quote = _safe_quote_notional(settings, binance, quote, desired_notional) if use_available_quote else (desired_notional, desired_notional)
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
-    if use_available_quote and notional < min_buy_notional and not binance.dry_run:
-        wait_attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
-        wait_sleep = max(0.2, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
-        reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
-        safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
-        required_free_quote = reserve + (min_buy_notional / safety_ratio)
-        free_quote = _wait_for_quote_notional(binance, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
-        notional, free_quote = _safe_quote_notional(settings, binance, quote, desired_notional)
     if notional < min_buy_notional:
         state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
         return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"

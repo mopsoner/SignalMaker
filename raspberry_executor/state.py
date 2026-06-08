@@ -65,7 +65,7 @@ class StateStore:
             if event_type:
                 conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, event_type, self.now(), dumps(updates)))
 
-    def close_position(self, candidate_id: str, reason: str, payload: dict[str, Any] | None = None, *, record_event: bool = True) -> None:
+    def close_position(self, candidate_id: str, reason: str, payload: dict[str, Any] | None = None) -> None:
         with connect() as conn:
             row = conn.execute("SELECT payload_json FROM positions WHERE candidate_id=? AND status='open'", (candidate_id,)).fetchone()
             if row is None:
@@ -73,8 +73,7 @@ class StateStore:
             position = loads(row["payload_json"], {})
             position = {**position, "status": "closed", "close_reason": reason, "closed_at": self.now(), "close_payload": payload or {}}
             upsert_position(conn, candidate_id, "closed", position)
-            if record_event:
-                conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, reason, self.now(), dumps(payload or {})))
+            conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, reason, self.now(), dumps(payload or {})))
 
     def remove_open_position(self, candidate_id: str) -> None:
         with connect() as conn:
