@@ -159,18 +159,20 @@ class MarginOrderManager:
         except Exception:
             return None
 
-    def _clamp_own_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, reserve_pct: float = 0.02) -> tuple[float, dict]:
+    def _clamp_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, available: float | None, balance_source: str, reserve_pct: float = 0.02) -> tuple[float, dict]:
         requested_quote = max(0.0, float(requested_quote))
-        info = {"requested_quote_amount": requested_quote, "available_quote_amount": None, "adjusted_quote_amount": requested_quote, "quote_reserve_pct": reserve_pct, "quote_balance_guard": "not_checked"}
-        available = self._available_margin_quote(symbol, quote)
+        info = {"requested_quote_amount": requested_quote, "available_quote_amount": None, "adjusted_quote_amount": requested_quote, "quote_reserve_pct": reserve_pct, "quote_balance_source": balance_source, "quote_balance_guard": "not_checked"}
         if available is None:
             return requested_quote, info
-        usable = max(0.0, available * max(0.0, 1.0 - reserve_pct))
+        usable = max(0.0, float(available) * max(0.0, 1.0 - reserve_pct))
         adjusted = min(requested_quote, usable)
-        info.update({"available_quote_amount": available, "adjusted_quote_amount": adjusted, "quote_balance_guard": "clamped" if adjusted < requested_quote else "ok"})
+        info.update({"available_quote_amount": float(available), "adjusted_quote_amount": adjusted, "quote_balance_guard": "clamped" if adjusted < requested_quote else "ok"})
         if adjusted <= 0:
-            raise RuntimeError(f"margin_insufficient_quote_balance symbol={symbol.upper()} quote={quote.upper()} required={requested_quote} available={available} usable={usable}")
+            raise RuntimeError(f"margin_insufficient_quote_balance symbol={symbol.upper()} quote={quote.upper()} source={balance_source} required={requested_quote} available={available} usable={usable}")
         return adjusted, info
+
+    def _clamp_own_quote_to_available(self, *, symbol: str, quote: str, requested_quote: float, reserve_pct: float = 0.0) -> tuple[float, dict]:
+        return self._clamp_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_quote, available=self._available_margin_quote(symbol, quote), balance_source="margin", reserve_pct=reserve_pct)
 
     def create_margin_oco_sell(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
@@ -205,19 +207,13 @@ class MarginOrderManager:
         quote = self.quote_asset(symbol)
         multiplier = margin_multiplier()
         requested_own_quote = float(quote_amount)
-        balance_guard = {"requested_quote_amount": requested_own_quote, "quote_balance_guard": "not_applicable"}
-        if not self.margin.isolated or not margin_transfer_spot_balance():
-            own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
-        else:
-            own_quote = max(0.0, requested_own_quote)
+        own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
 
         wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
         borrow_quote = 0.0
         transfer_payload = None
         borrow_payload = {}
         borrow_error = None
-        if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
-            transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
         if wanted_borrow_quote > 0:
             try:
                 max_borrow = self.margin.max_borrowable(symbol, quote)
