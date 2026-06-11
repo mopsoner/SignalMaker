@@ -111,6 +111,15 @@ function shortActionLabel(action) {
   return normalized || 'EVENT'
 }
 
+function isRealizedPnlAction(action) {
+  return String(action || '').toUpperCase().startsWith('SELL')
+}
+
+function isMarkToMarketPnlAction(action) {
+  const normalized = String(action || '').toUpperCase()
+  return normalized.includes('HOLD') || normalized.includes('MARK')
+}
+
 function buildMomentumTimeline(engine) {
   if (!engine) return []
 
@@ -120,13 +129,16 @@ function buildMomentumTimeline(engine) {
   const points = [{ id: 'start', label: 'Start', created_at: null, equity: startingCapital, pnl: 0, action: 'START' }]
 
   trades.forEach((trade, index) => {
-    realizedPnl += Number(trade.pnl || 0)
+    const tradePnl = Number(trade.pnl || 0)
+    const isRealized = isRealizedPnlAction(trade.action)
+    const isMarkToMarket = isMarkToMarketPnlAction(trade.action)
+    if (isRealized) realizedPnl += tradePnl
     points.push({
       id: trade.trade_id || `${trade.created_at || 'trade'}-${index}`,
       label: shortActionLabel(trade.action),
       created_at: trade.created_at,
-      equity: startingCapital + realizedPnl,
-      pnl: Number(trade.pnl || 0),
+      equity: startingCapital + realizedPnl + (isMarkToMarket ? tradePnl : 0),
+      pnl: tradePnl,
       pnl_pct: trade.pnl_pct,
       action: trade.action,
       symbol: trade.symbol,
@@ -195,7 +207,7 @@ function MomentumTradeChart({ points }) {
         </g>
       })}
     </svg>
-    <div className="market-toolbar-hint">Chart derived from the backend momentum trade log; BUY entries stay flat until realized/marked profit moves equity.</div>
+    <div className="market-toolbar-hint">Chart derived from the backend momentum trade log; SELL PnL is accumulated once, while HOLD/MARK rows are displayed as temporary mark-to-market equity and are not re-added to realized profit.</div>
   </div>
 }
 
