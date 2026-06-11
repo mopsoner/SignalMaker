@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     def validate_execution_interval(cls, v: str) -> str:
         return "15m"
 
+    @field_validator("momentum_candidates_min_rr", mode="before")
+    @classmethod
+    def empty_momentum_min_rr_as_none(cls, v: str | None) -> str | None:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")

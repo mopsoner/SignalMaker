@@ -13,8 +13,11 @@ from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-momentum-decision")
 
-DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
+DEFAULT_DECISION_PATH = ""
 DEFAULT_CANDIDATES_PATH = "/api/v1/momentum"
+DECISION_RANKINGS_SOURCE = "momentum_rankings"
+DECISION_ENDPOINT_FALLBACK_SOURCE = "momentum_decision_endpoint_fallback"
+LEGACY_DECISION_PATH = "/api/v1/momentum-engine/decision"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -57,7 +60,7 @@ def _url(base_url: str, path: str) -> str:
 
 
 def _decision_path() -> str:
-    return _env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH
+    return (_env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH).strip()
 
 
 def _candidates_path() -> str:
@@ -82,13 +85,42 @@ def _read_json_response(response: requests.Response) -> dict[str, Any]:
     return data
 
 
+def _decision_candidates_fallback_enabled() -> bool:
+    return _bool(_env("MOMENTUM_DECISION_CANDIDATES_FALLBACK_ENABLED"), default=True)
+
+
 def fetch_decision() -> dict[str, Any]:
+    """Fetch the actionable momentum decision for the Raspberry executor.
+
+    The current main SignalMaker API exposes rankings at /api/v1/momentum. It
+    does not expose the older experimental /api/v1/momentum-engine/decision
+    route, so rankings are the default source. MOMENTUM_DECISION_PATH remains
+    supported for deployments that explicitly provide a decision endpoint.
+    """
+    decision_path = _decision_path()
+    if not decision_path or decision_path == LEGACY_DECISION_PATH:
+        return build_decision_from_candidates(
+            fetch_momentum_candidates(limit=_int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 50)),
+            source=DECISION_RANKINGS_SOURCE,
+        )
+
     settings = load_settings()
     response = requests.get(
-        _url(settings.signalmaker_base_url, _decision_path()),
+        _url(settings.signalmaker_base_url, decision_path),
         timeout=30,
         headers={"accept": "application/json", "cache-control": "no-cache"},
     )
+    if not response.ok and response.status_code in {404, 405} and _decision_candidates_fallback_enabled():
+        logger.warning(
+            "momentum decision endpoint unavailable status=%s url=%s; falling back to %s",
+            response.status_code,
+            response.url,
+            _candidates_path(),
+        )
+        return build_decision_from_candidates(
+            fetch_momentum_candidates(limit=_int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 50)),
+            source=DECISION_ENDPOINT_FALLBACK_SOURCE,
+        )
     data = _read_json_response(response)
     if not response.ok:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
@@ -203,6 +235,17 @@ def _candidate_symbol(row: dict[str, Any]) -> str:
     return str(row.get("symbol") or row.get("buy_symbol") or "").upper()
 
 
+def _candidate_score(row: dict[str, Any]) -> float:
+    try:
+        return float(row.get("momentum_score") if row.get("momentum_score") is not None else row.get("score") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _candidate_quote_supported(row: dict[str, Any], quote_assets: list[str]) -> bool:
+    return _quote_asset(_candidate_symbol(row), quote_assets) is not None
+
+
 def _extract_candidate_rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         raw_candidates = payload.get("candidates") or payload.get("items") or payload.get("data") or payload.get("rankings") or []
@@ -234,7 +277,64 @@ def fetch_momentum_candidates(limit: int = 50) -> list[dict[str, Any]]:
     data = _read_json_payload(response)
     if not response.ok:
         raise RuntimeError(f"momentum_rankings_http_error status={response.status_code} url={response.url} payload={data}")
-    return _extract_candidate_rows(data)
+    min_score = _float_env("MOMENTUM_DECISION_MIN_SCORE", 0.0)
+    candidates = _extract_candidate_rows(data)
+    return [
+        row
+        for row in candidates
+        if _candidate_quote_supported(row, settings.quote_assets) and _candidate_score(row) >= min_score
+    ]
+
+
+def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: str = DECISION_RANKINGS_SOURCE) -> dict[str, Any]:
+    state = StateStore()
+    held_symbol = _position_symbol(current_momentum_position(state))
+    buy_candidates = [row for row in candidates if _candidate_symbol(row)]
+    top = buy_candidates[0] if buy_candidates else {}
+    buy_symbol = _candidate_symbol(top)
+    if not buy_symbol:
+        action = "WAIT"
+        should_trade = False
+        reason = "no_supported_momentum_candidates"
+    elif held_symbol and held_symbol != buy_symbol:
+        action = "ROTATE"
+        should_trade = True
+        reason = f"fallback_rotate_top_momentum:{held_symbol}->{buy_symbol}"
+    elif held_symbol == buy_symbol:
+        action = "HOLD"
+        should_trade = False
+        reason = f"fallback_hold_top_momentum:{held_symbol}"
+    else:
+        action = "BUY"
+        should_trade = True
+        reason = f"fallback_buy_top_momentum:{buy_symbol}"
+
+    decision = {
+        "mode": "momentum_rotation",
+        "action": action,
+        "raw_action": action,
+        "symbol": buy_symbol or held_symbol or None,
+        "buy_symbol": buy_symbol if action in {"BUY", "ROTATE", "HOLD"} else None,
+        "sell_symbol": held_symbol if action == "ROTATE" else None,
+        "should_trade": should_trade,
+        "reason": reason,
+        "source": source,
+        "buy_candidates": buy_candidates,
+        "target_asset": top or None,
+        "fallback_policy": {"source": _candidates_path(), "min_score": _float_env("MOMENTUM_DECISION_MIN_SCORE", 0.0)},
+    }
+    decision["executor_contract"] = {
+        "action": action,
+        "raw_action": action,
+        "symbol": decision["symbol"],
+        "buy_symbol": decision["buy_symbol"],
+        "sell_symbol": decision["sell_symbol"],
+        "should_trade": should_trade,
+        "reason": reason,
+        "buy_candidates": buy_candidates,
+        "fallback_policy": decision["fallback_policy"],
+    }
+    return normalize_decision(decision)
 
 
 def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
@@ -336,7 +436,11 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
 def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, use_available_quote: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
-    quote = _quote_asset(symbol, settings.quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
+    quote = _quote_asset(symbol, settings.quote_assets)
+    if not quote:
+        configured_quotes = ",".join(settings.quote_assets) or "none"
+        state.add_event(cid, "momentum_buy_skipped_unsupported_quote", {"symbol": symbol, "configured_quote_assets": settings.quote_assets, "decision": decision})
+        return f"unsupported_quote:{symbol}:configured={configured_quotes}"
     min_value = max(5.0, float(settings.order_quote_amount) * 0.5)
     already, reason = _already_have(binance, rules, state, symbol, min_value)
     if already:
@@ -399,7 +503,7 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
     exclude_set = {item.upper() for item in (exclude or set()) if item}
     try:
-        candidates = [row for row in fetch_momentum_candidates(limit=max_attempts * 2) if _candidate_symbol(row) not in exclude_set]
+        candidates = [row for row in fetch_momentum_candidates(limit=max_attempts * 2) if _candidate_symbol(row) not in exclude_set and _candidate_quote_supported(row, settings.quote_assets)]
     except Exception as exc:
         candidates = []
         state.add_event("momentum-decision", "momentum_rankings_fetch_failed", {"error": str(exc), "decision": decision})
