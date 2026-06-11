@@ -99,6 +99,25 @@ def latest_momentum_decision(events: list[dict]) -> dict | None:
     return None
 
 
+def momentum_candidate_rows(candidates: list[dict]) -> list[dict]:
+    return [row for row in candidates if str(row.get("stage") or "").lower() == "momentum" or str((row.get("payload") or {}).get("source") or "").startswith("momentum")]
+
+
+def candidate_rsi_1h(row: dict):
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    remote = payload.get("remote_candidate") if isinstance(payload.get("remote_candidate"), dict) else {}
+    derived = payload.get("momentum_trade_candidate") if isinstance(payload.get("momentum_trade_candidate"), dict) else {}
+    return row.get("rsi_1h") or remote.get("rsi_1h") or derived.get("rsi_1h")
+
+
+def momentum_buyable_text(row: dict) -> str:
+    try:
+        rsi = float(candidate_rsi_1h(row))
+    except Exception:
+        return "no-rsi"
+    return "buy" if 45 <= rsi <= 55 else "blocked"
+
+
 def fetch_candidates(limit: int | None = None):
     try:
         settings = load_settings()
@@ -165,6 +184,7 @@ def snapshot():
         "pnl_summary": pnl_summary,
         "events": events,
         "momentum": latest_momentum_decision(list(reversed(events))),
+        "momentum_candidates": momentum_candidate_rows(candidates),
         "candidates": candidates,
         "candidate_error": candidate_error,
         "candidate_limit": limit,
@@ -221,7 +241,8 @@ def render_status(stdscr, y, x, h, w, data):
         ("Multiplier", data["margin_multiplier"]),
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
         ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
-        ("Candidates", f"limit={data.get('candidate_limit', '-')}") ,
+        ("Candidates", f"{len(data.get('candidates') or [])}/{data.get('candidate_limit', '-')}") ,
+        ("Mom cands", len(data.get("momentum_candidates") or [])),
         ("Mom action", momentum.get("action", "-")),
         ("Mom result", momentum.get("execution_result", "-")),
         ("Refresh", data["refreshed_at"]),
@@ -233,10 +254,23 @@ def render_status(stdscr, y, x, h, w, data):
 
 
 def render_momentum(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "Momentum Decision")
+    box(stdscr, y, x, h, w, "Momentum Candidates")
+    rows = data.get("momentum_candidates") or []
     m = data.get("momentum") or {}
+    if rows:
+        add(stdscr, y + 1, x + 2, f"Trade candidates={len(rows)} last_action={safe(m.get('action'))}", curses.color_pair(3))
+        add(stdscr, y + 2, x + 2, "Rank Symbol     RSI1H  Buy      Score      Status", curses.A_BOLD)
+        for idx, row in enumerate(rows[: max(0, h - 4)]):
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            remote = payload.get("remote_candidate") if isinstance(payload.get("remote_candidate"), dict) else {}
+            rank = remote.get("rank") or payload.get("rank") or "-"
+            score = row.get("score") if row.get("score") is not None else remote.get("momentum_score")
+            buyable = momentum_buyable_text(row)
+            line = f"{safe(rank):<4} {safe(row.get('symbol')):<10} {safe(candidate_rsi_1h(row)):<6} {buyable:<8} {safe(score):<10} {safe(row.get('status'))}"
+            add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4), curses.color_pair(2) if buyable == "buy" and str(row.get("status")) == "open" else curses.color_pair(4))
+        return
     if not m:
-        add(stdscr, y + 1, x + 2, "No momentum decision yet", curses.color_pair(4))
+        add(stdscr, y + 1, x + 2, "No momentum trade candidate yet", curses.color_pair(4))
         return
     decision = m.get("decision") if isinstance(m.get("decision"), dict) else {}
     target = decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {}
@@ -255,7 +289,6 @@ def render_momentum(stdscr, y, x, h, w, data):
         color = curses.color_pair(2) if k == "Action" and str(v).upper() in {"BUY", "HOLD"} else curses.color_pair(5) if k == "Action" and str(v).upper() in {"SELL", "ROTATE"} else curses.color_pair(4)
         add(stdscr, y + 1 + i, x + 2, f"{k:<10}", curses.color_pair(3))
         add(stdscr, y + 1 + i, x + 14, trunc(v, w - 16), color)
-
 
 def render_positions(stdscr, y, x, h, w, data):
     total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
@@ -279,7 +312,7 @@ def render_positions(stdscr, y, x, h, w, data):
 
 
 def render_candidates(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "SignalMaker Candidates")
+    box(stdscr, y, x, h, w, "Trade Candidates")
     candidates = data["candidates"]
     error = data["candidate_error"]
     if error:
@@ -289,9 +322,9 @@ def render_candidates(stdscr, y, x, h, w, data):
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Received       Symbol     Side   Status   Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Received       Symbol     Stage      Side   Status   Target", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('stage')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('target_price'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
