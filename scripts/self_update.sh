@@ -2,7 +2,7 @@
 set -u
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BRANCH="${SIGNALMAKER_BRANCH:-raspberry/executor-app}"
+BRANCH="${SIGNALMAKER_BRANCH:-main}"
 REMOTE="${SIGNALMAKER_REMOTE:-origin}"
 LOCK_FILE="${APP_DIR}/.self_update.lock"
 LOG_PREFIX="[self-update]"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/pi/SignalMaker}"
-BRANCH="${BRANCH:-raspberry/executor-app}"
+BRANCH="${BRANCH:-main}"
 SERVICE_NAME="${SERVICE_NAME:-raspberry-executor}"
 SERVICE_FILE="systemd/raspberry-executor.service"
 SYSTEMD_TARGET="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -38,8 +38,8 @@ fi
 info "5) Verify systemd service file"
 [ -f "$SERVICE_FILE" ] || fail "Missing $SERVICE_FILE after pull"
 
-if ! grep -q "raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
-  fail "$SERVICE_FILE does not point to raspberry_executor.run_all_v2"
+if ! grep -Eq "run_bot_service.sh|raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
+  fail "$SERVICE_FILE does not start the Raspberry executor bundle"
 fi
 
 info "6) Install updated systemd service"
@@ -65,13 +65,13 @@ info "12) ExecStart check"
 sudo systemctl cat "$SERVICE_NAME" | grep ExecStart || true
 
 info "13) Recent relevant logs"
-journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|order monitor|Raspberry margin executor started|raspberry_executor.run_all_v2" || true
+journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|momentum decision|order monitor|Raspberry margin executor started|run_all_v2|run_bot_service" || true
 
 info "14) Quick runtime checks"
-if sudo systemctl cat "$SERVICE_NAME" | grep -q "raspberry_executor.run_all_v2"; then
-  echo "OK: systemd uses raspberry_executor.run_all_v2"
+if sudo systemctl cat "$SERVICE_NAME" | grep -Eq "run_bot_service.sh|raspberry_executor.run_all_v2"; then
+  echo "OK: systemd starts the Raspberry executor bundle"
 else
-  warn "systemd does not show raspberry_executor.run_all_v2"
+  warn "systemd does not show run_bot_service.sh or raspberry_executor.run_all_v2"
 fi
 
 if journalctl -u "$SERVICE_NAME" -n 200 --no-pager | grep -q "settings bootstrap startup"; then
@@ -97,7 +97,10 @@ cat <<'EOF'
 Done.
 
 Expected service line:
-ExecStart=/home/pi/Desktop/SignalMaker/.venv/bin/python -m raspberry_executor.run_all_v2
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/run_bot_service.sh
+
+The service script then starts:
+python -m raspberry_executor.run_all_v2
 
 Settings persistence:
 - Admin saves are written to .env and SQLite settings table.

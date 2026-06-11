@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$HOME/SignalMaker}"
 REPO_URL="${REPO_URL:-https://github.com/mopsoner/SignalMaker.git}"
-BRANCH="${BRANCH:-raspberry/executor-app}"
+BRANCH="${BRANCH:-main}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 printf '\n== SignalMaker Raspberry Executor installer ==\n'
@@ -48,5 +48,5 @@ fi
 
 printf '\nInstall complete.\n'
 printf 'Edit config now with: nano %s/.env\n' "$APP_DIR"
-printf 'Run manually with: cd %s && . .venv/bin/activate && python -m raspberry_executor.main\n' "$APP_DIR"
+printf 'Run manually with: cd %s && . .venv/bin/activate && python -m raspberry_executor.run_all_v2\n' "$APP_DIR"
 printf '\nKeep DRY_RUN=true for first tests.\n'
