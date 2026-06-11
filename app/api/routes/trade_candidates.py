@@ -12,9 +12,10 @@ router = APIRouter()
 def list_trade_candidates(
     limit: int = Query(default=100, ge=1, le=1000),
     status: str | None = Query(default=None),
+    stage: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[TradeCandidateRead]:
-    return TradeCandidateService(db).list_candidates(limit=limit, status=status)
+    return TradeCandidateService(db).list_candidates(limit=limit, status=status, stage=stage)
 
 
 @router.post("/{candidate_id}/executed", response_model=TradeCandidateRead)

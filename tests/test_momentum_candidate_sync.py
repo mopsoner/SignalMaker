@@ -32,7 +32,7 @@ class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
         self.status_code = status_code
-        self.url = "https://central.test/api/v1/momentum-candidates"
+        self.url = "https://central.test/api/v1/momentum"
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -83,7 +83,7 @@ def test_sync_uses_existing_signalmaker_base_url_setting(db_session, monkeypatch
 
     MomentumCandidateSyncService(db_session).sync()
 
-    assert calls[0]["url"] == "https://central.local/api/v1/momentum-candidates"
+    assert calls[0]["url"] == "https://central.local/api/v1/momentum"
 
 
 def test_sync_momentum_candidates_success(db_session, monkeypatch):
@@ -102,6 +102,20 @@ def test_sync_momentum_candidates_success(db_session, monkeypatch):
     assert row.status == "open"
     assert row.payload["source"] == "momentum_candidates"
     assert row.payload["remote_candidate_id"] == "remote-btc"
+
+def test_sync_converts_momentum_ranking_asset_to_trade_candidate(db_session, monkeypatch):
+    patch_get(monkeypatch, [{"symbol": "ETHUSDT", "rank": 1, "price": 200.0, "momentum_score": 12.5, "classification": "bull"}])
+
+    summary = MomentumCandidateSyncService(db_session).sync(min_momentum_score=10)
+
+    row = db_session.get(TradeCandidate, "momentum-ETHUSDT-open")
+    assert summary["upserted"] == 1
+    assert row is not None
+    assert row.stage == "momentum"
+    assert row.score == 12.5
+    assert row.entry_price == 200.0
+    assert row.target_price == pytest.approx(206.0)
+    assert row.payload["source"] == "momentum_rankings"
 
 
 def test_skip_candidate_without_entry_target(db_session, monkeypatch):

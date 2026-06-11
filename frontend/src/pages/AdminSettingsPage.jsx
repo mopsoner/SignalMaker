@@ -9,7 +9,7 @@ const EMPTY_SETTINGS = {
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   live: { live_trading_enabled: false, binance_use_testnet: true, binance_testnet_rest_base: 'https://testnet.binance.vision', live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: true },
-  momentum: { signalmaker_base_url: 'https://mysginalmaker.replit.app', momentum_candidates_sync_enabled: false, momentum_candidates_limit: 100, momentum_candidates_min_score: 0, momentum_candidates_min_rr: '', momentum_candidates_require_wyckoff_context: true, momentum_candidates_http_timeout_sec: 20 },
+  momentum: { signalmaker_base_url: 'https://mysginalmaker.replit.app', momentum_candidates_sync_enabled: false, momentum_candidates_limit: 100, momentum_candidates_min_score: 0, momentum_candidates_min_rr: '', momentum_candidates_require_wyckoff_context: true, momentum_candidates_http_timeout_sec: 20, momentum_candidates_source_path: '/api/v1/momentum', momentum_candidates_target_pct: 3 },
 }
 
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
@@ -116,7 +116,7 @@ export default function AdminSettingsPage() {
         {message ? <p className="stat-hint" style={{ marginTop: 14 }}>{message}</p> : null}
       </section>
 
-      <Section title="Momentum candidates sync" description="Fetch central Momentum Candidates and store them as local executor trade candidates.">
+      <Section title="Momentum candidates sync" description="Fetch central momentum asset rankings and store them as normal executor trade candidates.">
         <Field label="Sync enabled"><input type="checkbox" checked={Boolean(settings.momentum.momentum_candidates_sync_enabled)} onChange={(e) => updateField('momentum', 'momentum_candidates_sync_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="SignalMaker API base"><input style={inputStyle} value={settings.momentum.signalmaker_base_url} onChange={(e) => updateField('momentum', 'signalmaker_base_url', e.target.value)} disabled={loading} /></Field>
         <Field label="Limit"><input style={inputStyle} type="number" value={settings.momentum.momentum_candidates_limit} onChange={(e) => updateField('momentum', 'momentum_candidates_limit', e.target.value, 'number')} disabled={loading} /></Field>
@@ -124,6 +124,8 @@ export default function AdminSettingsPage() {
         <Field label="Min RR"><input style={inputStyle} type="number" step="0.01" value={settings.momentum.momentum_candidates_min_rr ?? ''} onChange={(e) => updateField('momentum', 'momentum_candidates_min_rr', e.target.value === '' ? null : Number(e.target.value))} disabled={loading} /></Field>
         <Field label="Require Wyckoff context"><input type="checkbox" checked={Boolean(settings.momentum.momentum_candidates_require_wyckoff_context)} onChange={(e) => updateField('momentum', 'momentum_candidates_require_wyckoff_context', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="HTTP timeout sec"><input style={inputStyle} type="number" step="0.1" value={settings.momentum.momentum_candidates_http_timeout_sec} onChange={(e) => updateField('momentum', 'momentum_candidates_http_timeout_sec', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Ranking source path"><input style={inputStyle} value={settings.momentum.momentum_candidates_source_path || '/api/v1/momentum'} onChange={(e) => updateField('momentum', 'momentum_candidates_source_path', e.target.value)} disabled={loading} /></Field>
+        <Field label="Target %"><input style={inputStyle} type="number" step="0.1" value={settings.momentum.momentum_candidates_target_pct ?? 3} onChange={(e) => updateField('momentum', 'momentum_candidates_target_pct', e.target.value, 'number')} disabled={loading} /></Field>
       </Section>
 
       <Section title="Live trading" description="Safety switches and testnet/live execution controls.">

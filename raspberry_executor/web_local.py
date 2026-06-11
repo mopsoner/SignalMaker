@@ -1,6 +1,7 @@
+import json
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from raspberry_executor.env_store import SECRET_KEYS, public_env, read_env, write_env
 from raspberry_executor.logging_setup import LOG_FILE, tail_logs
@@ -40,8 +41,16 @@ def positions_table(rows):
     return out + '</table>'
 
 
-def events_html():
-    rows = list(reversed(StateStore().events()[-200:]))
+def _event_limit(path="", default=200, maximum=1000):
+    try:
+        qs = parse_qs(urlparse(path).query)
+        return min(max(1, int((qs.get("limit") or [default])[0])), maximum)
+    except Exception:
+        return default
+
+
+def events_html(limit=200):
+    rows = list(reversed(StateStore().events(limit=limit)))
     if not rows:
         return "<div class='box'><p class='muted'>No local events.</p></div>"
     out = "<div class='box'><table><tr><th>Time</th><th>Candidate</th><th>Event</th><th>Payload</th></tr>"
@@ -63,13 +72,21 @@ def logs_actions_html():
 
 
 class Handler(BaseHTTPRequestHandler):
-    def send_page(self, title, body, code=200):
-        data = page(title, body)
+    def _send_bytes(self, data, *, content_type, code=200):
         self.send_response(code)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Type', content_type)
+        self.send_header('Cache-Control', 'no-store, max-age=0')
+        self.send_header('Pragma', 'no-cache')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def send_page(self, title, body, code=200):
+        self._send_bytes(page(title, body), content_type='text/html; charset=utf-8', code=code)
+
+    def send_json(self, payload, code=200):
+        data = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+        self._send_bytes(data, content_type='application/json; charset=utf-8', code=code)
 
     def send_log_file(self):
         if not LOG_FILE.exists():
@@ -78,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
             data = LOG_FILE.read_bytes()
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store, max-age=0')
+        self.send_header('Pragma', 'no-cache')
         self.send_header('Content-Disposition', 'attachment; filename="raspberry-executor.log"')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
@@ -95,10 +114,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.path.startswith('/api/events'):
+            limit = _event_limit(self.path, default=250, maximum=1000)
+            return self.send_json({"events": list(reversed(StateStore().events(limit=limit))), "limit": limit})
         if self.path.startswith('/positions'):
             return self.send_page('Local Positions', positions_html())
         if self.path.startswith('/events'):
-            return self.send_page('Local Events', events_html())
+            return self.send_page('Local Events', events_html(limit=_event_limit(self.path)))
         if self.path.startswith('/logs/download'):
             return self.send_log_file()
         if self.path.startswith('/logs'):

@@ -1,6 +1,7 @@
 import json
 from html import escape
 from http.server import ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from raspberry_executor.env_store import ROOT, public_env, read_env
 from raspberry_executor.feed_run_store import latest_feed_run, latest_feed_runs
@@ -49,7 +50,7 @@ def _status_pill(status):
 def dashboard():
     env = public_env()
     state = StateStore()
-    events = state.events()
+    events = state.events(limit=1000)
     open_count = len(state.open_positions())
     closed_count = len(state.closed_positions())
     error_count = len([e for e in events[-100:] if any(x in str(e.get("event_type", "")).lower() for x in ["error", "failed", "insufficient"])])
@@ -113,20 +114,21 @@ def momentum_summary_box(momentum):
       <p><b>Last:</b> {c(momentum.get('timestamp'))}</p>
       <p><b>Next check:</b> {c(momentum.get('next_check_at'))}</p>
       <p><b>Reason:</b> {c(momentum.get('reason'))}</p>
-      <p><b>Target rank / score:</b> {c(target.get('rank'))} / {c(target.get('momentum_score'))}</p>
+      <p><b>Target rank / score / RSI 1H:</b> {c(target.get('rank'))} / {c(target.get('momentum_score') or target.get('score'))} / {c(target.get('rsi_1h'))}</p>
+      <p><b>Buyable candidates:</b> {c(momentum.get('buy_candidates_count'))} · RSI 1H range 45-55</p>
       <p><a href='/momentum-decision'>Open momentum details</a></p>
     </div>
     """
 
 
 def momentum_decision_page():
-    events = StateStore().events()
+    events = StateStore().events(limit=1000)
     latest = latest_momentum_event(events) or {}
     rows = momentum_events(events, limit=50)
     html = "<h1>Momentum Decision</h1>" + momentum_summary_box(latest)
     html += "<div class='box'><h2>Settings</h2>"
     env = read_env()
-    for key in ["MOMENTUM_DECISION_ENABLED", "MOMENTUM_DECISION_EXECUTE_ENABLED", "MOMENTUM_DECISION_POLL_SECONDS", "MOMENTUM_DECISION_CADENCE_HOURS", "MOMENTUM_DECISION_STARTING_CAPITAL", "MOMENTUM_DECISION_MIN_SCORE"]:
+    for key in ["MOMENTUM_DECISION_ENABLED", "MOMENTUM_DECISION_EXECUTE_ENABLED", "MOMENTUM_DECISION_POLL_SECONDS", "MOMENTUM_DECISION_CADENCE_HOURS", "MOMENTUM_DECISION_STARTING_CAPITAL", "MOMENTUM_DECISION_MIN_SCORE", "MOMENTUM_BUYABLE_RSI_1H_MIN", "MOMENTUM_BUYABLE_RSI_1H_MAX"]:
         html += f"<p><b>{c(key)}</b>: <code>{c(env.get(key))}</code></p>"
     html += "<p class='muted'>Modify these values from Admin, then restart the executor.</p></div>"
     if rows:
@@ -215,8 +217,16 @@ def payload_table(event):
     return f"<details><summary>Payload details</summary><pre>{c(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))}</pre></details>"
 
 
-def events_page():
-    rows = list(reversed(StateStore().events()[-250:]))
+def _request_limit(path: str, *, default: int = 250, maximum: int = 1000) -> int:
+    try:
+        qs = parse_qs(urlparse(path).query)
+        return min(max(1, int((qs.get("limit") or [default])[0])), maximum)
+    except Exception:
+        return default
+
+
+def events_page(limit: int = 250):
+    rows = list(reversed(StateStore().events(limit=limit)))
     if not rows:
         return "<h1>Local Events</h1><div class='box'><p>No local events.</p></div>"
     html = "<h1>Local Events</h1><div class='box'><table><tr><th>Level</th><th>Time</th><th>Candidate</th><th>Event</th><th>Message</th><th>Details</th></tr>"
@@ -227,12 +237,15 @@ def events_page():
 
 
 def page(body):
-    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Raspberry 360</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/'>Dashboard</a><a href='/positions'>Positions</a><a href='/candidates'>Candidates</a><a href='/candle-feed'>Candle Feed</a><a href='/momentum-decision'>Momentum Decision</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><main>"""
+    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='10'><title>Raspberry 360</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/'>Dashboard</a><a href='/positions'>Positions</a><a href='/candidates'>Candidates</a><a href='/candle-feed'>Candle Feed</a><a href='/momentum-decision'>Momentum Decision</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><main>"""
     return (head + body + "</main></body></html>").encode()
 
 
 class Handler(LocalHandler):
     def do_GET(self):
+        if self.path.startswith("/api/events"):
+            limit = _request_limit(self.path, default=250, maximum=1000)
+            return self.send_json({"events": list(reversed(StateStore().events(limit=limit))), "limit": limit})
         if self.path == "/" or self.path.startswith("/?"):
             data = page(dashboard())
         elif self.path.startswith("/candle-feed"):
@@ -240,12 +253,14 @@ class Handler(LocalHandler):
         elif self.path.startswith("/momentum-decision"):
             data = page(momentum_decision_page())
         elif self.path.startswith("/events"):
-            data = page(events_page())
+            data = page(events_page(limit=_request_limit(self.path)))
         else:
             return super().do_GET()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

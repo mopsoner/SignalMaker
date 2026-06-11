@@ -84,6 +84,8 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_candidates_min_rr": base_settings.momentum_candidates_min_rr,
         "momentum_candidates_require_wyckoff_context": base_settings.momentum_candidates_require_wyckoff_context,
         "momentum_candidates_http_timeout_sec": base_settings.momentum_candidates_http_timeout_sec,
+        "momentum_candidates_source_path": base_settings.momentum_candidates_source_path,
+        "momentum_candidates_target_pct": base_settings.momentum_candidates_target_pct,
     },
 }
 

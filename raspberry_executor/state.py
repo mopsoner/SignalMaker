@@ -117,7 +117,19 @@ class StateStore:
         with connect() as conn:
             conn.execute("INSERT INTO events(candidate_id, event_type, timestamp, payload_json) VALUES(?, ?, ?, ?)", (candidate_id, event_type, self.now(), dumps(payload or {})))
 
-    def events(self) -> list[dict[str, Any]]:
+    def events(self, limit: int = 1000) -> list[dict[str, Any]]:
+        # Keep the UI/API focused on the newest rows. The previous ASC + LIMIT
+        # query returned the oldest 1000 events forever once the table grew past
+        # that size, so Web/TUI pages appeared stale even while new events were
+        # still being written. Fetch newest first, then restore chronological
+        # order for callers that expect append-order semantics.
+        try:
+            safe_limit = max(1, int(limit))
+        except Exception:
+            safe_limit = 1000
         with connect() as conn:
-            rows = conn.execute("SELECT * FROM events ORDER BY id ASC LIMIT 1000").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+                (safe_limit,),
+            ).fetchall()
             return [{"candidate_id": row["candidate_id"], "event_type": row["event_type"], "timestamp": row["timestamp"], "payload": loads(row["payload_json"], {})} for row in rows]
