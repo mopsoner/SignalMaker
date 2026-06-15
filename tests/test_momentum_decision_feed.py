@@ -301,3 +301,36 @@ def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
 
     assert result == "unsupported_quote:BADUSDT:configured=USDC"
     assert [event["event_type"] for event in state.events()] == ["momentum_buy_skipped_unsupported_quote"]
+
+
+def test_build_decision_falls_back_to_lowest_received_rsi_when_none_buyable(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+
+    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
+
+    decision = build_decision_from_candidates([
+        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 70},
+        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 38},
+        {"symbol": "LOWUSDC", "rank": 3, "momentum_score": 9.0, "rsi_1h": 34},
+    ])
+
+    assert decision["action"] == "BUY"
+    assert decision["should_trade"] is True
+    assert decision["buy_symbol"] == "LOWUSDC"
+    assert decision["buy_candidates"][0]["buyable_reason"] == "fallback_lowest_rsi_1h:34"
+    assert decision["reason"].startswith("buy_lowest_rsi_momentum_fallback:LOWUSDC")
+
+
+def test_buy_best_available_falls_back_to_lowest_received_rsi_when_none_buyable(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", lambda limit: [
+        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 70},
+        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 38},
+        {"symbol": "LOWUSDC", "rank": 3, "momentum_score": 9.0, "rsi_1h": 34},
+    ])
+    state = StateStore()
+
+    result = buy_best_available(settings(), FakeBinance(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
+
+    assert result.startswith("fallback_buy:LOWUSDC:bought:LOWUSDC"), result
+    assert state.open_positions()["momentum-LOWUSDC"]["execution_symbol"] == "LOWUSDC"
