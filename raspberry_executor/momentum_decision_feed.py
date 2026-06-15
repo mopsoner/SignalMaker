@@ -279,7 +279,7 @@ def _buy_symbol_cross_margin(
     margin.ensure_isolated_account(symbol)
 
     desired_notional = float(settings.order_quote_amount)
-    use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true"), default=True)
+    use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "false"), default=False)
     own_quote, free_quote = _safe_margin_quote_notional(margin, symbol, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
     if own_quote < min_buy_notional:
@@ -810,6 +810,11 @@ def _buy_result_ok(result: str) -> bool:
     return str(result).startswith("bought:") or str(result).startswith("bought_cross_margin:") or str(result).startswith("already_have:")
 
 
+def _buy_result_balance_wait(result: str) -> bool:
+    text = str(result)
+    return text.startswith("margin_quote_balance_wait:")
+
+
 def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
     if not _bool(_env("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
         symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
@@ -869,6 +874,9 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
             if _buy_result_ok(result):
                 state.add_event("momentum-decision", "momentum_fallback_buy_selected", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
                 return f"fallback_buy:{symbol}:{result}"
+            if _buy_result_balance_wait(result):
+                state.add_event("momentum-decision", "momentum_fallback_buy_balance_wait", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
+                return f"fallback_buy_balance_wait:{symbol}:{result}"
         except Exception as exc:
             attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source")})
             state.add_event(_candidate_id(symbol), "momentum_fallback_buy_failed", {"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source"), "decision": decision})
