@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import raspberry_executor.sqlite_db as sqlite_db
+import raspberry_executor.momentum_decision_feed as momentum_module
 from raspberry_executor.momentum_decision_feed import buy_best_available, buy_symbol, sell_symbol
 from raspberry_executor.state import StateStore
 
@@ -110,6 +111,151 @@ def test_buy_symbol_can_keep_fixed_order_quote_when_full_quote_disabled(tmp_path
 
     assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert binance.orders[0]["executedQty"] == "10.00000000"
+
+
+def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
+    monkeypatch.setattr(momentum_module, "margin_multiplier", lambda: 1.0)
+
+    class FakeMargin:
+        dry_run = False
+        isolated = False
+
+        def __init__(self, binance, *, isolated: bool, dry_run: bool) -> None:
+            self.binance = binance
+            self.isolated = isolated
+            self.dry_run = dry_run
+            self.orders = []
+
+        def ensure_isolated_account(self, symbol: str) -> dict:
+            return {"status": "cross_margin"}
+
+        def margin_free_balance(self, symbol: str, asset: str) -> float:
+            if asset == "USDC":
+                return 35.0
+            return 35.0
+
+        def max_borrowable(self, symbol: str, asset: str) -> float:
+            return 0.0
+
+        def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET", **kwargs) -> dict:
+            self.orders.append({"symbol": symbol, "side": side, "quantity": quantity, "type": order_type, **kwargs})
+            return {"orderId": "margin-entry-1", "symbol": symbol, "side": side, "status": "FILLED", "executedQty": quantity, "fills": [{"price": "1", "qty": quantity}], "isIsolated": "FALSE"}
+
+    instances = []
+
+    def fake_margin_client(*args, **kwargs):
+        margin = FakeMargin(*args, **kwargs)
+        instances.append(margin)
+        return margin
+
+    monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
+    state = StateStore()
+    binance = FakeBinance(quote_balances=[35.0])
+
+    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+
+    assert result == "bought_cross_margin:ALLUSDC:qty=35.00000000:notional=35.0000"
+    assert binance.orders == []
+    assert instances[0].orders[0]["type"] == "MARKET"
+    position = state.open_positions()["momentum-ALLUSDC"]
+    assert position["mode"] == "cross_margin"
+    assert position["margin_isolated"] is False
+    assert position["entry_payload"]["isIsolated"] == "FALSE"
+    assert position["notional_used"] == 35.0
+
+
+def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setattr(momentum_module, "load_settings", settings)
+    monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
+
+    class FakeMargin:
+        dry_run = False
+        isolated = False
+
+        def __init__(self, binance, *, isolated: bool, dry_run: bool) -> None:
+            self.binance = binance
+            self.isolated = isolated
+            self.dry_run = dry_run
+            self.base_balance = 10.0
+            self.quote_balance = 0.0
+            self.orders = []
+
+        def ensure_isolated_account(self, symbol: str) -> dict:
+            return {"status": "cross_margin"}
+
+        def margin_free_balance(self, symbol: str, asset: str) -> float:
+            if asset == "USDC":
+                return self.quote_balance
+            return self.base_balance
+
+        def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET", **kwargs) -> dict:
+            self.orders.append({"symbol": symbol, "side": side, "quantity": quantity, "type": order_type, **kwargs})
+            if side == "SELL":
+                self.base_balance = 0.0
+                self.quote_balance = 25.0
+            return {"orderId": "margin-sell-1", "symbol": symbol, "side": side, "status": "FILLED", "executedQty": quantity, "fills": [{"price": "1", "qty": quantity}], "isIsolated": "FALSE"}
+
+    instances = []
+
+    def fake_margin_client(*args, **kwargs):
+        margin = FakeMargin(*args, **kwargs)
+        instances.append(margin)
+        return margin
+
+    monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
+    binance = FakeBinance(quote_balances=[0.0], base_balance=0.0)
+
+    result = sell_symbol(binance, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
+
+    assert result.startswith("sell_confirmed_cross_margin:BANKUSDC"), result
+    assert binance.orders == []
+    assert instances[0].orders[0]["side"] == "SELL"
+    assert state.open_positions() == {}
+    sold_event = state.events()[-1]
+    assert sold_event["event_type"] == "momentum_sold"
+    assert sold_event["payload"]["mode"] == "cross_margin"
+
+
+def test_rotate_sells_cross_margin_position_before_forced_cross_margin_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
+    calls = []
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[0.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    def fake_sell(binance, rules, store, symbol, decision, *, require_confirmed: bool = True):
+        calls.append(("sell", symbol, bool(decision.get("force_cross_margin")), list(store.open_positions())))
+        store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
+        return "sell_confirmed_cross_margin:BANKUSDC:remaining_value=0.0000:quote=25.0000"
+
+    def fake_buy(settings_arg, binance, rules, store, decision, *, exclude=None):
+        calls.append(("buy", decision.get("buy_symbol"), bool(decision.get("force_cross_margin")), list(store.open_positions())))
+        return "fallback_buy:ALLUSDC:bought_cross_margin:ALLUSDC:qty=25.00000000:notional=25.0000"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "ROTATE", "should_trade": True, "symbol": "BANKUSDC", "sell_symbol": "BANKUSDC", "buy_symbol": "ALLUSDC"})
+
+    assert result.startswith("rotate:sell_confirmed_cross_margin:BANKUSDC"), result
+    assert calls == [
+        ("sell", "BANKUSDC", True, ["momentum-BANKUSDC"]),
+        ("buy", "ALLUSDC", True, []),
+    ]
 
 
 def test_sell_records_single_realized_sell_event(tmp_path, monkeypatch):

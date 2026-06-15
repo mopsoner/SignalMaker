@@ -9,6 +9,9 @@ from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
+from raspberry_executor.margin_client import MarginClient
+from raspberry_executor.margin_order_manager import amount_str
+from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_multiplier
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-momentum-decision")
@@ -224,6 +227,180 @@ def _safe_quote_notional(settings, binance: BinanceClient, quote: str, desired: 
     if use_full_available:
         return usable, free_quote
     return min(desired, usable), free_quote
+
+
+def _explicit_cross_margin_requested() -> bool:
+    explicit = _env("MOMENTUM_DECISION_USE_CROSS_MARGIN")
+    if explicit is not None:
+        return _bool(explicit, default=False)
+    configured_mode = _env("EXECUTION_MODE") or _env("MARGIN_ACCOUNT_MODE")
+    if configured_mode is None:
+        return False
+    return margin_enabled() and execution_mode() == "cross"
+
+
+def _is_cross_margin_position(position: dict[str, Any] | None) -> bool:
+    if not position:
+        return False
+    mode = str(position.get("mode") or "").lower()
+    if mode == "cross_margin":
+        return True
+    if position.get("margin_isolated") is False and mode in {"margin", "momentum_rotation"}:
+        return True
+    return False
+
+
+def _safe_margin_quote_notional(margin: MarginClient, symbol: str, quote: str, desired: float, *, use_full_available: bool = False) -> tuple[float, float]:
+    desired = max(0.0, float(desired or 0.0))
+    if margin.dry_run:
+        return desired, desired
+    free_quote = float(margin.margin_free_balance(symbol, quote))
+    reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
+    safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
+    usable = max(0.0, (free_quote - reserve) * safety_ratio)
+    if use_full_available:
+        return usable, free_quote
+    return min(desired, usable), free_quote
+
+
+def _buy_symbol_cross_margin(
+    settings,
+    binance: BinanceClient,
+    rules: BinanceSymbolRules,
+    state: StateStore,
+    symbol: str,
+    decision: dict[str, Any],
+    quote: str,
+    *,
+    use_available_quote: bool = True,
+) -> str:
+    cid = _candidate_id(symbol)
+    margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    margin.ensure_isolated_account(symbol)
+
+    desired_notional = float(settings.order_quote_amount)
+    use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true"), default=True)
+    own_quote, free_quote = _safe_margin_quote_notional(margin, symbol, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
+    min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
+    if own_quote < min_buy_notional:
+        state.add_event(cid, "momentum_buy_skipped_margin_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": own_quote, "min_buy_notional": min_buy_notional, "decision": decision, "mode": "cross_margin"})
+        return f"margin_quote_balance_wait:{quote}:free={free_quote:.4f}:usable={own_quote:.4f}"
+
+    wanted_borrow_quote = max(0.0, own_quote * max(0.0, margin_multiplier() - 1.0))
+    borrow_quote = 0.0
+    borrow_payload: dict[str, Any] = {}
+    borrow_error = None
+    if wanted_borrow_quote > 0:
+        try:
+            max_borrow = margin.max_borrowable(symbol, quote)
+            borrow_quote = min(wanted_borrow_quote, max_borrow) if max_borrow > 0 else wanted_borrow_quote
+            if borrow_quote > 0:
+                borrow_payload = margin.borrow(symbol, quote, amount_str(borrow_quote))
+        except Exception as exc:
+            borrow_quote = 0.0
+            borrow_error = str(exc)
+            borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
+
+    total_quote = own_quote + borrow_quote
+    price = binance.current_price(symbol)
+    qty = rules.quantity_from_quote(symbol, total_quote, price, market=True)
+    order = margin.margin_order(symbol, "BUY", qty, "MARKET")
+    fill_price = binance.average_fill_price(order, fallback=price) or price
+    acquired = float(order.get("executedQty") or qty) if margin.dry_run else margin.margin_free_balance(symbol, rules.base_asset(symbol))
+    state.mark_executed(cid)
+    state.add_open_position(cid, {
+        "candidate_id": cid,
+        "signal_symbol": symbol,
+        "execution_symbol": symbol,
+        "side": "long",
+        "strategy": "momentum_rotation",
+        "mode": "cross_margin",
+        "margin_isolated": False,
+        "quantity": str(order.get("executedQty") or qty),
+        "entry_price": float(fill_price),
+        "stop_price": None,
+        "target_price": None,
+        "entry_order_id": order.get("orderId"),
+        "momentum_decision": decision,
+        "entry_payload": order,
+        "borrow_payload": borrow_payload,
+        "borrow_error": borrow_error,
+        "notional_used": total_quote,
+        "own_quote_amount": own_quote,
+        "borrow_quote_amount": borrow_quote,
+        "quote_asset": quote,
+        "confirmed_base_balance": acquired,
+    })
+    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": str(order.get("executedQty") or qty), "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "borrow_payload": borrow_payload, "borrow_error": borrow_error, "decision": decision, "mode": "cross_margin"})
+    return f"bought_cross_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
+
+
+def _margin_wallet_value(margin: MarginClient, rules: BinanceSymbolRules, binance: BinanceClient, symbol: str) -> tuple[str, float, float, float]:
+    base = rules.base_asset(symbol)
+    qty = margin.margin_free_balance(symbol, base)
+    price = binance.current_price(symbol)
+    return base, qty, price, qty * price
+
+
+def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
+    symbol = symbol.upper()
+    cid = _candidate_id(symbol)
+    quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
+    margin = MarginClient(binance, isolated=False, dry_run=getattr(load_settings(), "dry_run", False) or margin_dry_run())
+    margin.ensure_isolated_account(symbol)
+    base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+    dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
+    max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
+    chunk_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_SELL_CHUNK_RATIO", 0.995)))
+    details: list[dict[str, Any]] = []
+
+    if qty <= 0 or value < dust_value:
+        state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "cross_margin"})
+        return f"sell_confirmed_cross_margin:no_balance:{base}:value={value:.4f}"
+
+    for attempt in range(1, max_attempts + 1):
+        before_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else 0.0
+        base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+        if qty <= 0 or value < dust_value:
+            state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision, "mode": "cross_margin"})
+            return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
+
+        sell_qty = _market_sell_quantity(rules, symbol, qty * chunk_ratio, price) or _market_sell_quantity(rules, symbol, qty, price)
+        if sell_qty is None:
+            message = f"sell_quantity_not_tradeable_cross_margin:{symbol}:qty={qty}:value={value:.4f}"
+            state.add_event(cid, "momentum_sell_not_tradeable", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "cross_margin"})
+            if require_confirmed:
+                raise RuntimeError(message)
+            return message
+
+        try:
+            order = margin.margin_order(symbol, "SELL", sell_qty, "MARKET")
+            after_base, after_qty, after_price, after_value = _margin_wallet_value(margin, rules, binance, symbol)
+            after_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else before_quote
+            detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order, "mode": "cross_margin"}
+            details.append(detail)
+            state.add_event(cid, "momentum_sell_attempt", {"decision": decision, **detail})
+            if margin.dry_run or after_value < dust_value:
+                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details, "mode": "cross_margin"}, record_event=False)
+                state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote, "mode": "cross_margin"})
+                return f"sell_confirmed_cross_margin:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
+        except Exception as exc:
+            details.append({"attempt": attempt, "symbol": symbol, "qty": sell_qty, "error": str(exc), "mode": "cross_margin"})
+            state.add_event(cid, "momentum_sell_attempt_failed", {"symbol": symbol, "base": base, "qty": sell_qty, "attempt": attempt, "error": str(exc), "decision": decision, "mode": "cross_margin"})
+            if attempt >= max_attempts:
+                if require_confirmed:
+                    raise RuntimeError(f"sell_not_confirmed_cross_margin:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
+                return f"sell_failed_cross_margin:{symbol}:{exc}"
+
+    base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+    if value < dust_value:
+        state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "cross_margin"})
+        return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
+    message = f"sell_not_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}:attempts={max_attempts}"
+    state.add_event(cid, "momentum_sell_not_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "cross_margin"})
+    if require_confirmed:
+        raise RuntimeError(message)
+    return message
 
 
 def _market_sell_quantity(rules: BinanceSymbolRules, symbol: str, qty: float, price: float) -> str | None:
@@ -500,6 +677,9 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
     """Sell with wallet confirmation and chunk retries before any rotation buy."""
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
+    position = state.open_positions().get(cid)
+    if _is_cross_margin_position(position):
+        return _sell_symbol_cross_margin(binance, rules, state, symbol, decision, require_confirmed=require_confirmed)
     quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
     base, qty, price, value = _wallet_value(binance, rules, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
@@ -572,6 +752,8 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
     if already:
         state.add_event(cid, "momentum_buy_skipped_already_have", {"symbol": symbol, "reason": reason, "decision": decision})
         return f"already_have:{reason}"
+    if bool(decision.get("force_cross_margin")) or _explicit_cross_margin_requested():
+        return _buy_symbol_cross_margin(settings, binance, rules, state, symbol, decision, quote, use_available_quote=use_available_quote)
 
     desired_notional = float(settings.order_quote_amount)
     use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true"), default=True)
@@ -625,7 +807,7 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
 
 
 def _buy_result_ok(result: str) -> bool:
-    return str(result).startswith("bought:") or str(result).startswith("already_have:")
+    return str(result).startswith("bought:") or str(result).startswith("bought_cross_margin:") or str(result).startswith("already_have:")
 
 
 def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
@@ -743,8 +925,10 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action == "ROTATE":
         if not _decision_targets_held_symbol(decision, held_symbol):
             return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-        sell_result = sell_symbol(binance, rules, state, held_symbol, decision, require_confirmed=True)
-        buy_result = buy_best_available(settings, binance, rules, state, decision, exclude={held_symbol})
+        force_cross_margin = _is_cross_margin_position(held_position)
+        rotation_decision = {**decision, "force_cross_margin": True} if force_cross_margin else decision
+        sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+        buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
         return f"rotate:{sell_result}:{buy_result}"
     return f"unsupported_action:{action}"
 
