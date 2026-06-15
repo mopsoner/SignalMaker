@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -907,6 +908,67 @@ def _decision_targets_held_symbol(decision: dict[str, Any], held_symbol: str) ->
     return held_symbol in symbols
 
 
+
+def _parse_event_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _momentum_cadence_hours() -> float:
+    return max(0.0, _float_env("MOMENTUM_DECISION_CADENCE_HOURS", 4.0))
+
+
+def _last_momentum_buy_check(state: StateStore) -> datetime | None:
+    cadence_events = {
+        "momentum_decision_cadence_checked",
+        "momentum_buy_skipped_quote_balance",
+        "momentum_buy_skipped_margin_quote_balance",
+        "momentum_bought",
+    }
+    last: datetime | None = None
+    for event in state.events(limit=1000):
+        event_type = str(event.get("event_type") or "")
+        if event_type not in cadence_events:
+            continue
+        ts = _parse_event_timestamp(event.get("timestamp"))
+        if ts is not None and (last is None or ts > last):
+            last = ts
+    return last
+
+
+def _momentum_buy_cadence_status(state: StateStore) -> dict[str, Any]:
+    cadence_hours = _momentum_cadence_hours()
+    last_check = _last_momentum_buy_check(state)
+    now = datetime.now(timezone.utc)
+    if cadence_hours <= 0 or last_check is None:
+        return {
+            "due_now": True,
+            "cadence_hours": cadence_hours,
+            "last_check_at": last_check.isoformat() if last_check else None,
+            "next_check_at": now.isoformat(),
+        }
+    next_check = last_check + timedelta(hours=cadence_hours)
+    return {
+        "due_now": now >= next_check,
+        "cadence_hours": cadence_hours,
+        "last_check_at": last_check.isoformat(),
+        "next_check_at": next_check.isoformat(),
+    }
+
+
+def _mark_momentum_buy_cadence_checked(state: StateStore, decision: dict[str, Any], status: dict[str, Any]) -> None:
+    state.add_event("momentum-decision", "momentum_decision_cadence_checked", {
+        "action": decision.get("action"),
+        "buy_symbol": decision.get("buy_symbol"),
+        "symbol": decision.get("symbol"),
+        "cadence": status,
+        "decision": decision,
+    })
+
 def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
@@ -925,6 +987,13 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action == "BUY":
         if held_symbol:
             return f"hold_existing_momentum_position:{held_symbol}"
+        cadence = _momentum_buy_cadence_status(state)
+        decision.setdefault("due_now", cadence["due_now"])
+        decision.setdefault("next_check_at", cadence["next_check_at"])
+        if not cadence["due_now"]:
+            state.add_event("momentum-decision", "momentum_decision_cadence_wait", {"cadence": cadence, "decision": decision})
+            return f"wait:momentum_cadence:next_check_at={cadence['next_check_at']}"
+        _mark_momentum_buy_cadence_checked(state, decision, cadence)
         return buy_best_available(settings, binance, rules, state, decision, exclude={sell})
     if action == "SELL":
         if not _decision_targets_held_symbol(decision, held_symbol):

@@ -546,3 +546,30 @@ def test_buy_best_available_falls_back_to_lowest_received_rsi_when_none_buyable(
 
     assert result.startswith("fallback_buy:LOWUSDC:bought:LOWUSDC"), result
     assert state.open_positions()["momentum-LOWUSDC"]["execution_symbol"] == "LOWUSDC"
+
+
+def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "4")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", "1")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    balances = iter([0.0, 20.0])
+    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[next(balances)]))
+    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "fetch_momentum_candidates", lambda limit: [{"symbol": "ALLUSDC", "rank": 1, "momentum_score": 10, "rsi_1h": 50}])
+
+    decision = {"action": "BUY", "should_trade": True, "buy_symbol": "ALLUSDC", "symbol": "ALLUSDC"}
+
+    first = momentum_module.execute_decision(dict(decision))
+    second = momentum_module.execute_decision(dict(decision))
+
+    assert first == "fallback_buy_exhausted:attempts=1"
+    assert second.startswith("wait:momentum_cadence:next_check_at="), second
+    assert [event["event_type"] for event in StateStore().events()] == [
+        "momentum_decision_cadence_checked",
+        "momentum_buy_skipped_quote_balance",
+        "momentum_fallback_buy_exhausted",
+        "momentum_decision_cadence_wait",
+    ]
