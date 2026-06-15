@@ -211,11 +211,13 @@ def _wallet_value(binance: BinanceClient, rules: BinanceSymbolRules, symbol: str
     return base, qty, price, qty * price
 
 
-def _safe_quote_notional(settings, binance: BinanceClient, quote: str, desired: float, *, use_full_available: bool = False) -> tuple[float, float]:
+def _safe_quote_notional(settings, binance: BinanceClient, quote: str, desired: float, *, use_full_available: bool = False, observed_free_quote: float | None = None) -> tuple[float, float]:
     desired = max(0.0, float(desired or 0.0))
     if binance.dry_run:
         return desired, desired
     free_quote = binance.free_balance(quote)
+    if observed_free_quote is not None:
+        free_quote = max(free_quote, float(observed_free_quote))
     reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
     safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
     usable = max(0.0, (free_quote - reserve) * safety_ratio)
@@ -581,8 +583,15 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
         reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
         safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
         required_free_quote = reserve + (min_buy_notional / safety_ratio)
-        free_quote = _wait_for_quote_notional(binance, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
-        notional, free_quote = _safe_quote_notional(settings, binance, quote, desired_notional, use_full_available=use_full_available_quote)
+        confirmed_free_quote = _wait_for_quote_notional(binance, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
+        notional, free_quote = _safe_quote_notional(
+            settings,
+            binance,
+            quote,
+            desired_notional,
+            use_full_available=use_full_available_quote,
+            observed_free_quote=confirmed_free_quote,
+        )
     if notional < min_buy_notional:
         state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
         return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"

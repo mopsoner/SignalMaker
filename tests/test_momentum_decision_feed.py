@@ -69,6 +69,21 @@ def test_buy_waits_for_post_sell_quote_balance_before_no_cash_log(tmp_path, monk
     assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
 
 
+def test_buy_symbol_keeps_confirmed_quote_when_next_account_read_is_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.time.sleep", lambda _: None)
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", "3")
+    state = StateStore()
+    binance = FakeBinance(quote_balances=[0.0, 12.0, 0.0])
+
+    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
+
+    assert result == "bought:ALLUSDC:qty=12.00000000:notional=12.0000"
+    assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
+
+
 def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
