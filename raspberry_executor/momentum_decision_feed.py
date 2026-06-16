@@ -621,7 +621,7 @@ def fetch_momentum_candidates(limit: int = 50) -> list[dict[str, Any]]:
 
 def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: str = DECISION_RANKINGS_SOURCE) -> dict[str, Any]:
     state = StateStore()
-    held_symbol = _position_symbol(current_momentum_position(state))
+    held_symbol = _position_symbol(current_momentum_position(state)) or _last_recorded_buy_without_later_sell(state)
     ordered_candidates = _ordered_momentum_candidates([row for row in candidates if _candidate_symbol(row)])
     buy_candidates: list[dict[str, Any]] = []
     skipped_candidates: list[dict[str, Any]] = []
@@ -977,9 +977,10 @@ def _position_symbol(position: dict[str, Any] | None) -> str:
 
 def _decision_targets_held_symbol(decision: dict[str, Any], held_symbol: str) -> bool:
     held_symbol = held_symbol.upper()
+    sell_symbol = str(decision.get("sell_symbol") or "").upper()
     if not held_symbol:
-        return False
-    symbols = {str(decision.get("sell_symbol") or "").upper(), str(decision.get("symbol") or "").upper()}
+        return bool(sell_symbol)
+    symbols = {sell_symbol, str(decision.get("symbol") or "").upper()}
     return held_symbol in symbols
 
 
@@ -1065,7 +1066,7 @@ def execute_decision(decision: dict[str, Any]) -> str:
     should_trade = bool(decision.get("should_trade"))
     sell = str(decision.get("sell_symbol") or "").upper()
     held_position = current_momentum_position(state)
-    held_symbol = _position_symbol(held_position)
+    held_symbol = _position_symbol(held_position) or sell
 
     if not should_trade or action in {"WAIT", "HOLD"}:
         return f"wait:{action}"
@@ -1085,6 +1086,7 @@ def execute_decision(decision: dict[str, Any]) -> str:
                 "order_sequence": _rotation_order_sequence(held_symbol, buy),
                 **({"force_cross_margin": True} if force_cross_margin else {}),
             }
+            state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
             sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
             buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
             return f"rotate:{sell_result}:{buy_result}"
@@ -1105,6 +1107,7 @@ def execute_decision(decision: dict[str, Any]) -> str:
             return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
         force_cross_margin = _is_cross_margin_position(held_position)
         rotation_decision = {**decision, "force_cross_margin": True} if force_cross_margin else decision
+        state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": rotation_decision.get("buy_symbol"), "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
         sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
         buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
         return f"rotate:{sell_result}:{buy_result}"
