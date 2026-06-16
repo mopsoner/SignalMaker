@@ -448,6 +448,31 @@ def test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_p
 
 
 
+def test_build_decision_from_candidates_rotates_last_recorded_momentum_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    state = StateStore()
+    state.add_event("momentum-decision", "momentum_decision", {
+        "action": "BUY",
+        "symbol": "ALLUSDC",
+        "buy_symbol": "ALLUSDC",
+        "sell_symbol": None,
+    })
+
+    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
+
+    decision = build_decision_from_candidates([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}])
+
+    assert decision["action"] == "ROTATE"
+    assert decision["should_trade"] is True
+    assert decision["sell_symbol"] == "ALLUSDC"
+    assert decision["buy_symbol"] == "BANKUSDC"
+    assert decision["order_sequence"] == [
+        {"step": 1, "action": "SELL", "symbol": "ALLUSDC", "role": "exit_held_momentum_asset"},
+        {"step": 2, "action": "BUY", "symbol": "BANKUSDC", "role": "enter_new_momentum_asset"},
+    ]
+
+
+
 def test_build_decision_buys_best_rsi_buyable_candidate(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
 
