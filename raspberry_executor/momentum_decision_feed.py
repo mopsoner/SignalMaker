@@ -607,13 +607,17 @@ def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: 
         should_trade = False
         reason = f"hold_current_momentum_rank:{held_symbol}:held_rank={held_rank}:best_buyable_rank={top_rank}"
 
+    sell_symbol = held_symbol if action == "ROTATE" else None
+    decision_buy_symbol = buy_symbol if action in {"BUY", "ROTATE", "HOLD"} else None
+    order_sequence = _rotation_order_sequence(sell_symbol, decision_buy_symbol) if action == "ROTATE" else []
     decision = {
         "mode": "momentum_rotation",
         "action": action,
         "raw_action": action,
         "symbol": buy_symbol or held_symbol or None,
-        "buy_symbol": buy_symbol if action in {"BUY", "ROTATE", "HOLD"} else None,
-        "sell_symbol": held_symbol if action == "ROTATE" else None,
+        "buy_symbol": decision_buy_symbol,
+        "sell_symbol": sell_symbol,
+        "order_sequence": order_sequence,
         "should_trade": should_trade,
         "reason": reason,
         "source": source,
@@ -633,6 +637,7 @@ def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: 
         "symbol": decision["symbol"],
         "buy_symbol": decision["buy_symbol"],
         "sell_symbol": decision["sell_symbol"],
+        "order_sequence": order_sequence,
         "should_trade": should_trade,
         "reason": reason,
         "buy_candidates": buy_candidates,
@@ -969,6 +974,16 @@ def _mark_momentum_buy_cadence_checked(state: StateStore, decision: dict[str, An
         "decision": decision,
     })
 
+
+def _rotation_order_sequence(sell_symbol: str | None, buy_symbol: str | None) -> list[dict[str, Any]]:
+    sequence: list[dict[str, Any]] = []
+    if sell_symbol:
+        sequence.append({"step": 1, "action": "SELL", "symbol": sell_symbol, "role": "exit_held_momentum_asset"})
+    if buy_symbol:
+        sequence.append({"step": len(sequence) + 1, "action": "BUY", "symbol": buy_symbol, "role": "enter_new_momentum_asset"})
+    return sequence
+
+
 def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
@@ -985,8 +1000,24 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if not should_trade or action in {"WAIT", "HOLD"}:
         return f"wait:{action}"
     if action == "BUY":
-        if held_symbol:
+        buy = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
+        if held_symbol and (not buy or buy == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
+        if held_symbol and buy != held_symbol:
+            force_cross_margin = _is_cross_margin_position(held_position)
+            rotation_decision = {
+                **decision,
+                "action": "ROTATE",
+                "raw_action": decision.get("raw_action") or "BUY",
+                "sell_symbol": held_symbol,
+                "buy_symbol": buy,
+                "symbol": buy,
+                "order_sequence": _rotation_order_sequence(held_symbol, buy),
+                **({"force_cross_margin": True} if force_cross_margin else {}),
+            }
+            sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+            buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
+            return f"rotate:{sell_result}:{buy_result}"
         cadence = _momentum_buy_cadence_status(state)
         decision.setdefault("due_now", cadence["due_now"])
         decision.setdefault("next_check_at", cadence["next_check_at"])

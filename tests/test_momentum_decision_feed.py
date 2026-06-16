@@ -309,6 +309,59 @@ def test_rotate_sells_cross_margin_position_before_forced_cross_margin_buy(tmp_p
     ]
 
 
+
+def test_build_decision_rotate_includes_sell_before_buy_order_sequence(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    state = StateStore()
+    state.add_open_position("momentum-ALLUSDC", {"candidate_id": "momentum-ALLUSDC", "execution_symbol": "ALLUSDC", "signal_symbol": "ALLUSDC", "side": "long", "quantity": "10", "entry_price": 1.0, "strategy": "momentum_rotation"})
+
+    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
+
+    decision = build_decision_from_candidates([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}])
+
+    assert decision["action"] == "ROTATE"
+    assert decision["order_sequence"] == [
+        {"step": 1, "action": "SELL", "symbol": "ALLUSDC", "role": "exit_held_momentum_asset"},
+        {"step": 2, "action": "BUY", "symbol": "BANKUSDC", "role": "enter_new_momentum_asset"},
+    ]
+    assert decision["executor_contract"]["order_sequence"] == decision["order_sequence"]
+
+
+def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.2})
+    calls = []
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[0.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    def fake_sell(binance, rules, store, symbol, decision, *, require_confirmed: bool = True):
+        calls.append(("sell", symbol, decision["action"], decision["order_sequence"], list(store.open_positions())))
+        store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
+        return "sell_confirmed:BANKUSDC:remaining_value=0.0000:quote=25.0000"
+
+    def fake_buy(settings_arg, binance, rules, store, decision, *, exclude=None):
+        calls.append(("buy", decision.get("buy_symbol"), decision["action"], decision["order_sequence"], list(store.open_positions())))
+        return "fallback_buy:ALLUSDC:bought:ALLUSDC:qty=25.00000000:notional=25.0000"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "BUY", "should_trade": True, "symbol": "ALLUSDC", "buy_symbol": "ALLUSDC"})
+
+    expected_sequence = [
+        {"step": 1, "action": "SELL", "symbol": "BANKUSDC", "role": "exit_held_momentum_asset"},
+        {"step": 2, "action": "BUY", "symbol": "ALLUSDC", "role": "enter_new_momentum_asset"},
+    ]
+    assert result.startswith("rotate:sell_confirmed:BANKUSDC"), result
+    assert calls == [
+        ("sell", "BANKUSDC", "ROTATE", expected_sequence, ["momentum-BANKUSDC"]),
+        ("buy", "ALLUSDC", "ROTATE", expected_sequence, []),
+    ]
+
 def test_sell_records_single_realized_sell_event(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.time.sleep", lambda _: None)
