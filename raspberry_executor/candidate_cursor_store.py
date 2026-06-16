@@ -34,11 +34,16 @@ def read_candidate_cursor() -> str | None:
     init_db()
     with connect() as conn:
         cursor_row = conn.execute("SELECT value FROM meta WHERE key=?", (CURSOR_KEY,)).fetchone()
-        reset_row = conn.execute("SELECT value FROM meta WHERE key=?", (RESET_KEY,)).fetchone()
         cursor = _parse_dt(cursor_row["value"] if cursor_row else None)
+        return cursor.isoformat() if cursor else None
+
+
+def read_last_runtime_reset_at() -> str | None:
+    init_db()
+    with connect() as conn:
+        reset_row = conn.execute("SELECT value FROM meta WHERE key=?", (RESET_KEY,)).fetchone()
         reset = _parse_dt(reset_row["value"] if reset_row else None)
-        best = max([dt for dt in (cursor, reset) if dt], default=None)
-        return best.isoformat() if best else None
+        return reset.isoformat() if reset else None
 
 
 def set_candidate_cursor(value: str | None = None) -> str:
