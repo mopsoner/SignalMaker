@@ -128,7 +128,7 @@ def fetch_decision() -> dict[str, Any]:
     data = _read_json_response(response)
     if not response.ok:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
-    return normalize_decision(data)
+    return apply_previous_buy_rotation(normalize_decision(data))
 
 
 def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
@@ -147,6 +147,76 @@ def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
     payload.setdefault("buy_candidates", [])
     payload.setdefault("fallback_policy", {})
+    return payload
+
+
+def _event_payload_buy_symbol(payload: dict[str, Any]) -> str:
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    return str(payload.get("buy_symbol") or decision.get("buy_symbol") or payload.get("symbol") or decision.get("symbol") or "").upper()
+
+
+def _event_payload_sell_symbol(payload: dict[str, Any]) -> str:
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    return str(payload.get("sell_symbol") or decision.get("sell_symbol") or "").upper()
+
+
+def _last_recorded_buy_without_later_sell(state: StateStore) -> str:
+    """Return the last recorded momentum buy that has not been superseded by a sell.
+
+    Some main deployments still emit independent BUY decisions only. If the
+    penultimate stored decision bought X and the newest remote decision buys Y,
+    the executor contract must explicitly become SELL X, then BUY Y instead of
+    treating BUY Y as an isolated entry.
+    """
+    sold_symbols: set[str] = set()
+    for event in reversed(state.events(limit=1000)):
+        if str(event.get("event_type") or "") != "momentum_decision":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        action = str(payload.get("action") or "").upper()
+        sell_symbol = _event_payload_sell_symbol(payload)
+        if action in {"SELL", "ROTATE"} and sell_symbol:
+            sold_symbols.add(sell_symbol)
+        buy_symbol = _event_payload_buy_symbol(payload)
+        if action in {"BUY", "ROTATE"} and buy_symbol and buy_symbol not in sold_symbols:
+            return buy_symbol
+    return ""
+
+
+def apply_previous_buy_rotation(decision: dict[str, Any], state: StateStore | None = None) -> dict[str, Any]:
+    """Upgrade a BUY Y decision to ROTATE sell X/buy Y when the last buy was X."""
+    payload = normalize_decision(decision)
+    action = str(payload.get("action") or "WAIT").upper()
+    buy_symbol = str(payload.get("buy_symbol") or payload.get("symbol") or "").upper()
+    if action != "BUY" or not buy_symbol or payload.get("sell_symbol"):
+        return payload
+    previous_buy = _last_recorded_buy_without_later_sell(state or StateStore())
+    if not previous_buy or previous_buy == buy_symbol:
+        return payload
+
+    order_sequence = _rotation_order_sequence(previous_buy, buy_symbol)
+    payload.update({
+        "action": "ROTATE",
+        "raw_action": payload.get("raw_action") or "BUY",
+        "symbol": buy_symbol,
+        "buy_symbol": buy_symbol,
+        "sell_symbol": previous_buy,
+        "order_sequence": order_sequence,
+        "should_trade": True,
+        "reason": f"rotate_after_previous_buy:{previous_buy}->{buy_symbol}:{payload.get('reason') or ''}".rstrip(":"),
+    })
+    contract = payload.get("executor_contract") if isinstance(payload.get("executor_contract"), dict) else {}
+    payload["executor_contract"] = {
+        **contract,
+        "action": payload["action"],
+        "raw_action": payload["raw_action"],
+        "symbol": payload["symbol"],
+        "buy_symbol": payload["buy_symbol"],
+        "sell_symbol": payload["sell_symbol"],
+        "order_sequence": order_sequence,
+        "should_trade": payload["should_trade"],
+        "reason": payload["reason"],
+    }
     return payload
 
 
