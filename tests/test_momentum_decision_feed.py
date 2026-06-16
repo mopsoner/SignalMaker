@@ -362,6 +362,27 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
         ("buy", "ALLUSDC", "ROTATE", expected_sequence, []),
     ]
 
+
+def test_previous_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    state = StateStore()
+    momentum_module.record_decision({"action": "BUY", "should_trade": True, "symbol": "BANKUSDC", "buy_symbol": "BANKUSDC"})
+
+    decision = momentum_module.apply_previous_buy_rotation(
+        {"action": "BUY", "should_trade": True, "symbol": "ALLUSDC", "buy_symbol": "ALLUSDC"},
+        state,
+    )
+
+    assert decision["action"] == "ROTATE"
+    assert decision["sell_symbol"] == "BANKUSDC"
+    assert decision["buy_symbol"] == "ALLUSDC"
+    assert decision["order_sequence"] == [
+        {"step": 1, "action": "SELL", "symbol": "BANKUSDC", "role": "exit_held_momentum_asset"},
+        {"step": 2, "action": "BUY", "symbol": "ALLUSDC", "role": "enter_new_momentum_asset"},
+    ]
+    assert decision["executor_contract"]["order_sequence"] == decision["order_sequence"]
+
+
 def test_sell_records_single_realized_sell_event(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.time.sleep", lambda _: None)
