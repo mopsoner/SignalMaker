@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timezone
 
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
@@ -110,6 +111,84 @@ def _is_isolated_position(position: dict) -> bool:
     return margin_isolated()
 
 
+
+def momentum_balance_missing_grace_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("MOMENTUM_BALANCE_MISSING_GRACE_SECONDS", "120") or "120"))
+    except Exception:
+        return 120.0
+
+
+def _parse_opened_at(value) -> float | None:
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _position_age_seconds(position: dict) -> float | None:
+    opened_ts = _parse_opened_at(position.get("opened_at"))
+    if opened_ts is None:
+        return None
+    return max(0.0, time.time() - opened_ts)
+
+
+def _asset_amounts_from_mapping(item: dict | None) -> tuple[float, float, float]:
+    item = item or {}
+    free = _float(item.get("free"))
+    locked = _float(item.get("locked"))
+    total = free + locked
+    # Margin account payloads can expose the owned balance as netAsset instead of locked.
+    net_asset = _float(item.get("netAsset"))
+    if net_asset > total:
+        total = net_asset
+    return free, locked, total
+
+
+def _spot_asset_balance(binance, asset: str) -> dict:
+    wanted = asset.upper()
+    try:
+        for row in binance.account().get("balances") or []:
+            if str(row.get("asset") or "").upper() == wanted:
+                free, locked, total = _asset_amounts_from_mapping(row)
+                return {"free": free, "locked": locked, "total": total}
+    except Exception:
+        pass
+    free = float(binance.free_balance(asset))
+    return {"free": free, "locked": 0.0, "total": free}
+
+
+def _margin_asset_balance(margin, symbol: str, asset: str) -> dict:
+    wanted = asset.upper()
+    try:
+        data = margin.isolated_account(symbol)
+        if getattr(margin, "isolated", False):
+            for row in data.get("assets") or []:
+                for key in ("baseAsset", "quoteAsset"):
+                    item = row.get(key) or {}
+                    if str(item.get("asset") or "").upper() == wanted:
+                        free, locked, total = _asset_amounts_from_mapping(item)
+                        return {"free": free, "locked": locked, "total": total}
+        else:
+            for item in data.get("userAssets") or []:
+                if str(item.get("asset") or "").upper() == wanted:
+                    free, locked, total = _asset_amounts_from_mapping(item)
+                    return {"free": free, "locked": locked, "total": total}
+    except Exception:
+        pass
+    free = float(margin.margin_free_balance(symbol, asset))
+    return {"free": free, "locked": 0.0, "total": free}
+
 def momentum_dust_value() -> float:
     try:
         return max(0.0, float(os.getenv("MOMENTUM_POSITION_DUST_VALUE", "5.0") or "5.0"))
@@ -117,7 +196,7 @@ def momentum_dust_value() -> float:
         return 5.0
 
 
-def _track_momentum_position(candidate_id: str, position: dict, symbol: str, binance, rules, state) -> bool:
+def _track_momentum_position(candidate_id: str, position: dict, symbol: str, binance, rules, state, margin=None) -> bool:
     qty = _float(position.get("quantity"))
     entry = _float(position.get("entry_price"))
     side = str(position.get("side") or "long").lower()
@@ -133,13 +212,50 @@ def _track_momentum_position(candidate_id: str, position: dict, symbol: str, bin
     if not binance.dry_run:
         try:
             base = rules.base_asset(symbol)
-            available_base = binance.free_balance(base)
-            value = available_base * mark
-            updates.update({"base_asset": base, "available_base_balance": available_base, "available_base_value": value})
+            use_margin = _is_margin_position(position)
+            if use_margin and margin is not None:
+                balance = _margin_asset_balance(margin, symbol, base)
+                balance_source = "margin"
+            else:
+                balance = _spot_asset_balance(binance, base)
+                balance_source = "spot"
+            available_base = balance["free"]
+            locked_base = balance["locked"]
+            total_base = balance["total"]
+            value = total_base * mark
+            available_value = available_base * mark
+            locked_value = locked_base * mark
+            open_orders_count = 0
+            updates.update({
+                "base_asset": base,
+                "available_base_balance": available_base,
+                "locked_base_balance": locked_base,
+                "total_base_balance": total_base,
+                "available_base_value": available_value,
+                "locked_base_value": locked_value,
+                "available_base_total_value": value,
+                "open_orders_count": open_orders_count,
+                "balance_source": balance_source,
+            })
             if value < momentum_dust_value():
-                payload = {"symbol": symbol, "base_asset": base, "available_base_balance": available_base, "available_base_value": value, "dust_value": momentum_dust_value(), "mark_price": mark, "unrealized_pnl": pnl, "position": position}
+                open_orders = _list_open_orders(binance, margin, symbol, use_margin=use_margin) if margin is not None else []
+                open_orders_count = len(open_orders)
+                updates["open_orders_count"] = open_orders_count
+                if open_orders_count > 0:
+                    updates["balance_missing_open_orders"] = open_orders_count
+                    state.update_open_position(candidate_id, updates, event_type="momentum_balance_present_in_open_orders")
+                    logger.info("deferred momentum balance missing candidate=%s symbol=%s source=%s open_orders=%s value=%s", candidate_id, symbol, balance_source, open_orders_count, value)
+                    return False
+                age_seconds = _position_age_seconds(position)
+                grace_seconds = momentum_balance_missing_grace_seconds()
+                if age_seconds is not None and age_seconds < grace_seconds:
+                    updates.update({"balance_missing_grace_until_age_seconds": grace_seconds, "balance_missing_age_seconds": age_seconds})
+                    state.update_open_position(candidate_id, updates, event_type="momentum_balance_missing_grace")
+                    logger.info("deferred momentum balance missing candidate=%s symbol=%s source=%s value=%s age=%s grace=%s", candidate_id, symbol, balance_source, value, age_seconds, grace_seconds)
+                    return False
+                payload = {"symbol": symbol, "base_asset": base, "available_base_balance": available_base, "locked_base_balance": locked_base, "total_base_balance": total_base, "available_base_value": available_value, "locked_base_value": locked_value, "available_base_total_value": value, "open_orders_count": open_orders_count, "dust_value": momentum_dust_value(), "mark_price": mark, "unrealized_pnl": pnl, "balance_source": balance_source, "age_seconds": age_seconds, "grace_seconds": grace_seconds, "position": position}
                 state.close_position(candidate_id, "momentum_balance_missing", payload)
-                logger.info("closed momentum position candidate=%s symbol=%s reason=balance_missing value=%s", candidate_id, symbol, value)
+                logger.info("closed momentum position candidate=%s symbol=%s reason=balance_missing source=%s value=%s", candidate_id, symbol, balance_source, value)
                 return True
         except Exception as exc:
             updates["balance_sync_error"] = str(exc)
@@ -472,7 +588,7 @@ def sync_open_positions():
         margin_manager = MarginOrderManager(binance, margin, rules)
 
         if _is_momentum_position(candidate_id, position):
-            if _track_momentum_position(candidate_id, position, symbol, binance, rules, state):
+            if _track_momentum_position(candidate_id, position, symbol, binance, rules, state, margin=margin):
                 closed += 1
             else:
                 momentum_tracked += 1
