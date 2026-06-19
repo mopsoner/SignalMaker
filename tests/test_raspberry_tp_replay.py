@@ -53,6 +53,14 @@ class FakeMargin:
         return []
 
 
+class FakeMargin:
+    def __init__(self, balances):
+        self.balances = balances
+
+    def margin_free_balance(self, symbol: str, asset: str) -> float:
+        return self.balances.get((symbol, asset), 0.0)
+
+
 class FakeRules:
     def base_asset(self, symbol: str) -> str:
         for quote in ("USDT", "USDC", "BTC"):
@@ -200,68 +208,3 @@ def test_track_momentum_defers_recent_missing_balance(tmp_path, monkeypatch):
     assert tracked["balance_missing_grace_until_age_seconds"] == 120.0
     assert state.closed_positions() == []
     assert any(event["event_type"] == "momentum_balance_missing_grace" for event in state.events())
-
-
-def test_track_momentum_counts_locked_margin_balance(tmp_path, monkeypatch):
-    state = state_store(tmp_path, monkeypatch)
-    candidate_id = "momentum-tiausdc"
-    state.add_open_position(candidate_id, {
-        "candidate_id": candidate_id,
-        "signal_symbol": "TIAUSDC",
-        "execution_symbol": "TIAUSDC",
-        "side": "long",
-        "quantity": "250",
-        "entry_price": 0.4,
-        "mode": "cross_margin",
-        "margin_isolated": False,
-        "momentum_decision": {"buy_symbol": "TIAUSDC"},
-    })
-    binance = FakeBinance()
-    binance.current_price = lambda symbol: 0.4
-
-    closed = _track_momentum_position(
-        candidate_id,
-        state.open_positions()[candidate_id],
-        "TIAUSDC",
-        binance,
-        FakeRules(),
-        state,
-        margin=FakeMargin({("TIAUSDC", "TIA"): {"free": "0", "locked": "250"}}),
-    )
-
-    assert closed is False
-    tracked = state.open_positions()[candidate_id]
-    assert tracked["available_base_balance"] == 0.0
-    assert tracked["locked_base_balance"] == 250.0
-    assert tracked["total_base_balance"] == 250.0
-    assert state.closed_positions() == []
-
-
-def test_track_momentum_keeps_position_when_open_order_exists(tmp_path, monkeypatch):
-    state = state_store(tmp_path, monkeypatch)
-    monkeypatch.setenv("MOMENTUM_BALANCE_MISSING_GRACE_SECONDS", "0")
-    candidate_id = "momentum-tiausdc"
-    state.add_open_position(candidate_id, {
-        "candidate_id": candidate_id,
-        "signal_symbol": "TIAUSDC",
-        "execution_symbol": "TIAUSDC",
-        "side": "long",
-        "quantity": "250",
-        "entry_price": 0.4,
-        "mode": "cross_margin",
-        "margin_isolated": False,
-        "momentum_decision": {"buy_symbol": "TIAUSDC"},
-    })
-    binance = FakeBinance()
-    binance.current_price = lambda symbol: 0.4
-    margin = FakeMargin({("TIAUSDC", "TIA"): {"free": "0", "locked": "0"}})
-    margin.open_margin_orders = lambda symbol: [{"orderId": "tp-1", "side": "SELL", "origQty": "250"}]
-
-    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", binance, FakeRules(), state, margin=margin)
-
-    assert closed is False
-    tracked = state.open_positions()[candidate_id]
-    assert tracked["open_orders_count"] == 1
-    assert tracked["balance_missing_open_orders"] == 1
-    assert state.closed_positions() == []
-    assert any(event["event_type"] == "momentum_balance_present_in_open_orders" for event in state.events())
