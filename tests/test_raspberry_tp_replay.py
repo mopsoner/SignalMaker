@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import raspberry_executor.sqlite_db as sqlite_db
-from raspberry_executor.position_sync_v2 import _handle_filled_take_profit, _replay_take_profit
+from raspberry_executor.position_sync_v2 import _handle_filled_take_profit, _replay_take_profit, _track_momentum_position
 from raspberry_executor.state import StateStore
 
 
@@ -22,9 +22,20 @@ class FakeBinance:
         return 1.0
 
 
+class FakeMargin:
+    def __init__(self, balances):
+        self.balances = balances
+
+    def margin_free_balance(self, symbol: str, asset: str) -> float:
+        return self.balances.get((symbol, asset), 0.0)
+
+
 class FakeRules:
     def base_asset(self, symbol: str) -> str:
-        return "BTC"
+        for quote in ("USDT", "USDC", "BTC"):
+            if symbol.endswith(quote):
+                return symbol[: -len(quote)]
+        return symbol
 
 
 class FakeSpotManager:
@@ -109,3 +120,60 @@ def test_partial_take_profit_fill_keeps_position_open_for_replay(tmp_path, monke
     assert position["tp_order_id"] is None
     assert position["needs_tp_replay"] is True
     assert state.closed_positions() == []
+
+
+def test_track_momentum_uses_margin_balance_for_cross_margin_position(tmp_path, monkeypatch):
+    state = state_store(tmp_path, monkeypatch)
+    candidate_id = "momentum-tiausdc"
+    position = {
+        "candidate_id": candidate_id,
+        "signal_symbol": "TIAUSDC",
+        "execution_symbol": "TIAUSDC",
+        "side": "long",
+        "quantity": "250",
+        "entry_price": 0.4,
+        "mode": "cross_margin",
+        "margin_isolated": False,
+        "momentum_decision": {"buy_symbol": "TIAUSDC"},
+    }
+    state.add_open_position(candidate_id, position)
+    binance = FakeBinance()
+    binance.current_price = lambda symbol: 0.4
+    binance.free_balance = lambda asset: 0.0
+
+    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", binance, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 250.0}))
+
+    assert closed is False
+    tracked = state.open_positions()[candidate_id]
+    assert tracked["balance_source"] == "margin"
+    assert tracked["available_base_balance"] == 250.0
+    assert state.closed_positions() == []
+
+
+def test_track_momentum_defers_recent_missing_balance(tmp_path, monkeypatch):
+    state = state_store(tmp_path, monkeypatch)
+    monkeypatch.setenv("MOMENTUM_BALANCE_MISSING_GRACE_SECONDS", "120")
+    candidate_id = "momentum-tiausdc"
+    position = {
+        "candidate_id": candidate_id,
+        "signal_symbol": "TIAUSDC",
+        "execution_symbol": "TIAUSDC",
+        "side": "long",
+        "quantity": "250",
+        "entry_price": 0.4,
+        "mode": "cross_margin",
+        "margin_isolated": False,
+        "momentum_decision": {"buy_symbol": "TIAUSDC"},
+    }
+    state.add_open_position(candidate_id, position)
+    binance = FakeBinance()
+    binance.current_price = lambda symbol: 0.4
+    binance.free_balance = lambda asset: 0.0
+
+    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", binance, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 0.0}))
+
+    assert closed is False
+    tracked = state.open_positions()[candidate_id]
+    assert tracked["balance_missing_grace_until_age_seconds"] == 120.0
+    assert state.closed_positions() == []
+    assert any(event["event_type"] == "momentum_balance_missing_grace" for event in state.events())
