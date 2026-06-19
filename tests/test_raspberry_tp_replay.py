@@ -21,6 +21,37 @@ class FakeBinance:
     def free_balance(self, asset: str) -> float:
         return 1.0
 
+    def account(self) -> dict:
+        return {"balances": [{"asset": "BTC", "free": "1.0", "locked": "0"}]}
+
+
+class FakeMargin:
+    def __init__(self, balances):
+        self.balances = balances
+
+    def margin_free_balance(self, symbol: str, asset: str) -> float:
+        balance = self.balances.get((symbol, asset), 0.0)
+        if isinstance(balance, dict):
+            return float(balance.get("free", 0.0))
+        return balance
+
+    def isolated_account(self, symbol: str) -> dict:
+        assets = []
+        for (balance_symbol, asset), balance in self.balances.items():
+            if balance_symbol != symbol:
+                continue
+            if not isinstance(balance, dict):
+                balance = {"free": balance, "locked": 0.0}
+            assets.append({"asset": asset, **balance})
+        return {"userAssets": assets}
+
+    @property
+    def isolated(self) -> bool:
+        return False
+
+    def open_margin_orders(self, symbol: str):
+        return []
+
 
 class FakeMargin:
     def __init__(self, balances):
