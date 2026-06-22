@@ -49,6 +49,7 @@ export const api = {
   workerStatus: () => request('/api/v1/admin/workers'),
   startWorker: (name) => request(`/api/v1/admin/workers/${name}/start`, { method: 'POST' }),
   stopWorker: (name) => request(`/api/v1/admin/workers/${name}/stop`, { method: 'POST' }),
+  resetDatabase: () => request('/api/v1/admin/reset-database', { method: 'POST' }),
   testBinance: () => request('/api/v1/admin/test/binance', { method: 'POST' }),
   testNotifications: () => request('/api/v1/admin/test/notifications', { method: 'POST' }),
   workerLogs: (worker, lines = 300) => request(`/api/v1/admin/logs/${worker}?lines=${lines}`),

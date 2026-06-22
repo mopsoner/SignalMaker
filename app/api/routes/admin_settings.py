@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.services.database_reset_service import reset_database_preserving_config
 from app.services.notifier_service import NotifierService
 from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
 from app.services.worker_control_service import WorkerControlService
@@ -48,6 +49,11 @@ def start_worker(worker_name: str) -> dict:
 @router.post('/admin/workers/{worker_name}/stop')
 def stop_worker(worker_name: str) -> dict:
     return WorkerControlService().stop(worker_name)
+
+
+@router.post('/admin/reset-database')
+def reset_database(db: Session = Depends(get_db)) -> dict:
+    return reset_database_preserving_config(db)
 
 
 @router.post('/admin/test/binance')

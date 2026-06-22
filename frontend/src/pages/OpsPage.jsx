@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
@@ -24,6 +24,22 @@ export default function OpsPage() {
   const { data: candles = [] } = usePollingQuery(useCallback(() => api.candles('?latest=true&limit=200'), []), 10000)
   const { data: summary = [] } = usePollingQuery(useCallback(() => api.candleSummary(), []), 30000)
   const { data: liveRuns = [] } = usePollingQuery(useCallback(() => api.liveRuns('?limit=10'), []), 15000)
+  const [resetResult, setResetResult] = useState(null)
+  const [resetError, setResetError] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+
+  async function resetDatabase() {
+    if (!window.confirm('Reset database runtime data? This deletes everything except configuration.')) return
+    setResetBusy(true)
+    setResetError('')
+    try {
+      setResetResult(await api.resetDatabase())
+    } catch (err) {
+      setResetError(err?.message || String(err))
+    } finally {
+      setResetBusy(false)
+    }
+  }
 
   const serviceRows = services ? Object.entries(services).map(([name, meta]) => ({ id: name, name, ...meta })) : []
   const serviceColumns = [
@@ -73,6 +89,7 @@ export default function OpsPage() {
     <PageHeader title="Ops" subtitle="Service health, fills and market ingestion state" />
     <div className="stats-grid"><StatCard label="API status" value={health?.status || '—'} hint={healthError || ''} /><StatCard label="Environment" value={health?.env || '—'} /><StatCard label="Database" value={health?.database || '—'} /><StatCard label="Symbols tracked" value={symbols || '—'} hint={`${totalCandles.toLocaleString()} candles total`} /></div>
     <div className="stats-grid"><StatCard label="Last pipeline run" value={displayRun ? fmtDate(displayRun.started_at) : '—'} hint={displayRun?.run_id || ''} /><StatCard label="Scanned" value={latestStats.symbols_scanned ?? displayRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? displayRun?.symbols_total ?? '—'}`} /><StatCard label="Candidates" value={latestStats.candidates_created ?? '—'} hint={`Workers: ${latestStats.collect_workers ?? '—'}`} /><StatCard label="Candles written" value={latestStats.candles_written ?? '—'} /></div>
+    <section className="panel"><h2>Danger zone</h2><p>Reset deletes all runtime tables, including momentum candidates, candles, positions, orders and fills. Admin settings/config are preserved.</p><button className="danger" type="button" disabled={resetBusy} onClick={resetDatabase}>{resetBusy ? 'Resetting…' : 'Reset database'}</button>{resetError ? <p className="error">{resetError}</p> : null}{resetResult ? <pre>{JSON.stringify(resetResult, null, 2)}</pre> : null}</section>
     <section className="panel"><h2>Pipeline audit metrics</h2>{!displayRun ? <div>No live run data yet.</div> : null}{displayRun && !hasAnyMetrics ? <div>Latest runs found, but no saved stats yet. Run the pipeline once after backend restart.</div> : null}{displayRun && hasAnyMetrics ? <div className="two-col"><FoldableTable title="Pipeline counts" columns={metricColumns} rows={pipelineMetricRows} empty="No pipeline metrics" /><FoldableTable title="Planner rejection reasons" columns={metricColumns} rows={plannerMetricRows} empty="No planner metrics" /><FoldableTable title="Data quality alerts" columns={metricColumns} rows={dataQualityMetricRows} empty="No data quality alerts" defaultOpen={false} /><FoldableTable title="Structure counters" columns={metricColumns} rows={structureMetricRows} empty="No structure counters" /></div> : null}</section>
     <FoldableTable title="Service health" columns={serviceColumns} rows={serviceRows} empty="No service data" />
     <FoldableTable title="Étendue des candles par symbole / timeframe" columns={summaryColumns} rows={summary.map((r) => ({ ...r, id: `${r.symbol}-${r.interval}` }))} empty="Aucune donnée" />
