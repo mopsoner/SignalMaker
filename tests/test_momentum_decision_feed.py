@@ -614,7 +614,7 @@ def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
     assert [event["event_type"] for event in state.events()] == ["momentum_buy_skipped_unsupported_quote"]
 
 
-def test_build_decision_falls_back_to_lowest_received_rsi_when_none_buyable(tmp_path, monkeypatch):
+def test_build_decision_waits_when_no_candidate_rsi_is_buyable(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
 
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
@@ -625,14 +625,15 @@ def test_build_decision_falls_back_to_lowest_received_rsi_when_none_buyable(tmp_
         {"symbol": "LOWUSDC", "rank": 3, "momentum_score": 9.0, "rsi_1h": 34},
     ])
 
-    assert decision["action"] == "BUY"
-    assert decision["should_trade"] is True
-    assert decision["buy_symbol"] == "LOWUSDC"
-    assert decision["buy_candidates"][0]["buyable_reason"] == "fallback_lowest_rsi_1h:34"
-    assert decision["reason"].startswith("buy_lowest_rsi_momentum_fallback:LOWUSDC")
+    assert decision["action"] == "WAIT"
+    assert decision["should_trade"] is False
+    assert decision["buy_symbol"] is None
+    assert decision["buy_candidates"] == []
+    assert decision["reason"] == "no_buyable_momentum_candidates_rsi_1h_45_55"
+    assert [row["symbol"] for row in decision["skipped_candidates"]] == ["BANKUSDC", "ALLUSDC", "LOWUSDC"]
 
 
-def test_buy_best_available_falls_back_to_lowest_received_rsi_when_none_buyable(tmp_path, monkeypatch):
+def test_buy_best_available_does_not_buy_non_buyable_lowest_rsi(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", lambda limit: [
         {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 70},
@@ -643,8 +644,15 @@ def test_buy_best_available_falls_back_to_lowest_received_rsi_when_none_buyable(
 
     result = buy_best_available(settings(), FakeBinance(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
 
-    assert result.startswith("fallback_buy:LOWUSDC:bought:LOWUSDC"), result
-    assert state.open_positions()["momentum-LOWUSDC"]["execution_symbol"] == "LOWUSDC"
+    assert result == "fallback_buy_exhausted:no_candidates"
+    assert state.open_positions() == {}
+    event_types = [event["event_type"] for event in state.events()]
+    assert event_types == [
+        "momentum_buy_candidate_not_buyable",
+        "momentum_buy_candidate_not_buyable",
+        "momentum_buy_candidate_not_buyable",
+        "momentum_fallback_no_candidates",
+    ]
 
 
 def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, monkeypatch):
