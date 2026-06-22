@@ -150,6 +150,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 ("ALLOWED_SYMBOLS", "Allowed symbols optional", "text"),
                 ("ORDER_QUOTE_AMOUNT", "Amount per trade in quote asset", "number"),
                 ("MAX_CANDIDATE_AGE_SECONDS", "Max candidate age seconds", "number"),
+                ("MOMENTUM_BUYABLE_RSI_1H_MIN", "Momentum buyable RSI 1H min", "number"),
+                ("MOMENTUM_BUYABLE_RSI_1H_MAX", "Momentum buyable RSI 1H max", "number"),
                 ("BINANCE_BASE_URL", "Binance base URL", "text"),
                 ("BINANCE_API_KEY", "Binance API key", "password"),
                 ("BINANCE_SECRET_KEY", "Binance secret key", "password"),
