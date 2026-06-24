@@ -161,26 +161,49 @@ def _event_payload_sell_symbol(payload: dict[str, Any]) -> str:
 
 
 def _last_recorded_buy_without_later_sell(state: StateStore) -> str:
-    """Return the last recorded momentum buy that has not been superseded by a sell.
+    """Return the last confirmed momentum buy that has not been superseded by a sell.
 
-    Some main deployments still emit independent BUY decisions only. If the
-    penultimate stored decision bought X and the newest remote decision buys Y,
-    the executor contract must explicitly become SELL X, then BUY Y instead of
-    treating BUY Y as an isolated entry.
+    A stored ``momentum_decision`` is only an intent plus execution result. The
+    dashboard and rotation logic must not treat a BUY/HOLD decision as a held
+    asset unless the executor actually recorded a buy. Otherwise a failed or
+    skipped BUY can make later details say "HOLD <symbol>" even though the
+    asset was never bought, while the previous momentum asset remains open.
     """
     sold_symbols: set[str] = set()
+    fallback_decision_buy = ""
     for event in reversed(state.events(limit=1000)):
-        if str(event.get("event_type") or "") != "momentum_decision":
-            continue
+        event_type = str(event.get("event_type") or "")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+
+        if event_type == "momentum_sold":
+            sell_symbol = str(payload.get("symbol") or _event_payload_sell_symbol(payload) or "").upper()
+            if sell_symbol:
+                sold_symbols.add(sell_symbol)
+            continue
+
+        if event_type == "momentum_bought":
+            buy_symbol = str(payload.get("symbol") or _event_payload_buy_symbol(payload) or "").upper()
+            if buy_symbol and buy_symbol not in sold_symbols:
+                return buy_symbol
+            continue
+
+        if event_type != "momentum_decision":
+            continue
+
         action = str(payload.get("action") or "").upper()
+        execution_result = str(payload.get("execution_result") or "")
         sell_symbol = _event_payload_sell_symbol(payload)
-        if action in {"SELL", "ROTATE"} and sell_symbol:
+        if action in {"SELL", "ROTATE"} and sell_symbol and execution_result.startswith(("sell_confirmed", "rotate:")):
             sold_symbols.add(sell_symbol)
+
         buy_symbol = _event_payload_buy_symbol(payload)
-        if action in {"BUY", "ROTATE"} and buy_symbol and buy_symbol not in sold_symbols:
-            return buy_symbol
-    return ""
+        buy_confirmed = execution_result.startswith(("bought:", "bought_cross_margin:", "already_have:")) or (
+            execution_result.startswith("rotate:") and ":bought" in execution_result
+        )
+        if buy_confirmed and buy_symbol and buy_symbol not in sold_symbols and not fallback_decision_buy:
+            fallback_decision_buy = buy_symbol
+
+    return fallback_decision_buy
 
 
 def apply_previous_buy_rotation(decision: dict[str, Any], state: StateStore | None = None) -> dict[str, Any]:
