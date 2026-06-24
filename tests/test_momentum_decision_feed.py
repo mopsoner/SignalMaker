@@ -363,10 +363,10 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
     ]
 
 
-def test_previous_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
+def test_confirmed_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
-    momentum_module.record_decision({"action": "BUY", "should_trade": True, "symbol": "BANKUSDC", "buy_symbol": "BANKUSDC"})
+    state.add_event("momentum-BANKUSDC", "momentum_bought", {"symbol": "BANKUSDC"})
 
     decision = momentum_module.apply_previous_buy_rotation(
         {"action": "BUY", "should_trade": True, "symbol": "ALLUSDC", "buy_symbol": "ALLUSDC"},
@@ -381,6 +381,24 @@ def test_previous_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_pat
         {"step": 2, "action": "BUY", "symbol": "ALLUSDC", "role": "enter_new_momentum_asset"},
     ]
     assert decision["executor_contract"]["order_sequence"] == decision["order_sequence"]
+
+
+def test_unconfirmed_recorded_buy_does_not_create_fake_hold_or_rotation(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    state = StateStore()
+    momentum_module.record_decision(
+        {"action": "BUY", "should_trade": True, "symbol": "JUPUSDC", "buy_symbol": "JUPUSDC"},
+        execution_result="quote_balance_wait:USDC:free=0.0000:usable=0.0000",
+    )
+
+    decision = momentum_module.apply_previous_buy_rotation(
+        {"action": "BUY", "should_trade": True, "symbol": "ALLUSDC", "buy_symbol": "ALLUSDC"},
+        state,
+    )
+
+    assert decision["action"] == "BUY"
+    assert decision["sell_symbol"] is None
+    assert decision["buy_symbol"] == "ALLUSDC"
 
 
 def test_sell_records_single_realized_sell_event(tmp_path, monkeypatch):
@@ -448,15 +466,10 @@ def test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_p
 
 
 
-def test_build_decision_from_candidates_rotates_last_recorded_momentum_buy(tmp_path, monkeypatch):
+def test_build_decision_from_candidates_rotates_last_confirmed_momentum_buy(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
-    state.add_event("momentum-decision", "momentum_decision", {
-        "action": "BUY",
-        "symbol": "ALLUSDC",
-        "buy_symbol": "ALLUSDC",
-        "sell_symbol": None,
-    })
+    state.add_event("momentum-ALLUSDC", "momentum_bought", {"symbol": "ALLUSDC"})
 
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
 
