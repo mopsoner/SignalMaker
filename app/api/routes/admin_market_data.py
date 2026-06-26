@@ -5,6 +5,7 @@ from app.api.deps import get_db
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
 from signalmaker.data_providers.eodhd.config import get_eodhd_config
+from signalmaker.data_providers.ibkr.config import get_ibkr_config
 from signalmaker.data_providers.eodhd.repository import EODHDRepository
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
@@ -153,6 +154,18 @@ async def test_eodhd():
         await client.close()
 
 
+@router.post('/admin/market-data/test-ibkr')
+async def test_ibkr():
+    from signalmaker.data_providers.ibkr.client import IBKRClient
+    cfg = get_ibkr_config()
+    client = IBKRClient(cfg)
+    try:
+        sample = await client.get_json('trsrv/stocks', {'symbols': 'AAPL'})
+        return {'ok': True, 'symbols': list(sample.keys()) if isinstance(sample, dict) else None}
+    finally:
+        await client.close()
+
+
 @router.post('/admin/market-data/sync-assets')
 async def sync_assets(db: Session = Depends(get_db)):
     repo = _repo(db)
@@ -196,7 +209,7 @@ async def queue_market_job(payload: dict | None = None, db: Session = Depends(ge
 
 @router.post('/admin/market-data/backfill')
 async def backfill(payload: dict | None = None):
-    return {'accepted': True, 'message': 'Run python -m signalmaker.jobs.eodhd_backfill_daily for controlled backfills.', 'payload': payload or {}}
+    return {'accepted': True, 'message': 'Run python -m signalmaker.jobs.eodhd_backfill_daily or python -m signalmaker.jobs.ibkr_backfill_daily for controlled backfills.', 'payload': payload or {}}
 
 
 @router.post('/admin/market-data/analyze')
