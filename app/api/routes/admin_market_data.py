@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Response
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from signalmaker.admin.env_settings import env_status
@@ -9,6 +10,19 @@ from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
 
 router = APIRouter()
+
+
+def _delete_table_rows(db: Session, table_name: str) -> int:
+    try:
+        result = db.execute(text(f"DELETE FROM {table_name}"))
+        return result.rowcount or 0
+    except Exception as exc:
+        # SQLite/PostgreSQL installations may not have every optional table yet.
+        message = str(exc).lower()
+        if "does not exist" in message or "no such table" in message:
+            db.rollback()
+            return 0
+        raise
 
 
 def _repo(db: Session) -> EODHDRepository:
@@ -94,6 +108,23 @@ def _csv(rows: list[dict]) -> Response:
     writer.writeheader()
     writer.writerows(rows)
     return Response(content=output.getvalue(), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename="stocks-etfs-export.csv"'})
+
+
+@router.delete('/api/v1/stocks-etfs/cleanup')
+async def clear_stocks_etfs_generated_data(db: Session = Depends(get_db)):
+    """Clear generated ETF/stock analysis, candidate/position views and job logs.
+
+    Market assets, universes and imported OHLC candles are preserved so the
+    operator can rerun analysis without another full backfill.
+    """
+    tables = [
+        'market_analysis_results',
+        'market_analysis_runs',
+        'market_data_job_requests',
+    ]
+    details = {table: _delete_table_rows(db, table) for table in tables}
+    db.commit()
+    return {'deleted': sum(details.values()), 'details': details}
 
 
 @router.get('/api/v1/stocks-etfs/export.csv')

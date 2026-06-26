@@ -2,10 +2,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.models.momentum_backtest import MomentumBacktestRun
+from app.models.momentum_backtest import MomentumBacktestEquity, MomentumBacktestRun, MomentumBacktestTrade
 from app.services.momentum_backtest_service import MomentumBacktestService
 
 router = APIRouter()
@@ -84,3 +85,20 @@ def compare(run_ids: str = Query(default=""), limit: int = Query(default=800, ge
             "equity": [_model_to_dict(row) for row in service.list_equity(run_id, limit=limit)],
         })
     return payload
+
+
+@router.delete("/cleanup")
+def clear_backtest_runs(db: Session = Depends(get_db)) -> dict:
+    """Clear momentum backtest runs, trades and equity-chart data."""
+    deleted_equity = db.execute(delete(MomentumBacktestEquity)).rowcount or 0
+    deleted_trades = db.execute(delete(MomentumBacktestTrade)).rowcount or 0
+    deleted_runs = db.execute(delete(MomentumBacktestRun)).rowcount or 0
+    db.commit()
+    return {
+        "deleted": deleted_equity + deleted_trades + deleted_runs,
+        "details": {
+            "momentum_backtest_equity": deleted_equity,
+            "momentum_backtest_trades": deleted_trades,
+            "momentum_backtest_runs": deleted_runs,
+        },
+    }
