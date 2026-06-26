@@ -130,7 +130,8 @@ export default function AdminSettingsPage() {
     if (!ok) return
     try {
       const result = await action()
-      setMessage(`${label}: deleted ${result.deleted || 0} rows`)
+      const details = result.details ? ` (${Object.entries(result.details).map(([key, value]) => `${key}: ${value}`).join(', ')})` : ''
+      setMessage(`${label}: deleted ${result.deleted || 0} rows${details}`)
     } catch (error) {
       setMessage(error.message || 'Cleanup failed')
     }
@@ -169,6 +170,14 @@ export default function AdminSettingsPage() {
           <CleanupCard title="Orders" description="Clear paper orders created by the executor.">
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open orders', api.clearOpenOrders)}>Clear open orders</button>
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all orders', api.clearOrders)}>Clear all orders</button>
+          </CleanupCard>
+          <CleanupCard title="Momentum analysis" description="Clear momentum scanner rankings, 15m structure analysis, backend paper-engine logs/positions and backtest chart data.">
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum rankings and structure analysis', api.clearMomentumAnalysis)}>Clear rankings</button>
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum engine logs, charts and positions', api.clearMomentumEngine)}>Clear engine logs/charts</button>
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum backtest runs, trades and charts', api.clearMomentumBacktests)}>Clear backtests</button>
+          </CleanupCard>
+          <CleanupCard title="ETF & stock analysis" description="Clear generated ETF/stock analysis results, candidate/position views and queued job logs while keeping assets, universes and candles.">
+            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear ETF and stock analysis, trades/positions and job logs', api.clearStockEtfGeneratedData)}>Clear ETF/stock generated data</button>
           </CleanupCard>
         </div>
       </section>
