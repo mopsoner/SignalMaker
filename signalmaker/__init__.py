@@ -1,1 +1,0 @@
-"""SignalMaker isolated integrations package."""
