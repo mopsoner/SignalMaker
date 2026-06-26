@@ -1,0 +1,1 @@
+from signalmaker.data_providers.eodhd.repository import EODHDRepository
