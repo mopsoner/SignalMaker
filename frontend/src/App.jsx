@@ -11,7 +11,6 @@ import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import AssetDetailPage from './pages/AssetDetailPage'
 import ETFStocksPage from './pages/ETFStocksPage'
-import MomentumETFStocksPage from './pages/MomentumETFStocksPage'
 
 const groupTitleStyle = {
   margin: '18px 0 8px',
@@ -66,7 +65,6 @@ export default function App() {
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
           <Route path="/etf-stocks" element={<ETFStocksPage />} />
-          <Route path="/momentum-etf-stocks" element={<MomentumETFStocksPage />} />
           <Route path="/momentum-candidates" element={<MomentumCandidatesPage />} />
           <Route path="/momentum-backtest" element={<MomentumBacktestV2Page />} />
           <Route path="/candidates" element={<CandidatesPage />} />

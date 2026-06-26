@@ -53,7 +53,6 @@ export const api = {
   ibkrCandles: (params = '') => request(`/api/v1/ibkr-market-data/candles${params}`),
   ibkrCandleSummary: (params = '') => request(`/api/v1/ibkr-market-data/candles/summary${params}`),
   ibkrImportRuns: (params = '') => request(`/api/v1/ibkr-market-data/import-runs${params}`),
-  ibkrMomentum: (params = '') => request(`/api/v1/ibkr-momentum${params}`),
   runPipeline: (limit = 5) => request(`/api/v1/pipeline/run-once?limit=${limit}`, { method: 'POST' }),
   runExecutor: (limit = 10, quantity = 1) => request(`/api/v1/executor/run-once?limit=${limit}&quantity=${quantity}`, { method: 'POST' }),
   momentumBacktestLatest: () => request('/api/v1/momentum-backtest/runs/latest'),
