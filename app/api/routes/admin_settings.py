@@ -23,7 +23,6 @@ class SettingsPayload(BaseModel):
     bot: dict[str, Any] = {}
     live: dict[str, Any] = {}
     momentum: dict[str, Any] = {}
-    ibkr: dict[str, Any] = {}
 
 
 @router.get('/admin/settings')

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from sqlalchemy import select
@@ -97,20 +96,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_engine_starting_capital": 1000.0,
         "momentum_engine_min_score": 0.0,
     },
-
-    "ibkr": {
-        "ibkr_enabled": os.getenv("IBKR_ENABLED", "false").lower() == "true",
-        "ibkr_host": os.getenv("IBKR_HOST", "127.0.0.1"),
-        "ibkr_port": int(os.getenv("IBKR_PORT", "4002")),
-        "ibkr_client_id": int(os.getenv("IBKR_CLIENT_ID", "21")),
-        "ibkr_historical_max_concurrent": int(os.getenv("IBKR_HISTORICAL_MAX_CONCURRENT", "2")),
-        "ibkr_historical_sleep_seconds": int(os.getenv("IBKR_HISTORICAL_SLEEP_SECONDS", "12")),
-        "ibkr_historical_duration": os.getenv("IBKR_HISTORICAL_DURATION", "2 Y"),
-        "ibkr_historical_bar_size": os.getenv("IBKR_HISTORICAL_BAR_SIZE", "1 day"),
-        "ibkr_historical_use_rth": os.getenv("IBKR_HISTORICAL_USE_RTH", "true").lower() == "true",
-        "ibkr_historical_what_to_show": os.getenv("IBKR_HISTORICAL_WHAT_TO_SHOW", "TRADES"),
-        "ibkr_momentum_lookback_days": int(os.getenv("IBKR_MOMENTUM_LOOKBACK_DAYS", "180")),
-    },
     "live": {
         "live_trading_enabled": base_settings.live_trading_enabled,
         "binance_use_testnet": base_settings.binance_use_testnet,
@@ -149,10 +134,6 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             momentum.get("momentum_engine_enabled", True),
             default=True,
         )
-
-        ibkr = payload.setdefault("ibkr", {})
-        ibkr["ibkr_enabled"] = _as_bool(ibkr.get("ibkr_enabled", False), default=False)
-        ibkr["ibkr_historical_use_rth"] = _as_bool(ibkr.get("ibkr_historical_use_rth", True), default=True)
         return payload
     finally:
         if owns_session:
@@ -177,14 +158,6 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     momentum = payload.get("momentum")
     if isinstance(momentum, dict) and "momentum_engine_enabled" in momentum:
         momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
-
-
-    ibkr = payload.get("ibkr")
-    if isinstance(ibkr, dict):
-        if "ibkr_enabled" in ibkr:
-            ibkr["ibkr_enabled"] = _as_bool(ibkr["ibkr_enabled"], default=False)
-        if "ibkr_historical_use_rth" in ibkr:
-            ibkr["ibkr_historical_use_rth"] = _as_bool(ibkr["ibkr_historical_use_rth"], default=True)
 
     for category, values in payload.items():
         if not isinstance(values, dict):
