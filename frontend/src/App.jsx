@@ -10,6 +10,8 @@ import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import AssetDetailPage from './pages/AssetDetailPage'
+import ETFStocksPage from './pages/ETFStocksPage'
+import MomentumETFStocksPage from './pages/MomentumETFStocksPage'
 
 const groupTitleStyle = {
   margin: '18px 0 8px',
@@ -43,10 +45,14 @@ export default function App() {
           <NavLink to="/positions" onClick={closeMenu}>Positions</NavLink>
           <NavLink to="/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
 
+          <div style={groupTitleStyle}>ETF & Stocks</div>
+          <NavLink to="/etf-stocks" onClick={closeMenu}>IBKR Dashboard</NavLink>
+
           <div style={groupTitleStyle}>Momentum</div>
           <NavLink to="/momentum" onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/momentum-candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/momentum-backtest" onClick={closeMenu}>Backtest</NavLink>
+          <NavLink to="/momentum-etf-stocks" onClick={closeMenu}>ETF & Stocks</NavLink>
 
           <div style={groupTitleStyle}>Ops / Admin</div>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
@@ -59,6 +65,8 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
+          <Route path="/etf-stocks" element={<ETFStocksPage />} />
+          <Route path="/momentum-etf-stocks" element={<MomentumETFStocksPage />} />
           <Route path="/momentum-candidates" element={<MomentumCandidatesPage />} />
           <Route path="/momentum-backtest" element={<MomentumBacktestV2Page />} />
           <Route path="/candidates" element={<CandidatesPage />} />
