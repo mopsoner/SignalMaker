@@ -27,7 +27,6 @@ const EMPTY_SETTINGS = {
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   live: { live_trading_enabled: false, binance_use_testnet: true, binance_testnet_rest_base: 'https://testnet.binance.vision', live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: true },
-  ibkr: { ibkr_enabled: false, ibkr_host: '127.0.0.1', ibkr_port: 4002, ibkr_client_id: 21, ibkr_historical_max_concurrent: 2, ibkr_historical_sleep_seconds: 12, ibkr_historical_duration: '2 Y', ibkr_historical_bar_size: '1 day', ibkr_historical_use_rth: true, ibkr_historical_what_to_show: 'TRADES', ibkr_momentum_lookback_days: 180 },
 }
 
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
@@ -69,7 +68,6 @@ export default function AdminSettingsPage() {
         notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
         live: { ...EMPTY_SETTINGS.live, ...(data.live || {}) },
-        ibkr: { ...EMPTY_SETTINGS.ibkr, ...(data.ibkr || {}) },
       }
       setSettings(merged)
       setInitialSettings(merged)
@@ -105,7 +103,6 @@ export default function AdminSettingsPage() {
         notifications: { ...EMPTY_SETTINGS.notifications, ...(saved.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(saved.bot || {}) },
         live: { ...EMPTY_SETTINGS.live, ...(saved.live || {}) },
-        ibkr: { ...EMPTY_SETTINGS.ibkr, ...(saved.ibkr || {}) },
       }
       setSettings(merged)
       setInitialSettings(merged)
@@ -201,20 +198,6 @@ export default function AdminSettingsPage() {
         <Field label="Lookback 15m"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_15m} onChange={(e) => updateField('binance', 'binance_lookback_15m', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 1h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_1h} onChange={(e) => updateField('binance', 'binance_lookback_1h', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Lookback 4h"><input style={inputStyle} type="number" value={settings.binance.binance_lookback_4h} onChange={(e) => updateField('binance', 'binance_lookback_4h', e.target.value, 'number')} disabled={loading} /></Field>
-      </Section>
-
-      <Section title="IBKR ETF & Stocks" description="Paper Gateway market-data settings for isolated IBKR contracts, daily candles and stock/ETF momentum. IBKR remains disabled unless explicitly enabled.">
-        <Field label="IBKR enabled"><input type="checkbox" checked={Boolean(settings.ibkr.ibkr_enabled)} onChange={(e) => updateField('ibkr', 'ibkr_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
-        <Field label="Gateway host"><input style={inputStyle} value={settings.ibkr.ibkr_host} onChange={(e) => updateField('ibkr', 'ibkr_host', e.target.value)} disabled={loading} /></Field>
-        <Field label="Gateway port"><input style={inputStyle} type="number" value={settings.ibkr.ibkr_port} onChange={(e) => updateField('ibkr', 'ibkr_port', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Client ID"><input style={inputStyle} type="number" value={settings.ibkr.ibkr_client_id} onChange={(e) => updateField('ibkr', 'ibkr_client_id', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Historical max concurrent"><input style={inputStyle} type="number" value={settings.ibkr.ibkr_historical_max_concurrent} onChange={(e) => updateField('ibkr', 'ibkr_historical_max_concurrent', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Historical sleep seconds"><input style={inputStyle} type="number" value={settings.ibkr.ibkr_historical_sleep_seconds} onChange={(e) => updateField('ibkr', 'ibkr_historical_sleep_seconds', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Historical duration"><input style={inputStyle} value={settings.ibkr.ibkr_historical_duration} onChange={(e) => updateField('ibkr', 'ibkr_historical_duration', e.target.value)} disabled={loading} /></Field>
-        <Field label="Historical bar size"><input style={inputStyle} value={settings.ibkr.ibkr_historical_bar_size} onChange={(e) => updateField('ibkr', 'ibkr_historical_bar_size', e.target.value)} disabled={loading} /></Field>
-        <Field label="Use RTH"><input type="checkbox" checked={Boolean(settings.ibkr.ibkr_historical_use_rth)} onChange={(e) => updateField('ibkr', 'ibkr_historical_use_rth', e.target.checked, 'checkbox')} disabled={loading} /></Field>
-        <Field label="What to show"><input style={inputStyle} value={settings.ibkr.ibkr_historical_what_to_show} onChange={(e) => updateField('ibkr', 'ibkr_historical_what_to_show', e.target.value)} disabled={loading} /></Field>
-        <Field label="Momentum lookback days"><input style={inputStyle} type="number" value={settings.ibkr.ibkr_momentum_lookback_days} onChange={(e) => updateField('ibkr', 'ibkr_momentum_lookback_days', e.target.value, 'number')} disabled={loading} /></Field>
       </Section>
 
       <Section title="Live trading" description="Safety switches and testnet/live execution controls.">

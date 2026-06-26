@@ -51,7 +51,6 @@ export default function App() {
           <NavLink to="/momentum" onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/momentum-candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/momentum-backtest" onClick={closeMenu}>Backtest</NavLink>
-          <NavLink to="/momentum-etf-stocks" onClick={closeMenu}>ETF & Stocks</NavLink>
 
           <div style={groupTitleStyle}>Ops / Admin</div>
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
