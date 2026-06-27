@@ -1,4 +1,9 @@
-from fastapi import APIRouter, Depends, Response
+from datetime import datetime, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
@@ -11,6 +16,41 @@ from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
 
 router = APIRouter()
+
+
+class ExternalMarketCandleIn(BaseModel):
+    timestamp: datetime | None = None
+    open_time: int | None = None
+    close_time: int | None = None
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    adjusted_close: Decimal | None = None
+    volume: Decimal | None = None
+
+    @model_validator(mode="after")
+    def require_timestamp(self):
+        if self.timestamp is None and self.open_time is None:
+            raise ValueError("timestamp or open_time is required")
+        if self.timestamp is None and self.open_time is not None:
+            seconds = float(self.open_time) / 1000 if self.open_time > 10_000_000_000 else float(self.open_time)
+            self.timestamp = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        if self.timestamp is not None and self.timestamp.tzinfo is not None:
+            self.timestamp = self.timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+        return self
+
+
+class ExternalMarketCandleIngestRequest(BaseModel):
+    symbol: str | None = None
+    provider_symbol: str | None = None
+    asset_id: str | None = None
+    asset_type: str | None = None
+    provider: str = "IBKR"
+    timeframe: str = "1d"
+    run_type: str = "external_ingest"
+    queue_analysis: bool = False
+    candles: list[ExternalMarketCandleIn] = Field(default_factory=list)
 
 
 def _delete_table_rows(db: Session, table_name: str) -> int:
@@ -140,6 +180,69 @@ async def stocks_etfs_export_csv(kind: str = 'results', engine: str | None = Non
     else:
         rows = await repo.latest_analysis_results(engine_name=engine, universe_name=universe, asset_type=asset_type, limit=limit)
     return _csv(rows)
+
+
+@router.post('/api/v1/stocks-etfs/ibkr/candles')
+async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Session = Depends(get_db)):
+    """Ingest externally collected IBKR candles into the stocks/ETFs market-data tables."""
+    repo = _repo(db)
+    provider_symbol = payload.provider_symbol or payload.symbol
+    asset = await repo.find_market_asset_for_ingest(
+        asset_id=payload.asset_id,
+        provider_symbol=provider_symbol,
+        symbol=payload.symbol,
+        asset_type=payload.asset_type,
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="No market asset matched asset_id, provider_symbol, or symbol")
+
+    run_id = await repo.create_import_run(
+        payload.provider.upper(),
+        payload.run_type,
+        metadata={
+            "source": "external",
+            "endpoint": "/api/v1/stocks-etfs/ibkr/candles",
+            "asset_id": str(asset["id"]),
+            "symbol": payload.symbol,
+            "provider_symbol": provider_symbol,
+            "timeframe": payload.timeframe,
+            "received": len(payload.candles),
+        },
+    )
+    candles = [SimpleNamespace(**candle.model_dump()) for candle in payload.candles]
+    upserted = await repo.upsert_market_candles(
+        asset["id"],
+        payload.provider.upper(),
+        asset.get("provider_symbol") or provider_symbol or payload.symbol or "",
+        payload.timeframe,
+        candles,
+    )
+    queued_job_id = None
+    if payload.queue_analysis:
+        queued_job_id = await repo.create_job_request(
+            "analyze",
+            payload={
+                "provider": payload.provider.upper(),
+                "asset_id": str(asset["id"]),
+                "symbol": asset.get("symbol"),
+                "provider_symbol": asset.get("provider_symbol"),
+                "timeframe": payload.timeframe,
+            },
+        )
+    await repo.finish_import_run(run_id, "SUCCESS", total_assets=1, success_count=1, failed_count=0)
+    db.commit()
+    return {
+        "ok": True,
+        "provider": payload.provider.upper(),
+        "asset_id": str(asset["id"]),
+        "symbol": asset.get("symbol"),
+        "provider_symbol": asset.get("provider_symbol"),
+        "timeframe": payload.timeframe,
+        "received": len(payload.candles),
+        "upserted": upserted,
+        "import_run_id": run_id,
+        "queued_analysis_job_id": queued_job_id,
+    }
 
 
 @router.post('/admin/market-data/test-eodhd')
