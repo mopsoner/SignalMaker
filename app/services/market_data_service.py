@@ -27,9 +27,34 @@ class MarketDataService:
             "number_of_trades": "INTEGER NOT NULL DEFAULT 0",
             "taker_buy_base_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
             "taker_buy_quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "provider": "VARCHAR(32) NOT NULL DEFAULT 'BINANCE'",
+            "asset_id": "VARCHAR(96)",
+            "provider_symbol": "VARCHAR(64)",
+            "asset_type": "VARCHAR(32)",
+            "currency": "VARCHAR(16)",
+            "exchange": "VARCHAR(64)",
+            "universe": "VARCHAR(128)",
+            "metadata_json": "JSON",
         }
         for column, definition in columns.items():
             self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}"))
+        try:
+            self.db.execute(text("""
+                CREATE TABLE IF NOT EXISTS market_data_import_runs (
+                    id VARCHAR(96) PRIMARY KEY,
+                    provider VARCHAR(32),
+                    run_type VARCHAR(64),
+                    status VARCHAR(32),
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    total_assets INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    error_message TEXT
+                )
+            """))
+        except Exception:
+            self.db.rollback()
         self.db.commit()
 
     def list_symbols(self, limit: int | None = None) -> list[str]:
@@ -67,12 +92,15 @@ class MarketDataService:
         stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
-    def candle_summary(self, symbol: str | None = None) -> list[dict[str, Any]]:
+    def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
         filters = "WHERE 1=1"
         params: dict = {}
         if symbol:
             filters += " AND symbol = :symbol"
             params["symbol"] = symbol.upper()
+        if provider:
+            filters += " AND provider = :provider"
+            params["provider"] = provider.upper()
         sql = text(f"""
             SELECT
                 symbol,
@@ -197,7 +225,33 @@ class MarketDataService:
             row.number_of_trades = int(candle.get("number_of_trades") or 0)
             row.taker_buy_base_volume = float(candle.get("taker_buy_base_volume") or 0.0)
             row.taker_buy_quote_volume = float(candle.get("taker_buy_quote_volume") or 0.0)
+            row.provider = str(candle.get("provider") or "BINANCE").upper()
+            row.asset_id = candle.get("asset_id")
+            row.provider_symbol = candle.get("provider_symbol")
+            row.asset_type = candle.get("asset_type")
+            row.currency = candle.get("currency")
+            row.exchange = candle.get("exchange")
+            row.universe = candle.get("universe")
+            row.metadata_json = candle.get("metadata_json")
             row.ingested_at = datetime.now(timezone.utc)
             count += 1
         self.db.commit()
         return count
+
+
+    def count_market_candles_by_provider(self, provider: str) -> int:
+        return int(self.db.execute(text("SELECT COUNT(*) FROM market_candles WHERE provider = :provider"), {"provider": provider.upper()}).scalar() or 0)
+
+    def last_import_run(self, provider: str = "IBKR") -> dict[str, Any] | None:
+        try:
+            row = self.db.execute(text("SELECT * FROM market_data_import_runs WHERE provider = :provider ORDER BY started_at DESC LIMIT 1"), {"provider": provider.upper()}).mappings().first()
+            return dict(row) if row else None
+        except Exception:
+            self.db.rollback()
+            return None
+
+    def candle_quality(self, provider: str = "IBKR") -> dict[str, Any]:
+        return {"provider": provider.upper(), "candles": self.count_market_candles_by_provider(provider)}
+
+    def latest_analysis_results(self, provider: str | None = None) -> list[dict[str, Any]]:
+        return []
