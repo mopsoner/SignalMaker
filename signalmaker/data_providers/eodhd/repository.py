@@ -105,6 +105,28 @@ class EODHDRepository:
             rows = [r for r in rows if r.get("provider_symbol") in wanted]
         return rows
 
+
+    async def find_market_asset_for_ingest(self, *, provider_symbol: str | None = None, symbol: str | None = None, asset_id=None, asset_type: str | None = None):
+        query = "SELECT a.*, u.name AS universe_name FROM market_assets a LEFT JOIN market_universes u ON u.id = a.universe_id WHERE 1=1"
+        params: dict[str, Any] = {}
+        if asset_id is not None:
+            query += " AND a.id = :asset_id"; params["asset_id"] = asset_id
+        else:
+            candidates = [value.upper() for value in (provider_symbol, symbol) if value]
+            if not candidates:
+                return None
+            symbol_filters = []
+            for index, candidate in enumerate(candidates):
+                key = f"symbol_{index}"
+                symbol_filters.append(f"upper(a.provider_symbol) = :{key} OR upper(a.symbol) = :{key}")
+                params[key] = candidate
+            query += " AND (" + " OR ".join(symbol_filters) + ")"
+            if asset_type:
+                query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
+        query += " ORDER BY a.enabled DESC, a.priority ASC, a.symbol ASC LIMIT 1"
+        row = self.db.execute(text(query), params).first()
+        return _row(row) if row else None
+
     async def list_enabled_assets_by_universe(self, universe_name: str, limit: int | None = None):
         return await self.list_enabled_market_assets(universe_name=universe_name, limit=limit)
 
