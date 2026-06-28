@@ -17,6 +17,10 @@ REQUIRED_PACKAGES=(
   build-essential
 )
 
+apt_install() {
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+}
+
 if ! command -v sudo >/dev/null 2>&1; then
   echo "sudo is required to install SignalMaker on Raspberry Pi" >&2
   exit 1
@@ -29,6 +33,14 @@ fi
 
 echo "Installing Raspberry Pi system dependencies..."
 sudo apt-get update
+apt_install --fix-broken
+apt_install postgresql-common
+if ! command -v pg_lsclusters >/dev/null 2>&1; then
+  echo "pg_lsclusters was not installed by postgresql-common; repairing PostgreSQL packages..." >&2
+  sudo dpkg --configure -a
+  apt_install --reinstall postgresql-common
+fi
+apt_install "${REQUIRED_PACKAGES[@]}"
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${REQUIRED_PACKAGES[@]}"
 
 echo "Enabling and starting PostgreSQL..."
