@@ -61,6 +61,19 @@ bash run.sh api
 bash scripts/start_frontend.sh
 ```
 
+
+## Raspberry Pi install
+Run the full Raspberry Pi setup from a fresh checkout with one command:
+
+```bash
+cd ~/Desktop
+git clone -b "raspberry/executor-app" https://github.com/mopsoner/SignalMaker.git SignalMaker
+cd SignalMaker
+bash scripts/install_raspberry.sh
+```
+
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, initializes the schema, and prints the commands to start the API and worker loops.
+
 ## VM deploy helper
 ```bash
 bash scripts/deploy_vm.sh
