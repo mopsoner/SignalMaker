@@ -32,7 +32,7 @@ git fetch "$REMOTE" "$BRANCH" || {
 }
 
 # Keep runtime/private files and generated state, but remove local code changes
-# that would block updates. This avoids conflicts on tui.sh/run_bot_service.sh.
+# that would block updates. This avoids conflicts on root launcher scripts.
 git checkout "$BRANCH" 2>/dev/null || git checkout -B "$BRANCH" "$REMOTE/$BRANCH" || {
   echo "$LOG_PREFIX checkout failed, keeping current version"
   exit 0
@@ -54,7 +54,7 @@ git clean -fd \
   -e '*.sqlite' \
   -e '*.sqlite3' || true
 
-chmod +x run_bot_service.sh tui.sh go.sh go_install.sh scripts/install_system_start.sh scripts/self_update.sh 2>/dev/null || true
+chmod +x install_raspberry_executor.sh run.sh tui.sh scripts/*.sh 2>/dev/null || true
 
 new_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
 if [ "$current_sha" != "$new_sha" ]; then

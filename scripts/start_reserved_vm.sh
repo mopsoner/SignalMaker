@@ -4,9 +4,9 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 
-bash run.sh init-db
+python -m scripts.init_db
 
-bash run.sh api &
+bash scripts/start_api.sh &
 API_PID=$!
 
 bash scripts/start_pipeline_worker.sh &

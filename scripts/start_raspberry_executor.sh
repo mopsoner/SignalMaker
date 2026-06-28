@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-set -e
-cd "$(dirname "$0")"
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$APP_DIR"
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
@@ -19,4 +20,4 @@ if [ ! -f .env ]; then
 fi
 
 python -m raspberry_executor.install_sqlite
-python -m raspberry_executor.run_all_v2
+exec python -m raspberry_executor.run_all_v2

@@ -38,7 +38,7 @@ fi
 info "5) Verify systemd service file"
 [ -f "$SERVICE_FILE" ] || fail "Missing $SERVICE_FILE after pull"
 
-if ! grep -Eq "run_bot_service.sh|raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
+if ! grep -Eq "scripts/start_raspberry_executor.sh|raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
   fail "$SERVICE_FILE does not start the Raspberry executor bundle"
 fi
 
@@ -65,13 +65,13 @@ info "12) ExecStart check"
 sudo systemctl cat "$SERVICE_NAME" | grep ExecStart || true
 
 info "13) Recent relevant logs"
-journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|momentum decision|order monitor|Raspberry margin executor started|run_all_v2|run_bot_service" || true
+journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|momentum decision|order monitor|Raspberry margin executor started|run_all_v2|start_raspberry_executor" || true
 
 info "14) Quick runtime checks"
-if sudo systemctl cat "$SERVICE_NAME" | grep -Eq "run_bot_service.sh|raspberry_executor.run_all_v2"; then
+if sudo systemctl cat "$SERVICE_NAME" | grep -Eq "scripts/start_raspberry_executor.sh|raspberry_executor.run_all_v2"; then
   echo "OK: systemd starts the Raspberry executor bundle"
 else
-  warn "systemd does not show run_bot_service.sh or raspberry_executor.run_all_v2"
+  warn "systemd does not show scripts/start_raspberry_executor.sh or raspberry_executor.run_all_v2"
 fi
 
 if journalctl -u "$SERVICE_NAME" -n 200 --no-pager | grep -q "settings bootstrap startup"; then
@@ -97,7 +97,7 @@ cat <<'EOF'
 Done.
 
 Expected service line:
-ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/run_bot_service.sh
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_raspberry_executor.sh
 
 The service script then starts:
 python -m raspberry_executor.run_all_v2

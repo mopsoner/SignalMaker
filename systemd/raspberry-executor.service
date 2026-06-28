@@ -8,7 +8,7 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/Desktop/SignalMaker
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/run_bot_service.sh
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_raspberry_executor.sh
 Restart=always
 RestartSec=10
 
