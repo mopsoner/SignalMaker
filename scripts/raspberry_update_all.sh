@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/pi/Desktop/SignalMaker}"
-BRANCH="${BRANCH:-main}"
+BRANCH="${BRANCH:-raspberry/executor-app}"
 LOG_FILE="${PROJECT_DIR}/logs/one_click_update.log"
 
 mkdir -p "${PROJECT_DIR}/logs"

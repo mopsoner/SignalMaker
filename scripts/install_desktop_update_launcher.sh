@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$HOME/Desktop/SignalMaker}"
 DESKTOP_DIR="${DESKTOP_DIR:-$HOME/Desktop}"
-BRANCH="${BRANCH:-main}"
+BRANCH="${BRANCH:-raspberry/executor-app}"
 UPDATE_LAUNCHER_PATH="$DESKTOP_DIR/SignalMaker Update and Restart.desktop"
 TUI_LAUNCHER_PATH="$DESKTOP_DIR/SignalMaker Open TUI.desktop"
 OLD_UPDATE_LAUNCHER_PATH="$DESKTOP_DIR/SignalMaker Update.desktop"

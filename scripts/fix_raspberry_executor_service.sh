@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/pi/SignalMaker}"
-BRANCH="${BRANCH:-main}"
+BRANCH="${BRANCH:-raspberry/executor-app}"
 SERVICE_NAME="${SERVICE_NAME:-raspberry-executor}"
 SERVICE_FILE="systemd/raspberry-executor.service"
 SYSTEMD_TARGET="/etc/systemd/system/${SERVICE_NAME}.service"
