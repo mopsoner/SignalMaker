@@ -27,7 +27,7 @@ Wants=network-online.target
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=/bin/bash ${APP_DIR}/run_bot_service.sh
+ExecStart=/bin/bash ${APP_DIR}/scripts/start_raspberry_executor.sh
 Restart=always
 RestartSec=8
 Environment=PYTHONUNBUFFERED=1
