@@ -2,12 +2,10 @@ import os
 import time
 from datetime import datetime, timezone
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
 from raspberry_executor.config import load_settings
+from raspberry_executor.exchange_factory import create_margin_exchange
 from raspberry_executor.local_candidate_store import mark_candidate_executed, upsert_remote_candidates
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, margin_isolated, shorts_enabled
 from raspberry_executor.pending_trade_queue import add_pending, bump_pending, list_pending, remove_pending
@@ -316,15 +314,13 @@ def main() -> None:
     if not margin_enabled():
         logger.warning("margin executor started while MARGIN_MODE_ENABLED is false")
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run or margin_dry_run())
-    rules = BinanceSymbolRules(settings.binance_base_url)
-    margin = MarginClient(binance, isolated=margin_isolated(), dry_run=settings.dry_run or margin_dry_run())
+    binance, margin, rules = create_margin_exchange(settings, isolated=margin_isolated(), dry_run=margin_dry_run())
     manager = MarginOrderManager(binance, margin, rules)
     spot_manager = SpotOrderManager(binance, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
+    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", getattr(binance, "exchange_name", "binance"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)

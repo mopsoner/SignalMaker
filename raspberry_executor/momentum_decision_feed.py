@@ -7,6 +7,7 @@ import requests
 
 from raspberry_executor.binance_client import BinanceClient
 from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.exchange_factory import create_margin_exchange, create_spot_exchange
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
@@ -344,6 +345,15 @@ def _is_cross_margin_position(position: dict[str, Any] | None) -> bool:
     return False
 
 
+def _cross_margin_stack(settings):
+    if hasattr(settings, "exchange"):
+        return create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
+    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    rules = BinanceSymbolRules(settings.binance_base_url)
+    margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    return binance, margin, rules
+
+
 def _safe_margin_quote_notional(margin: MarginClient, symbol: str, quote: str, desired: float, *, use_full_available: bool = False) -> tuple[float, float]:
     desired = max(0.0, float(desired or 0.0))
     if margin.dry_run:
@@ -369,7 +379,10 @@ def _buy_symbol_cross_margin(
     use_available_quote: bool = True,
 ) -> str:
     cid = _candidate_id(symbol)
-    margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    if hasattr(settings, "exchange"):
+        binance, margin, rules = _cross_margin_stack(settings)
+    else:
+        margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     margin.ensure_isolated_account(symbol)
 
     desired_notional = float(settings.order_quote_amount)
@@ -439,8 +452,12 @@ def _margin_wallet_value(margin: MarginClient, rules: BinanceSymbolRules, binanc
 def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
-    quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
-    margin = MarginClient(binance, isolated=False, dry_run=getattr(load_settings(), "dry_run", False) or margin_dry_run())
+    settings = load_settings()
+    quote = _quote_asset(symbol, settings.quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
+    if hasattr(settings, "exchange"):
+        binance, margin, rules = _cross_margin_stack(settings)
+    else:
+        margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     margin.ensure_isolated_account(symbol)
     base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
@@ -1047,8 +1064,11 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
     settings = load_settings()
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
-    rules = BinanceSymbolRules(settings.binance_base_url)
+    if hasattr(settings, "exchange"):
+        binance, rules = create_spot_exchange(settings)
+    else:
+        binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
+        rules = BinanceSymbolRules(settings.binance_base_url)
     state = StateStore()
     action = str(decision.get("action") or "WAIT").upper()
     should_trade = bool(decision.get("should_trade"))
