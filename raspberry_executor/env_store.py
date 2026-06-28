@@ -12,9 +12,13 @@ DEFAULTS = {
     "QUOTE_ASSETS": "USDC",
     "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "900",
+    "EXECUTION_EXCHANGE": "binance",
     "BINANCE_BASE_URL": "https://api.binance.com",
     "BINANCE_API_KEY": "",
     "BINANCE_SECRET_KEY": "",
+    "KRAKEN_BASE_URL": "https://api.kraken.com",
+    "KRAKEN_API_KEY": "",
+    "KRAKEN_SECRET_KEY": "",
     "CANDLE_FEED_ENABLED": "true",
     "CANDLE_FEED_INTERVALS": "15m,1h,4h",
     "CANDLE_FEED_LIMIT": "50",
@@ -49,7 +53,7 @@ LEGACY_KEYS = {
     "ALLOW_SHORTS",
 }
 
-SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET_KEY", "ADMIN_PASSWORD"}
+SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET_KEY", "KRAKEN_API_KEY", "KRAKEN_SECRET_KEY", "ADMIN_PASSWORD"}
 
 
 def _normalize_quotes(value: str | None) -> str:
@@ -106,9 +110,13 @@ def write_env(values: dict[str, str]) -> None:
         f"ORDER_QUOTE_AMOUNT={merged['ORDER_QUOTE_AMOUNT']}",
         f"MAX_CANDIDATE_AGE_SECONDS={merged['MAX_CANDIDATE_AGE_SECONDS']}",
         "",
+        f"EXECUTION_EXCHANGE={merged['EXECUTION_EXCHANGE']}",
         f"BINANCE_BASE_URL={merged['BINANCE_BASE_URL']}",
         f"BINANCE_API_KEY={merged['BINANCE_API_KEY']}",
         f"BINANCE_SECRET_KEY={merged['BINANCE_SECRET_KEY']}",
+        f"KRAKEN_BASE_URL={merged['KRAKEN_BASE_URL']}",
+        f"KRAKEN_API_KEY={merged['KRAKEN_API_KEY']}",
+        f"KRAKEN_SECRET_KEY={merged['KRAKEN_SECRET_KEY']}",
         "",
         f"CANDLE_FEED_ENABLED={merged['CANDLE_FEED_ENABLED']}",
         f"CANDLE_FEED_INTERVALS={merged['CANDLE_FEED_INTERVALS']}",

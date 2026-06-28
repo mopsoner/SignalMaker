@@ -82,6 +82,13 @@ class MarginOrderManager:
         avg = BinanceClient.average_fill_price(payload, fallback=None)
         if avg is not None:
             return float(avg)
+        descr = payload.get("descr") if isinstance(payload.get("descr"), dict) else {}
+        try:
+            price = payload.get("price") or descr.get("price")
+            if price and float(price) > 0:
+                return float(price)
+        except Exception:
+            pass
         try:
             qty = float(payload.get("executedQty") or 0)
             quote_qty = float(payload.get("cummulativeQuoteQty") or payload.get("cumulativeQuoteQty") or 0)

@@ -16,6 +16,10 @@ class Settings:
     binance_base_url: str
     binance_api_key: str
     binance_secret_key: str
+    exchange: str
+    kraken_base_url: str
+    kraken_api_key: str
+    kraken_secret_key: str
     ibkr_market_feed_enabled: bool
     ibkr_cp_base_url: str
     ibkr_cp_verify_ssl: bool
@@ -82,6 +86,10 @@ def load_settings() -> Settings:
         binance_base_url=str(values.get("BINANCE_BASE_URL", "https://api.binance.com")).rstrip("/"),
         binance_api_key=str(values.get("BINANCE_API_KEY", "")),
         binance_secret_key=str(values.get("BINANCE_SECRET_KEY", "")),
+        exchange=str(values.get("EXECUTION_EXCHANGE", "binance") or "binance").strip().lower(),
+        kraken_base_url=str(values.get("KRAKEN_BASE_URL", "https://api.kraken.com")).rstrip("/"),
+        kraken_api_key=str(values.get("KRAKEN_API_KEY", "")),
+        kraken_secret_key=str(values.get("KRAKEN_SECRET_KEY", "")),
         ibkr_market_feed_enabled=_bool(values.get("IBKR_MARKET_FEED_ENABLED"), default=False),
         ibkr_cp_base_url=str(values.get("IBKR_CP_BASE_URL", "https://localhost:5000/v1/api")).rstrip("/"),
         ibkr_cp_verify_ssl=_bool(values.get("IBKR_CP_VERIFY_SSL"), default=False),

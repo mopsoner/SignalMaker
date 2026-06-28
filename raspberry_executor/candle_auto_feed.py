@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from raspberry_executor.candle_push_once import fetch_klines
+from raspberry_executor.candle_push_once import fetch_exchange_klines
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ROOT, ensure_env, read_env
 from raspberry_executor.feed_run_store import record_feed_run
@@ -177,6 +177,62 @@ def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], lim
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
+def _kraken_asset(asset: str) -> str:
+    value = str(asset or "").upper()
+    if value == "XBT":
+        return "BTC"
+    return value.lstrip("XZ")
+
+
+def _kraken_asset_pairs(base_url: str) -> dict:
+    response = requests.get(f"{base_url.rstrip('/')}/0/public/AssetPairs", params={"assetVersion": 1}, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    errors = data.get("error") or []
+    if errors:
+        raise RuntimeError(f"Kraken AssetPairs failed errors={errors}")
+    return data.get("result") or {}
+
+
+def discover_kraken_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
+    symbols = []
+    for key, row in _kraken_asset_pairs(base_url).items():
+        status = str(row.get("status") or "online").lower()
+        quote = _kraken_asset(row.get("quote"))
+        if status not in {"online", ""} or quote not in quotes:
+            continue
+        symbols.append(str(row.get("altname") or key).upper().replace("/", ""))
+    symbols = sorted(set(symbols))
+    return symbols[:limit] if limit and limit > 0 else symbols
+
+
+def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
+    symbols = []
+    for key, row in _kraken_asset_pairs(base_url).items():
+        status = str(row.get("status") or "online").lower()
+        quote = _kraken_asset(row.get("quote"))
+        leverage_buy = row.get("leverage_buy") or []
+        leverage_sell = row.get("leverage_sell") or []
+        if status not in {"online", ""} or quote not in quotes:
+            continue
+        if not leverage_buy or not leverage_sell:
+            continue
+        symbols.append(str(row.get("altname") or key).upper().replace("/", ""))
+    symbols = sorted(set(symbols))
+    return symbols[:limit] if limit and limit > 0 else symbols
+
+
+def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, limit: int = 0) -> tuple[list[str], str]:
+    exchange = str(getattr(settings, "exchange", "binance") or "binance").lower()
+    if exchange in {"kraken", "kraken_pro"}:
+        if mode in {"cross", "isolated"}:
+            return discover_kraken_margin_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_margin"
+        return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
+    return discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=limit, api_key=settings.binance_api_key)
+
+
 def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0, api_key: str | None = None) -> tuple[list[str], str]:
     if mode == "cross":
         try:
@@ -198,7 +254,7 @@ def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
     mode = execution_mode()
-    symbols, source = discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=max_symbols, api_key=settings.binance_api_key)
+    symbols, source = discover_symbols_for_exchange(settings, quote_assets, mode, limit=max_symbols)
     return symbols, quote_assets, f"{mode}:{source}"
 
 
@@ -213,7 +269,9 @@ def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, sym
     latest = client.latest_candle(symbol, interval)
     start_time = _start_time_from_latest(latest)
     limiter.wait()
-    candles = fetch_klines(settings.binance_base_url, symbol, interval, limit, start_time=start_time)
+    exchange = getattr(settings, "exchange", "binance")
+    base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url
+    candles = fetch_exchange_klines(exchange, base_url, symbol, interval, limit, start_time=start_time)
     if not candles:
         return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_close_time": latest.get("close_time") if latest else None}
     if start_time is not None:
@@ -254,7 +312,13 @@ def run_once() -> dict:
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
     max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
-    requests_per_minute, binance_doc_weight_limit_1m, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
+    exchange = str(getattr(settings, "exchange", "binance") or "binance").lower()
+    if exchange in {"kraken", "kraken_pro"}:
+        binance_doc_weight_limit_1m = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
+        weight_ratio = 1.0
+        requests_per_minute = binance_doc_weight_limit_1m
+    else:
+        requests_per_minute, binance_doc_weight_limit_1m, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
     retry_queue = _load_retry_queue()
 
     if not symbols:

@@ -1,8 +1,8 @@
 import os
 import time
+from typing import Any
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.exchange_factory import create_spot_exchange
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.pending_trade_queue import add_pending, bump_pending, list_pending, remove_pending
@@ -29,14 +29,14 @@ def quote_asset_for_symbol(symbol: str, quote_assets: list[str]) -> str | None:
     return None
 
 
-def take_profit_window_still_valid(binance: BinanceClient, symbol: str, target_price: float) -> tuple[bool, float, str]:
+def take_profit_window_still_valid(binance: Any, symbol: str, target_price: float) -> tuple[bool, float, str]:
     current = binance.current_price(symbol)
     if not (float(target_price) > current):
         return False, current, f"invalid_take_profit_window target={target_price} current={current}"
     return True, current, "ok"
 
 
-def sell_all_spot_balance(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, candidate: dict, symbol: str) -> str:
+def sell_all_spot_balance(binance: Any, rules: Any, state: StateStore, candidate: dict, symbol: str) -> str:
     candidate_id = candidate["candidate_id"]
     base = rules.base_asset(symbol)
     free_qty = binance.free_balance(base)
@@ -162,8 +162,7 @@ def process_pending(settings, binance, rules, order_manager, state, guard) -> di
 def main() -> None:
     settings = load_settings()
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
-    rules = BinanceSymbolRules(settings.binance_base_url)
+    binance, rules = create_spot_exchange(settings)
     order_manager = SpotOrderManager(binance, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)

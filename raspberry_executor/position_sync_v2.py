@@ -2,12 +2,10 @@ import os
 import time
 from datetime import datetime, timezone
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.exchange_factory import create_margin_exchange
 from raspberry_executor.candidate_levels import latest_levels_for_symbol
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
-from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import margin_dry_run, margin_isolated
 from raspberry_executor.spot_order_manager import SpotOrderManager
@@ -500,8 +498,7 @@ def _handle_filled_take_profit(candidate_id: str, position: dict, tp: dict, stat
 
 def sync_open_positions():
     settings = load_settings()
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run or margin_dry_run())
-    rules = BinanceSymbolRules(settings.binance_base_url)
+    binance, default_margin, rules = create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
     spot_manager = SpotOrderManager(binance, rules)
     state = StateStore()
     checked = closed = missing_tp = replayed_tp = attached_existing = replay_skipped = replay_blocked = ghost_removed = momentum_tracked = partial_filled = 0
@@ -513,7 +510,10 @@ def sync_open_positions():
             continue
 
         use_margin = _is_margin_position(position)
-        margin = MarginClient(binance, isolated=_is_isolated_position(position), dry_run=settings.dry_run or margin_dry_run())
+        if _is_isolated_position(position) == getattr(default_margin, "isolated", False):
+            margin = default_margin
+        else:
+            _, margin, _ = create_margin_exchange(settings, isolated=_is_isolated_position(position), dry_run=margin_dry_run())
         margin_manager = MarginOrderManager(binance, margin, rules)
 
         if _is_momentum_position(candidate_id, position):
