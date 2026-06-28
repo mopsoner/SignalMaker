@@ -25,11 +25,8 @@ fi
 echo "Initializing SQLite database..."
 python -m raspberry_executor.install_sqlite
 
-echo "Running Raspberry Binance smoke test..."
-python -m raspberry_executor.binance_smoke_test
-
-echo "Running Raspberry quote assets smoke test..."
-python -m raspberry_executor.quote_assets_smoke_test
+echo "Running Raspberry exchange smoke test..."
+python -m raspberry_executor.exchange_smoke_test
 
 echo "Web UI: http://$(hostname -I | awk '{print $1}'):8090"
 echo "Admin:  http://$(hostname -I | awk '{print $1}'):8090/admin"

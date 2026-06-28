@@ -66,7 +66,7 @@ def main() -> None:
     logger.info("momentum decision thread started")
 
     threading.Thread(target=order_monitor_loop, daemon=True).start()
-    logger.info("order monitor thread started for Binance position sync")
+    logger.info("order monitor thread started for configured exchange position sync")
 
     threading.Thread(target=candidate_status_sync_loop, daemon=True).start()
     logger.info("candidate status sync thread started for take-profit protected positions")
