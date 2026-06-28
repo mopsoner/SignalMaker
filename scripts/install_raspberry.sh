@@ -41,6 +41,7 @@ if ! command -v pg_lsclusters >/dev/null 2>&1; then
   apt_install --reinstall postgresql-common
 fi
 apt_install "${REQUIRED_PACKAGES[@]}"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${REQUIRED_PACKAGES[@]}"
 
 echo "Enabling and starting PostgreSQL..."
 sudo systemctl enable postgresql
