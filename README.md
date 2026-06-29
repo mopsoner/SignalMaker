@@ -29,7 +29,15 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 ## Frontend
 The React/Vite app lives in `frontend/`.
 
-Start it with:
+`scripts/start_frontend.sh` serves only the prebuilt `frontend/dist` directory
+with Python's static file server. It does not start Vite or npm.
+
+Build the frontend on a compatible machine with:
+```bash
+bash scripts/build_frontend.sh
+```
+
+Start the frontend with:
 ```bash
 bash scripts/start_frontend.sh
 ```
@@ -72,7 +80,22 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, installs the React/Vite frontend dependencies, initializes the schema, and enables the SignalMaker systemd services.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite or npm for the frontend on the Raspberry Pi; copy a prebuilt `frontend/dist` when you want the UI. The backend API, executor, pipeline, and scheduler services can still run without the frontend.
+
+### Prebuilt frontend for older Raspberry Pi devices
+On older Raspberry Pi devices / `armv6l`, building Vite/esbuild directly on the Raspberry Pi can crash with `Bus error`. Build on a compatible machine, then copy the generated `frontend/dist` directory to the Raspberry Pi.
+
+On a compatible machine:
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Then copy the `frontend/dist` directory to the Raspberry Pi checkout:
+```bash
+scp -r frontend/dist pi@IP_DU_RASPBERRY:~/Desktop/SignalMaker/frontend/dist
+```
 
 ### Raspberry UI
 After installation, start the backend API and frontend UI services:
@@ -89,10 +112,18 @@ Open SignalMaker from another device on the same network:
 Useful Raspberry debug commands:
 
 ```bash
+uname -m
 systemctl status signalmaker-api
 systemctl status signalmaker-frontend
 journalctl -u signalmaker-frontend -f
 curl http://localhost:8080/healthz
+```
+
+To keep the Raspberry Pi running without the UI temporarily, disable only the frontend service:
+
+```bash
+sudo systemctl stop signalmaker-frontend
+sudo systemctl disable signalmaker-frontend
 ```
 
 ## VM deploy helper

@@ -15,8 +15,6 @@ REQUIRED_PACKAGES=(
   libpq-dev
   python3-dev
   build-essential
-  nodejs
-  npm
 )
 
 apt_install() {
@@ -71,14 +69,14 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements-raspberry.txt
 
-echo "Installing frontend dependencies..."
-cd "$APP_DIR/frontend"
-npm install
-if ! npm run build; then
-  echo "WARNING: Frontend build failed. Continuing installation because Raspberry Pi resources may be limited." >&2
-  echo "WARNING: The frontend service will still run the Vite dev server on port ${FRONTEND_PORT:-3000}." >&2
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+if [ "$ARCH" = "armv6l" ]; then
+  echo "WARNING: ARMv6 detected. Build the frontend elsewhere and copy frontend/dist to this Raspberry Pi." >&2
 fi
-cd "$APP_DIR"
+
+if [ ! -d "$APP_DIR/frontend/dist" ]; then
+  echo "WARNING: frontend/dist is missing. The frontend service will stay stopped until dist is copied." >&2
+fi
 
 mkdir -p logs data
 
@@ -171,7 +169,7 @@ After=network.target signalmaker-api.service
 Type=simple
 WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
-Restart=always
+Restart=on-failure
 RestartSec=5
 Environment=FRONTEND_PORT=3000
 Environment=VITE_API_BASE=http://127.0.0.1:8080

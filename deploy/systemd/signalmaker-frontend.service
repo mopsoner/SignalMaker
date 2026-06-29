@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/home/pi/Desktop/SignalMaker
 ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_frontend.sh
-Restart=always
+Restart=on-failure
 RestartSec=5
 Environment=FRONTEND_PORT=3000
 Environment=VITE_API_BASE=http://127.0.0.1:8080
