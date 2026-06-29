@@ -1,5 +1,5 @@
 (function () {
-  var apiBase = window.SIGNALMAKER_API_BASE || '';
+  var apiBase = window.SIGNALMAKER_API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8080');
 
   function text(value) {
     if (value === null || value === undefined || value === '') return '-';
