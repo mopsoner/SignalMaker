@@ -23,16 +23,31 @@ USAGE
 wait_for_api() {
   local port="${APP_PORT:-5000}"
   local health_url="http://127.0.0.1:${port}/healthz"
-  local timeout_seconds="${API_STARTUP_TIMEOUT:-60}"
+  local timeout_seconds="${API_STARTUP_TIMEOUT:-300}"
+  local check_interval_seconds="${API_STARTUP_CHECK_INTERVAL:-30}"
+
+  if [ "$timeout_seconds" -lt 300 ]; then
+    timeout_seconds=300
+  fi
+
   local deadline=$((SECONDS + timeout_seconds))
 
   echo "Waiting for SignalMaker backend at ${health_url} before starting workers/executor and frontend..."
+  echo "Health check timeout: ${timeout_seconds}s; interval: ${check_interval_seconds}s."
   while [ "$SECONDS" -lt "$deadline" ]; do
     if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
       echo "SignalMaker backend is ready; starting workers/executor and frontend."
       return 0
     fi
-    sleep 1
+    local remaining=$((deadline - SECONDS))
+    if [ "$remaining" -le 0 ]; then
+      break
+    fi
+    if [ "$remaining" -lt "$check_interval_seconds" ]; then
+      sleep "$remaining"
+    else
+      sleep "$check_interval_seconds"
+    fi
   done
 
   echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; workers/executor and frontend will not start." >&2

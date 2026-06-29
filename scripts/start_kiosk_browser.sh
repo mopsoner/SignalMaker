@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-URL="${SIGNALMAKER_KIOSK_URL:-http://127.0.0.1:8090/positions}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+URL="${SIGNALMAKER_KIOSK_URL:-http://127.0.0.1:${FRONTEND_PORT}/positions.html}"
 
 export DISPLAY="${DISPLAY:-:0}"
 export XAUTHORITY="${XAUTHORITY:-/home/pi/.Xauthority}"
 
 # Wait for local web dashboard.
 for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:8090/api/ui/status" >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:${FRONTEND_PORT}/index.html" >/dev/null 2>&1; then
     break
   fi
   sleep 2

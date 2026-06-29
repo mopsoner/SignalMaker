@@ -65,7 +65,7 @@ bash run.sh init-db
 bash run.sh all
 ```
 
-`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, scheduler worker, and frontend. You can tune the wait with `API_STARTUP_TIMEOUT` (default: 60 seconds).
+`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, scheduler worker, and frontend. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
 
 ## Raspberry Pi install
 Run the full Raspberry Pi setup from a fresh checkout with one command:
@@ -110,6 +110,12 @@ curl -I http://localhost:3000/dashboard.html
 
 On Raspberry Pi installs, port `3000` is only the static frontend served from `frontend/dist`, while port `5000` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:3000`, but API calls must target `http://IP_DU_RASPBERRY:5000`.
 
+Port convention used by the Raspberry scripts and systemd units:
+
+- API / Uvicorn: `APP_PORT=5000`, health check `http://localhost:5000/healthz`.
+- Static frontend: `FRONTEND_PORT=3000`, pages such as `http://localhost:3000/index.html`.
+- Frontend JavaScript API base: `http://<same-host>:5000` by default, unless `window.SIGNALMAKER_API_BASE` overrides it.
+
 Use these checks when debugging frontend/API routing:
 
 ```bash
@@ -120,9 +126,25 @@ curl -I http://localhost:3000/dashboard.html
 
 Requests under `/api/v1/...` must never be served by the static frontend on port `3000`; they should go to the backend API on port `5000`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
 
+The UI can also be served directly by the API on port `5000`:
+
+```text
+http://IP_DU_RASPBERRY:5000/index.html
+```
+
+In that mode the frontend and API share the same origin, so there is no CORS path at all. The static frontend on port `3000` can remain useful, but using port `5000` is the simplest Raspberry Pi mode when debugging browser/API connectivity.
+
 ### Raspberry CORS preflight debugging
 
 If browser API calls from `http://IP_DU_RASPBERRY:3000` fail with `OPTIONS ... 400 Bad Request`, verify the backend CORS preflight response from the Raspberry Pi:
+
+Frontend `GET` requests to `/api/v1/...` should not trigger CORS preflight `OPTIONS` requests. Keep those requests simple: `Accept: application/json` is OK, but `Content-Type: application/json` must only be added when the request has a body, such as JSON `POST` or `PUT` calls. After changing `frontend/app.js`, rebuild the copied static files and restart both services:
+
+```bash
+bash scripts/build_frontend.sh
+sudo systemctl restart signalmaker-api signalmaker-frontend
+curl http://localhost:5000/healthz
+```
 
 ```bash
 curl -i -X OPTIONS "http://localhost:5000/api/v1/health" \

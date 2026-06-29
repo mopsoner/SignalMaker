@@ -19,11 +19,11 @@ bash scripts/start_scheduler_worker.sh &
 SCHEDULER_PID=$!
 
 if [ "${RUN_FRONTEND:-0}" = "1" ]; then
-  FRONTEND_PORT=${FRONTEND_PORT:-8090} bash scripts/start_frontend.sh &
+  FRONTEND_PORT=${FRONTEND_PORT:-3000} bash scripts/start_frontend.sh &
   FRONTEND_PID=$!
 else
   FRONTEND_PID=""
-  echo "Frontend Vite dev server disabled by default to reduce Raspberry Pi CPU usage."
+  echo "Lightweight static frontend disabled by default to reduce Raspberry Pi CPU usage."
   echo "Set RUN_FRONTEND=1 to start it anyway."
 fi
 

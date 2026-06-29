@@ -14,7 +14,7 @@
   }
 
   function operatorHeaders() {
-    var headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+    var headers = { Accept: 'application/json' };
     try {
       var key = window.localStorage.getItem('signalmaker_operator_key') || '';
       if (key) headers['x-operator-key'] = key;
@@ -24,7 +24,14 @@
 
   function fetchJson(path, options) {
     options = options || {};
-    return fetch(apiBase + path, { method: options.method || 'GET', headers: operatorHeaders(), body: options.body }).then(function (response) {
+    var headers = operatorHeaders();
+    if (options.body) headers['Content-Type'] = 'application/json';
+
+    return fetch(apiBase + path, {
+      method: options.method || 'GET',
+      headers: headers,
+      body: options.body
+    }).then(function (response) {
       if (!response.ok) throw new Error(response.status + ' ' + response.statusText);
       return response.json();
     });
