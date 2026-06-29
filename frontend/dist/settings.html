@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker - Réglages</title>
+    <meta name="description" content="Réglages SignalMaker en HTML léger">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Réglages</h1>
+      <p>Page HTML statique légère pour les informations de configuration.</p>
+      <nav>
+        <a href="./index.html">Status</a>
+        <a href="./momentum-candidates.html">Candidate Sync</a>
+        <a href="./positions.html">Positions</a>
+        <a href="./settings.html" aria-current="page">Réglages</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./candidates.html">Trade Candidates</a>
+        <a href="./ops.html">Ops</a>
+        <a href="./logs.html">Logs</a>
+        <a href="./market-data.html">Market Data</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Admin Raspberry</h2>
+        <p>Les réglages complets de l’executor restent disponibles dans l’interface executor sur le port configuré (par défaut 8090).</p>
+        <p><a class="button" href="/admin">Ouvrir l’admin executor</a></p>
+        <p class="muted">Cette page reste statique pour éviter les erreurs ARMv6 liées à Vite/esbuild ; le formulaire de sauvegarde est celui de l’admin executor.</p>
+      </section>
+
+      <section class="card">
+        <h2>Champs Kraken pris en compte</h2>
+        <p>L’admin executor lit et sauvegarde les clés de configuration Kraken ci-dessous dans le fichier <code>.env</code> et dans les réglages persistants SQLite.</p>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr><th>Champ</th><th>Utilisation</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>EXECUTION_EXCHANGE</code></td><td>Choisir <code>kraken</code> ou <code>kraken_pro</code> pour utiliser Kraken au lieu de Binance.</td></tr>
+              <tr><td><code>KRAKEN_BASE_URL</code></td><td>URL API Kraken, par défaut <code>https://api.kraken.com</code>.</td></tr>
+              <tr><td><code>KRAKEN_API_KEY</code></td><td>Clé API Kraken, affichée comme champ mot de passe dans l’admin.</td></tr>
+              <tr><td><code>KRAKEN_SECRET_KEY</code></td><td>Secret API Kraken, affiché comme champ mot de passe dans l’admin.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

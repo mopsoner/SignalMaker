@@ -2,12 +2,10 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ARCH="$(uname -m 2>/dev/null || echo unknown)"
+FRONTEND_DIR="$APP_DIR/frontend"
+DIST_DIR="$FRONTEND_DIR/dist"
 
-if [ "$ARCH" = "armv6l" ]; then
-  echo "WARNING: ARMv6 detected: Vite/esbuild may crash with Bus error. Prefer prebuilt frontend/dist." >&2
-fi
-
-cd "$APP_DIR/frontend"
-npm install
-npm run build
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR"
+cp "$FRONTEND_DIR"/*.html "$FRONTEND_DIR/styles.css" "$FRONTEND_DIR/app.js" "$DIST_DIR/"
+echo "Static frontend copied to frontend/dist (HTML/CSS/JS only; no Vite/esbuild)."

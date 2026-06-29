@@ -1,11 +1,11 @@
 # SignalMaker
 
-FastAPI trading app (Binance public REST, paper trading) with React Vite dashboard.
+FastAPI trading app (Binance public REST, paper trading) with a lightweight static HTML/CSS/JS dashboard.
 
 ## Architecture
 
 - **Backend**: FastAPI + SQLAlchemy (psycopg v3) → Replit PostgreSQL (local dev) / Neon PostgreSQL (production)
-- **Frontend**: React + Vite at `frontend/`, served by FastAPI static files in production
+- **Frontend**: static files in `frontend/`, copied to `frontend/dist` without Vite/esbuild
 - **Deployment**: VM target — `python main.py` starts uvicorn on port 5000 → external 80
 
 ## Code Locations
@@ -14,14 +14,15 @@ FastAPI trading app (Binance public REST, paper trading) with React Vite dashboa
 |---|---|
 | `SignalMaker/app/` | Local dev code (used by `SignalMaker API` workflow) |
 | `app/` | Production code (used by `python main.py` deployment) |
-| `frontend/` | React Vite dashboard (shared) |
+| `frontend/` | Lightweight dashboard (shared) |
 | `scripts/` | Pipeline loop scripts |
 | `main.py` | Production entrypoint — sets env vars, starts uvicorn |
 
 ## Workflows
 
 - **SignalMaker API** (`bash SignalMaker/run.sh api`): local dev API on port 8080
-- **Start application** (`npm run dev --prefix frontend`): React dev server
+- **Build frontend** (`bash scripts/build_frontend.sh`): copy static frontend files to `frontend/dist`
+- **Start frontend** (`bash scripts/start_frontend.sh`): serve `frontend/dist` with Python http.server
 
 ## Key Configuration
 
@@ -54,6 +55,6 @@ FastAPI trading app (Binance public REST, paper trading) with React Vite dashboa
 ```
 deploymentTarget = "vm"
 run = ["python", "main.py"]
-build = ["bash", "-c", "pip install -r requirements.txt && cd frontend && npm install && npm run build"]
+build = ["bash", "-c", "pip install -r requirements.txt && bash scripts/build_frontend.sh"]
 ```
 Port 5000 → external 80.
