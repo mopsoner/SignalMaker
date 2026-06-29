@@ -185,7 +185,7 @@ WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
 Restart=on-failure
 RestartSec=5
-Environment=FRONTEND_PORT=3000
+Environment=FRONTEND_PORT=5001
 Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:5000
 
 [Install]

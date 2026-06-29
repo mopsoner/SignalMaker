@@ -37,12 +37,12 @@ Build or refresh the static files with:
 bash scripts/build_frontend.sh
 ```
 
-Start the frontend with:
-```bash
-bash scripts/start_frontend.sh
-```
+No separate frontend process is needed on Raspberry: the backend serves `frontend/dist`, so `http://IP_DU_RASPBERRY:5000` shows the same lightweight UI next to the API.
 
-The backend also serves `frontend/dist` when it exists, so `http://IP_DU_RASPBERRY:5000` can show the same lightweight UI next to the API.
+For development only, a standalone static server can still be started explicitly:
+```bash
+RUN_STANDALONE_FRONTEND=1 bash scripts/start_frontend.sh
+```
 
 ## Main endpoints
 - `GET /healthz`
@@ -65,7 +65,7 @@ bash run.sh init-db
 bash run.sh all
 ```
 
-`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, scheduler worker, and frontend. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
+`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
 
 ## Raspberry Pi install
 Run the full Raspberry Pi setup from a fresh checkout with one command:
@@ -95,6 +95,7 @@ Open SignalMaker from another device on the same network using port `5000` only:
 - Admin: `http://IP_DU_RASPBERRY:5000/admin.html`
 - Dashboard: `http://IP_DU_RASPBERRY:5000/dashboard.html`
 
+Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
 Useful Raspberry debug commands:
@@ -149,14 +150,15 @@ Use the all-in-one launcher for local startup:
 bash run.sh all
 ```
 
-It starts the backend first, waits for the backend health check, then starts the pipeline worker, executor worker, scheduler worker, and frontend. You can still run individual processes when debugging:
+It starts the backend first, waits for the backend health check, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. You can still run individual processes when debugging:
 
 ```bash
 bash scripts/start_api.sh
 bash scripts/start_pipeline_worker.sh
 bash scripts/start_executor_worker.sh
 bash scripts/start_scheduler_worker.sh
-bash scripts/start_frontend.sh
+# Optional development-only standalone static server:
+# RUN_STANDALONE_FRONTEND=1 bash scripts/start_frontend.sh
 ```
 
 ## Production env
