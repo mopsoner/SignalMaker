@@ -76,6 +76,8 @@ def clear_application_data(db: Session = Depends(get_db)) -> dict:
 
     This deliberately leaves app_settings untouched because it stores
     operator-managed runtime configuration.
+    This deliberately leaves app_settings plus market_universes and market_assets
+    untouched because they are operator-managed configuration/reference data.
     """
     details = {table: _delete_table_rows(db, table) for table in _APP_DATA_CLEANUP_TABLES}
     db.commit()
@@ -83,6 +85,7 @@ def clear_application_data(db: Session = Depends(get_db)) -> dict:
         'deleted': sum(details.values()),
         'details': details,
         'preserved': ['app_settings'],
+        'preserved': ['app_settings', 'market_universes', 'market_assets'],
     }
 
 
