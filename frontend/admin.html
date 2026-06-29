@@ -27,6 +27,15 @@
 
     <main>
       <section class="card">
+        <h2>Token admin / operator key</h2>
+        <p class="muted">Le token est conservé uniquement dans ce navigateur et envoyé avec l’en-tête <code>x-operator-key</code> pour les appels protégés.</p>
+        <label for="operator-key-input">Token admin / operator key</label>
+        <input id="operator-key-input" type="password" autocomplete="off" placeholder="Coller le token admin">
+        <button data-action="save-operator-token">Sauvegarder le token local</button>
+        <p id="operator-key-result" class="muted"></p>
+      </section>
+
+      <section class="card">
         <h2>Réglages admin</h2>
         <p class="muted">Les champs sont chargés depuis <code>/api/v1/admin/settings</code> et sauvegardés au même endpoint.</p>
         <div id="admin-settings-content" class="muted">Chargement...</div>

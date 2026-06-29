@@ -4,21 +4,24 @@ from typing import Any
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.services.database_reset_service import reset_database_preserving_config
 from app.services.notifier_service import NotifierService
-from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
+from app.services.runtime_settings import load_admin_settings, load_runtime_settings, persist_runtime_settings
 from app.services.worker_control_service import WorkerControlService
 
 router = APIRouter()
 
 
 class SettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     general: dict[str, Any] = {}
     binance: dict[str, Any] = {}
+    kraken: dict[str, Any] = {}
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
     bot: dict[str, Any] = {}
@@ -28,12 +31,13 @@ class SettingsPayload(BaseModel):
 
 @router.get('/admin/settings')
 def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
-    return load_runtime_settings(db)
+    return load_admin_settings(db)
 
 
 @router.put('/admin/settings')
 def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
-    return persist_runtime_settings(db, payload.model_dump())
+    persist_runtime_settings(db, payload.model_dump())
+    return load_admin_settings(db)
 
 
 @router.get('/admin/workers')
