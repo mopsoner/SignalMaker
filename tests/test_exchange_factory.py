@@ -83,3 +83,66 @@ def test_kraken_margin_client_covers_binance_margin_client_public_surface():
     from raspberry_executor.margin_client import MarginClient
 
     assert public_methods(MarginClient) - public_methods(KrakenMarginClient) == set()
+
+
+def test_kraken_client_resolves_btc_alias_to_xbt_pair():
+    client = KrakenClient("https://kraken.test", "", "", dry_run=True)
+    client._public = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "XBTUSDC": {
+            "altname": "XBTUSDC",
+            "wsname": "XBT/USDC",
+            "base": "XXBT",
+            "quote": "USDC",
+            "lot_decimals": 8,
+        }
+    }
+
+    info = client._pair_info("BTCUSDC")
+
+    assert info["pair_key"] == "XBTUSDC"
+    assert info["baseAsset"] == "BTC"
+    assert info["quoteAsset"] == "USDC"
+
+
+def test_kraken_symbol_rules_resolves_btc_alias_to_xbt_pair(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "error": [],
+                "result": {
+                    "XBTUSDC": {
+                        "altname": "XBTUSDC",
+                        "wsname": "XBT/USDC",
+                        "base": "XXBT",
+                        "quote": "USDC",
+                        "lot_decimals": 8,
+                    }
+                },
+            }
+
+    import raspberry_executor.kraken_symbol_rules as kraken_symbol_rules
+
+    monkeypatch.setattr(kraken_symbol_rules.requests, "get", lambda *args, **kwargs: FakeResponse())
+    rules = KrakenSymbolRules("https://kraken.test", quote_assets=["USDC"])
+
+    info = rules.symbol_info("BTCUSDC")
+
+    assert info["pair_key"] == "XBTUSDC"
+    assert info["baseAsset"] == "BTC"
+    assert info["quoteAsset"] == "USDC"
+
+
+def test_kraken_client_keeps_usdt_distinct_from_usd_pair():
+    client = KrakenClient("https://kraken.test", "", "", dry_run=True)
+    client._public = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "XXBTZUSD": {"altname": "XBTUSD", "wsname": "XBT/USD", "base": "XXBT", "quote": "ZUSD"},
+        "XBTUSDT": {"altname": "XBTUSDT", "wsname": "XBT/USDT", "base": "XXBT", "quote": "USDT"},
+    }
+
+    info = client._pair_info("BTCUSDT")
+
+    assert info["pair_key"] == "XBTUSDT"
+    assert info["quoteAsset"] == "USDT"
