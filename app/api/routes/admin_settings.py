@@ -5,6 +5,7 @@ from typing import Any
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -33,6 +34,54 @@ def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, dict[str, Any
 @router.put('/admin/settings')
 def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
     return persist_runtime_settings(db, payload.model_dump())
+
+
+_APP_DATA_CLEANUP_TABLES = [
+    # ETF/stock generated data first because these rows reference market assets/runs.
+    "market_analysis_results",
+    "market_analysis_runs",
+    "market_data_import_runs",
+    "market_data_job_requests",
+    "market_candles",
+    # Paper/live trading data.
+    "fills",
+    "orders",
+    "positions",
+    "trade_candidates",
+    "live_runs",
+    "asset_state_current",
+    # Momentum scanner, engine and backtest data.
+    "momentum_backtest_equity",
+    "momentum_backtest_trades",
+    "momentum_backtest_runs",
+    "momentum_engine_trades",
+    "momentum_engine_positions",
+    "momentum_structure_current",
+    "momentum_current",
+]
+
+
+def _delete_table_rows(db: Session, table_name: str) -> int:
+    if not inspect(db.bind).has_table(table_name):
+        return 0
+    result = db.execute(text(f"DELETE FROM {table_name}"))
+    return result.rowcount or 0
+
+
+@router.delete('/admin/cleanup/app-data')
+def clear_application_data(db: Session = Depends(get_db)) -> dict:
+    """Clear application/runtime data while preserving configuration tables.
+
+    This deliberately leaves app_settings plus market_universes and market_assets
+    untouched because they are operator-managed configuration/reference data.
+    """
+    details = {table: _delete_table_rows(db, table) for table in _APP_DATA_CLEANUP_TABLES}
+    db.commit()
+    return {
+        'deleted': sum(details.values()),
+        'details': details,
+        'preserved': ['app_settings', 'market_universes', 'market_assets'],
+    }
 
 
 @router.get('/admin/workers')

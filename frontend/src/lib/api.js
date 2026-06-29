@@ -49,6 +49,7 @@ export const api = {
   clearMomentumAnalysis: () => request('/api/v1/momentum/cleanup', { method: 'DELETE' }),
   clearMomentumEngine: () => request('/api/v1/momentum-engine/cleanup', { method: 'DELETE' }),
   clearMomentumBacktests: () => request('/api/v1/momentum-backtest/cleanup', { method: 'DELETE' }),
+  clearApplicationData: () => request('/api/v1/admin/cleanup/app-data', { method: 'DELETE' }),
   fills: (params = '') => request(`/api/v1/fills${params}`),
   candles: (params = '') => request(`/api/v1/market-data/candles${params}`),
   candleSummary: (params = '') => request(`/api/v1/market-data/candles/summary${params}`),
