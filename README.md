@@ -72,7 +72,28 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, initializes the schema, and prints the commands to start the API and worker loops.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, installs the React/Vite frontend dependencies, initializes the schema, and enables the SignalMaker systemd services.
+
+### Raspberry UI
+After installation, start the backend API and frontend UI services:
+
+```bash
+sudo systemctl start signalmaker-api signalmaker-frontend
+```
+
+Open SignalMaker from another device on the same network:
+
+- API: `http://IP_DU_RASPBERRY:8080`
+- UI: `http://IP_DU_RASPBERRY:3000`
+
+Useful Raspberry debug commands:
+
+```bash
+systemctl status signalmaker-api
+systemctl status signalmaker-frontend
+journalctl -u signalmaker-frontend -f
+curl http://localhost:8080/healthz
+```
 
 ## VM deploy helper
 ```bash

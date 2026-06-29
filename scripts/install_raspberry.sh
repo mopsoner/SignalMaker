@@ -15,6 +15,8 @@ REQUIRED_PACKAGES=(
   libpq-dev
   python3-dev
   build-essential
+  nodejs
+  npm
 )
 
 apt_install() {
@@ -69,6 +71,15 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements-raspberry.txt
 
+echo "Installing frontend dependencies..."
+cd "$APP_DIR/frontend"
+npm install
+if ! npm run build; then
+  echo "WARNING: Frontend build failed. Continuing installation because Raspberry Pi resources may be limited." >&2
+  echo "WARNING: The frontend service will still run the Vite dev server on port ${FRONTEND_PORT:-3000}." >&2
+fi
+cd "$APP_DIR"
+
 mkdir -p logs data
 
 export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://postgres:postgres@localhost:5432/signalmaker}"
@@ -76,9 +87,115 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://postgres:postgres@loca
 echo "Running database initialization..."
 python -m scripts.init_db
 
+install_systemd_services() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemd not found; skipping SignalMaker service installation" >&2
+    return 0
+  fi
+
+  echo "Installing SignalMaker systemd services for $APP_DIR..."
+  local service_dir
+  service_dir="$(mktemp -d)"
+
+  cat > "$service_dir/signalmaker-api.service" <<EOF
+[Unit]
+Description=SignalMaker API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_api.sh
+Restart=always
+RestartSec=5
+Environment=APP_PORT=8080
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$service_dir/signalmaker-executor.service" <<EOF
+[Unit]
+Description=SignalMaker Executor Worker
+After=network.target postgresql.service signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_executor_worker.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$service_dir/signalmaker-pipeline.service" <<EOF
+[Unit]
+Description=SignalMaker Pipeline Worker
+After=network.target postgresql.service signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_pipeline_worker.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$service_dir/signalmaker-scheduler.service" <<EOF
+[Unit]
+Description=SignalMaker Scheduler Worker
+After=network.target postgresql.service signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_scheduler_worker.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$service_dir/signalmaker-frontend.service" <<EOF
+[Unit]
+Description=SignalMaker Frontend UI
+After=network.target signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
+Restart=always
+RestartSec=5
+Environment=FRONTEND_PORT=3000
+Environment=VITE_API_BASE=http://127.0.0.1:8080
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo cp "$service_dir"/signalmaker-*.service /etc/systemd/system/
+  sudo chmod 644 /etc/systemd/system/signalmaker-*.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable signalmaker-api signalmaker-executor signalmaker-pipeline signalmaker-scheduler signalmaker-frontend
+  rm -rf "$service_dir"
+}
+
+install_systemd_services
+
 echo "Running final Raspberry install checks..."
 pg_isready -h localhost -p 5432
+command -v npm
 python -m scripts.init_db
+
+RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+RASPBERRY_IP="${RASPBERRY_IP:-<raspberry-ip>}"
 
 echo "SignalMaker Raspberry install complete"
 echo "Run SignalMaker with:"
@@ -86,3 +203,6 @@ echo "  bash run.sh api"
 echo "  bash run.sh executor-loop"
 echo "  bash run.sh pipeline-loop"
 echo "  bash run.sh scheduler-loop"
+echo "  bash scripts/start_frontend.sh"
+echo "Backend API: http://${RASPBERRY_IP}:8080"
+echo "Frontend UI: http://${RASPBERRY_IP}:3000"

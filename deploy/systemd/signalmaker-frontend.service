@@ -1,0 +1,15 @@
+[Unit]
+Description=SignalMaker Frontend UI
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_frontend.sh
+Restart=always
+RestartSec=5
+Environment=FRONTEND_PORT=3000
+Environment=VITE_API_BASE=http://127.0.0.1:8080
+
+[Install]
+WantedBy=multi-user.target
