@@ -98,6 +98,16 @@ Open SignalMaker from another device on the same network using port `5000` only:
 Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
+### Kraken smoke test
+
+Run the Kraken validation script from the repository root when you want a readable report that you can paste back into an issue or chat:
+
+```bash
+python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSD
+```
+
+By default, the script tests public Kraken endpoints, SignalMaker symbol rules, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--json` for a compact JSON-only report.
+
 Useful Raspberry debug commands:
 
 ```bash
