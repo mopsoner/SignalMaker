@@ -59,6 +59,47 @@ class SmokeResult:
 
 
 
+def _admin_kraken_test_url(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/api/v1"):
+        return f"{base}/admin/test/kraken"
+    return f"{base}/api/v1/admin/test/kraken"
+
+
+def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) -> dict[str, Any]:
+    """Ask SignalMaker Admin whether Kraken credentials are loaded server-side.
+
+    The Admin settings endpoint may intentionally avoid returning secret values,
+    so the smoke test cannot infer server-side credentials from that payload
+    alone.  The existing Kraken Admin test endpoint already checks credentials
+    without exposing them; querying it lets the smoke report distinguish
+    "credentials absent from this smoke process" from "credentials exist only
+    inside SignalMaker Admin".
+    """
+    url = _admin_kraken_test_url(base_url)
+    if not url:
+        return {"checked": False, "reason": "missing_signalmaker_base_url"}
+    try:
+        response = requests.post(url, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {"checked": False, "reason": "admin_kraken_test_unavailable", "error": str(exc)}
+    if not isinstance(payload, dict):
+        return {"checked": False, "reason": "invalid_admin_kraken_test_payload"}
+    return {
+        "checked": True,
+        "status": payload.get("status"),
+        "base_url": payload.get("base_url"),
+        "api_key_loaded": bool(payload.get("api_key_loaded")),
+        "secret_key_loaded": bool(payload.get("secret_key_loaded")),
+        "error": payload.get("error"),
+        "http_status": payload.get("http_status"),
+    }
+
+
 def _settings_with_runtime_overrides(settings: Settings) -> Settings:
     """Return settings with values mirrored from Admin runtime settings when present.
 
@@ -102,6 +143,7 @@ def _settings_with_runtime_overrides(settings: Settings) -> Settings:
     return Settings(**{**settings.__dict__, **overrides})
 
 
+def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_kraken_test: dict[str, Any]) -> dict[str, Any]:
 def _credential_sources(settings: Settings, admin_bridge: dict[str, Any]) -> dict[str, Any]:
     import os
 
@@ -114,6 +156,10 @@ def _credential_sources(settings: Settings, admin_bridge: dict[str, Any]) -> dic
         "runtime_env_secret_key_loaded": bool(os.environ.get("KRAKEN_SECRET_KEY")),
         "admin_settings_bridge": {k: v for k, v in admin_bridge.items() if k not in {"error"}},
         "admin_settings_error": admin_bridge.get("error"),
+        "admin_kraken_test": admin_kraken_test,
+    }
+
+
     }
 
 def _error_details(exc: Exception) -> dict[str, Any]:
@@ -184,6 +230,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     ensure_env()
     file_settings = load_settings()
     admin_bridge = apply_admin_settings_to_environ(file_settings.signalmaker_base_url)
+    admin_kraken_test = _fetch_admin_kraken_credential_status(file_settings.signalmaker_base_url)
     settings = _settings_with_runtime_overrides(file_settings)
     base_url = (args.base_url or settings.kraken_base_url or "https://api.kraken.com").rstrip("/")
     quote_assets = settings.quote_assets or ["USD"]
@@ -198,6 +245,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         symbol=symbol,
         quote_assets=quote_assets,
         credentials_loaded=client.is_configured(),
+        credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test),
         credential_sources=_credential_sources(settings, admin_bridge),
     )
 
@@ -254,8 +302,11 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         result.add("private_account", False, skipped=True, reason="skip_private_requested")
         result.add("private_open_orders", False, skipped=True, reason="skip_private_requested")
     elif not client.is_configured():
-        result.add("private_account", False, skipped=True, reason="missing_kraken_api_credentials")
-        result.add("private_open_orders", False, skipped=True, reason="missing_kraken_api_credentials")
+        missing_reason = "missing_kraken_api_credentials"
+        if admin_kraken_test.get("api_key_loaded") and admin_kraken_test.get("secret_key_loaded"):
+            missing_reason = "missing_local_kraken_api_credentials_admin_has_credentials"
+        result.add("private_account", False, skipped=True, reason=missing_reason)
+        result.add("private_open_orders", False, skipped=True, reason=missing_reason)
     else:
         _run_check(result, "private_account", lambda: {"balance_assets": sorted((client.account() or {}).keys())[:25]})
         live_read_client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=False)
