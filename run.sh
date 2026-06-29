@@ -7,7 +7,7 @@ usage() {
 Usage: ./run.sh [command]
 
 Commands:
-  api             Start the FastAPI backend on APP_PORT (default: 8080)
+  api             Start the FastAPI backend on APP_PORT (default: 5000)
   init-db         Initialize database tables
   frontend        Start the lightweight static frontend
   pipeline-loop   Start the pipeline worker loop

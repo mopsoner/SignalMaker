@@ -9,7 +9,7 @@ from datetime import datetime
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
 
-API_BASE = os.getenv("SIGNALMAKER_API_BASE", "http://127.0.0.1:8080")
+API_BASE = os.getenv("SIGNALMAKER_API_BASE", "http://127.0.0.1:5000")
 REFRESH_SECONDS = int(os.getenv("MOMENTUM_TUI_REFRESH", "30"))
 LIMIT = int(os.getenv("MOMENTUM_TUI_LIMIT", "100"))
 

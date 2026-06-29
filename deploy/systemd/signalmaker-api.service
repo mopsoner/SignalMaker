@@ -8,6 +8,7 @@ WorkingDirectory=/opt/signalmaker
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_api.sh
 Restart=always
 RestartSec=5
+Environment=APP_PORT=5000
 
 [Install]
 WantedBy=multi-user.target

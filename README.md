@@ -42,7 +42,7 @@ Start the frontend with:
 bash scripts/start_frontend.sh
 ```
 
-The backend also serves `frontend/dist` when it exists, so `http://IP_DU_RASPBERRY:8080` can show the same lightweight UI next to the API.
+The backend also serves `frontend/dist` when it exists, so `http://IP_DU_RASPBERRY:5000` can show the same lightweight UI next to the API.
 
 ## Main endpoints
 - `GET /healthz`
@@ -91,8 +91,8 @@ sudo systemctl start signalmaker-api signalmaker-frontend
 
 Open SignalMaker from another device on the same network:
 
-- API: `http://IP_DU_RASPBERRY:8080`
-- UI: `http://IP_DU_RASPBERRY:3000`
+- API: `http://IP_DU_RASPBERRY:5000`
+- UI: `http://IP_DU_RASPBERRY:8090`
 
 Useful Raspberry debug commands:
 
@@ -101,24 +101,24 @@ uname -m
 systemctl status signalmaker-api
 systemctl status signalmaker-frontend
 journalctl -u signalmaker-frontend -f
-curl http://localhost:8080/healthz
-curl -I http://localhost:3000/index.html
-curl -I http://localhost:3000/dashboard.html
+curl http://localhost:5000/healthz
+curl -I http://localhost:8090/index.html
+curl -I http://localhost:8090/dashboard.html
 ```
 
 ### Raspberry frontend/API port debugging
 
-On Raspberry Pi installs, port `3000` is only the static frontend served from `frontend/dist`, while port `8080` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:3000`, but API calls must target `http://IP_DU_RASPBERRY:8080`.
+On Raspberry Pi installs, port `8090` is only the static frontend served from `frontend/dist`, while port `5000` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:8090`, but API calls must target `http://IP_DU_RASPBERRY:5000`.
 
 Use these checks when debugging frontend/API routing:
 
 ```bash
-curl http://localhost:8080/healthz
-curl -I http://localhost:3000/index.html
-curl -I http://localhost:3000/dashboard.html
+curl http://localhost:5000/healthz
+curl -I http://localhost:8090/index.html
+curl -I http://localhost:8090/dashboard.html
 ```
 
-Requests under `/api/v1/...` must never be served by the static frontend on port `3000`; they should go to the backend API on port `8080`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
+Requests under `/api/v1/...` must never be served by the static frontend on port `8090`; they should go to the backend API on port `5000`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
 
 To keep the Raspberry Pi running without the UI temporarily, disable only the frontend service:
 

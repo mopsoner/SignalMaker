@@ -105,7 +105,7 @@ WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_api.sh
 Restart=always
 RestartSec=5
-Environment=APP_PORT=8080
+Environment=APP_PORT=5000
 
 [Install]
 WantedBy=multi-user.target
@@ -170,8 +170,8 @@ WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
 Restart=on-failure
 RestartSec=5
-Environment=FRONTEND_PORT=3000
-Environment=VITE_API_BASE=http://127.0.0.1:8080
+Environment=FRONTEND_PORT=8090
+Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:5000
 
 [Install]
 WantedBy=multi-user.target
@@ -206,5 +206,5 @@ echo "  bash run.sh executor-loop"
 echo "  bash run.sh pipeline-loop"
 echo "  bash run.sh scheduler-loop"
 echo "  bash scripts/start_frontend.sh"
-echo "Backend API: http://${RASPBERRY_IP}:8080"
-echo "Frontend UI: http://${RASPBERRY_IP}:3000"
+echo "Backend API: http://${RASPBERRY_IP}:5000"
+echo "Frontend UI: http://${RASPBERRY_IP}:8090"

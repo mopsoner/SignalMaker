@@ -1,5 +1,5 @@
 (function () {
-  var apiBase = window.SIGNALMAKER_API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8080');
+  var apiBase = window.SIGNALMAKER_API_BASE || (window.location.protocol + '//' + window.location.hostname + ':5000');
 
   function text(value) {
     if (value === null || value === undefined || value === '') return '-';
@@ -45,6 +45,73 @@
   function asRows(payload) {
     if (Array.isArray(payload)) return payload;
     return payload && (payload.rows || payload.candidates || payload.items || payload.data) || [];
+  }
+
+
+  var adminSettingsPayload = null;
+
+  function parseAdminValue(raw, original) {
+    if (typeof original === 'boolean') return raw === 'true' || raw === '1' || raw === 'on';
+    if (typeof original === 'number') {
+      var number = Number(raw);
+      return Number.isNaN(number) ? original : number;
+    }
+    if (Array.isArray(original)) return raw.split(',').map(function (item) { return item.trim(); }).filter(Boolean);
+    return raw;
+  }
+
+  function renderAdminSettings(payload) {
+    adminSettingsPayload = payload || {};
+    var sections = Object.keys(adminSettingsPayload);
+    if (!sections.length) return '<p class="muted">Aucun réglage.</p>';
+    return sections.map(function (section) {
+      var values = adminSettingsPayload[section] || {};
+      var rows = Object.keys(values).map(function (key) {
+        var value = values[key];
+        var inputType = typeof value === 'number' ? 'number' : 'text';
+        if (typeof value === 'boolean') {
+          return '<tr><td><code>' + text(key) + '</code></td><td><select data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '"><option value="true"' + (value ? ' selected' : '') + '>true</option><option value="false"' + (!value ? ' selected' : '') + '>false</option></select></td></tr>';
+        }
+        return '<tr><td><code>' + text(key) + '</code></td><td><input type="' + inputType + '" data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '" value="' + text(Array.isArray(value) ? value.join(',') : value) + '"></td></tr>';
+      }).join('');
+      return '<details open><summary>' + text(section) + '</summary><div class="scroll"><table><tbody>' + rows + '</tbody></table></div></details>';
+    }).join('');
+  }
+
+  function loadAdminSettings() {
+    if (!document.getElementById('admin-settings-content')) return Promise.resolve();
+    return fetchJson('/api/v1/admin/settings').then(function (payload) {
+      setHtml('admin-settings-content', renderAdminSettings(payload));
+    }).catch(function (error) { setHtml('admin-settings-content', '<p class="warn">Réglages indisponibles : ' + text(error.message) + '</p>'); });
+  }
+
+  function saveAdminSettings() {
+    if (!adminSettingsPayload) return;
+    var payload = JSON.parse(JSON.stringify(adminSettingsPayload));
+    document.querySelectorAll('[data-admin-section][data-admin-key]').forEach(function (input) {
+      var section = input.getAttribute('data-admin-section');
+      var key = input.getAttribute('data-admin-key');
+      var original = adminSettingsPayload[section] && adminSettingsPayload[section][key];
+      payload[section][key] = parseAdminValue(input.value, original);
+    });
+    fetchJson('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }).then(function (updated) {
+      setHtml('admin-save-result', 'Réglages sauvegardés.');
+      setHtml('admin-settings-content', renderAdminSettings(updated));
+    }).catch(function (error) { setHtml('admin-save-result', 'Erreur sauvegarde : ' + text(error.message)); });
+  }
+
+  function loadAdminWorkers() {
+    if (!document.getElementById('admin-workers-content')) return Promise.resolve();
+    return fetchJson('/api/v1/admin/workers').then(function (payload) {
+      setHtml('admin-workers-content', '<pre>' + text(JSON.stringify(payload, null, 2)) + '</pre>');
+    }).catch(function (error) { setHtml('admin-workers-content', '<p class="warn">Workers indisponibles : ' + text(error.message) + '</p>'); });
+  }
+
+  function postAdminAction(path, resultId) {
+    fetchJson(path, { method: 'POST' }).then(function (payload) {
+      setHtml(resultId, '<pre>' + text(JSON.stringify(payload, null, 2)) + '</pre>');
+      refresh();
+    }).catch(function (error) { setHtml(resultId, 'Erreur : ' + text(error.message)); });
   }
 
   function loadHealth() {
@@ -130,6 +197,7 @@
     if (document.getElementById('candidates-content')) loadCandidates();
     if (document.getElementById('momentum-content')) loadMomentum();
     if (document.getElementById('assets-content')) loadAssets();
+    loadAdminSettings(); loadAdminWorkers();
     loadOps(); loadLogs(); loadMarketData(); loadAsset();
   }
 
@@ -139,6 +207,10 @@
     if (action === 'sync-momentum') fetchJson('/api/v1/executor/sync-momentum-candidates', { method: 'POST' }).then(function (p) { setHtml('sync-result', 'Sync OK : ' + text(JSON.stringify(p))); refresh(); }).catch(function (e) { setHtml('sync-result', 'Sync erreur : ' + text(e.message)); });
     if (action === 'test-ibkr') fetchJson('/admin/market-data/ibkr-feed/test-ingest', { method: 'POST' }).then(function (p) { setHtml('ibkr-result', 'Test OK : ' + text(JSON.stringify(p))); }).catch(function (e) { setHtml('ibkr-result', 'Test erreur : ' + text(e.message)); });
     if (action === 'load-asset') loadAsset();
+    if (action === 'save-admin-settings') saveAdminSettings();
+    if (action === 'reset-database' && window.confirm('Reset database runtime ?')) postAdminAction('/api/v1/admin/reset-database', 'admin-action-result');
+    if (action === 'test-binance') postAdminAction('/api/v1/admin/test/binance', 'admin-action-result');
+    if (action === 'test-notifications') postAdminAction('/api/v1/admin/test/notifications', 'admin-action-result');
   });
   refresh();
   setInterval(refresh, 30000);
