@@ -62,6 +62,21 @@ if [ ! -f ".env" ]; then
   cp .env.example .env
 fi
 
+RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+RASPBERRY_IP="${RASPBERRY_IP:-<raspberry-ip>}"
+RASPBERRY_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000,http://${RASPBERRY_IP}:3000,http://localhost:5000,http://127.0.0.1:5000,http://${RASPBERRY_IP}:5000"
+RASPBERRY_CORS_ORIGIN_REGEX='http://192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}:3000|http://10\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}:3000|http://172\\.(1[6-9]|2[0-9]|3[0-1])\\.[0-9]{1,3}\\.[0-9]{1,3}:3000'
+
+if grep -q '^CORS_ORIGINS=' .env; then
+  sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=${RASPBERRY_CORS_ORIGINS}|" .env
+else
+  printf '\nCORS_ORIGINS=%s\n' "$RASPBERRY_CORS_ORIGINS" >> .env
+fi
+
+if ! grep -q '^CORS_ORIGIN_REGEX=' .env; then
+  printf 'CORS_ORIGIN_REGEX=%s\n' "$RASPBERRY_CORS_ORIGIN_REGEX" >> .env
+fi
+
 echo "Creating a fresh Python virtual environment..."
 rm -rf .venv
 python3 -m venv .venv --system-site-packages
@@ -170,7 +185,7 @@ WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
 Restart=on-failure
 RestartSec=5
-Environment=FRONTEND_PORT=8090
+Environment=FRONTEND_PORT=3000
 Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:5000
 
 [Install]
@@ -190,9 +205,6 @@ echo "Running final Raspberry install checks..."
 pg_isready -h localhost -p 5432
 python -m scripts.init_db
 
-RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-RASPBERRY_IP="${RASPBERRY_IP:-<raspberry-ip>}"
-
 if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files signalmaker-frontend.service >/dev/null 2>&1; then
   echo "Frontend service installed. After future frontend updates, rebuild and restart with:"
   echo "  bash scripts/build_frontend.sh"
@@ -207,4 +219,4 @@ echo "  bash run.sh pipeline-loop"
 echo "  bash run.sh scheduler-loop"
 echo "  bash scripts/start_frontend.sh"
 echo "Backend API: http://${RASPBERRY_IP}:5000"
-echo "Frontend UI: http://${RASPBERRY_IP}:8090"
+echo "Frontend UI: http://${RASPBERRY_IP}:3000"
