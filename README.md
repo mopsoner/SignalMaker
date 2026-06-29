@@ -92,7 +92,7 @@ sudo systemctl start signalmaker-api signalmaker-frontend
 Open SignalMaker from another device on the same network:
 
 - API: `http://IP_DU_RASPBERRY:5000`
-- UI: `http://IP_DU_RASPBERRY:8090`
+- UI: `http://IP_DU_RASPBERRY:3000`
 
 Useful Raspberry debug commands:
 
@@ -102,23 +102,47 @@ systemctl status signalmaker-api
 systemctl status signalmaker-frontend
 journalctl -u signalmaker-frontend -f
 curl http://localhost:5000/healthz
-curl -I http://localhost:8090/index.html
-curl -I http://localhost:8090/dashboard.html
+curl -I http://localhost:3000/index.html
+curl -I http://localhost:3000/dashboard.html
 ```
 
 ### Raspberry frontend/API port debugging
 
-On Raspberry Pi installs, port `8090` is only the static frontend served from `frontend/dist`, while port `5000` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:8090`, but API calls must target `http://IP_DU_RASPBERRY:5000`.
+On Raspberry Pi installs, port `3000` is only the static frontend served from `frontend/dist`, while port `5000` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:3000`, but API calls must target `http://IP_DU_RASPBERRY:5000`.
 
 Use these checks when debugging frontend/API routing:
 
 ```bash
 curl http://localhost:5000/healthz
-curl -I http://localhost:8090/index.html
-curl -I http://localhost:8090/dashboard.html
+curl -I http://localhost:3000/index.html
+curl -I http://localhost:3000/dashboard.html
 ```
 
-Requests under `/api/v1/...` must never be served by the static frontend on port `8090`; they should go to the backend API on port `5000`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
+Requests under `/api/v1/...` must never be served by the static frontend on port `3000`; they should go to the backend API on port `5000`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
+
+### Raspberry CORS preflight debugging
+
+If browser API calls from `http://IP_DU_RASPBERRY:3000` fail with `OPTIONS ... 400 Bad Request`, verify the backend CORS preflight response from the Raspberry Pi:
+
+```bash
+curl -i -X OPTIONS "http://localhost:5000/api/v1/health" \
+  -H "Origin: http://RASPBERRY_IP:3000" \
+  -H "Access-Control-Request-Method: GET"
+```
+
+The response should include:
+
+```text
+HTTP/1.1 200 OK
+access-control-allow-origin: http://RASPBERRY_IP:3000
+```
+
+If the allowed origin is missing, check that `.env` contains either the Raspberry IP in `CORS_ORIGINS` or a LAN-compatible `CORS_ORIGIN_REGEX`, then restart the API service:
+
+```bash
+grep -E '^CORS_ORIGINS=|^CORS_ORIGIN_REGEX=' .env
+sudo systemctl restart signalmaker-api
+```
 
 To keep the Raspberry Pi running without the UI temporarily, disable only the frontend service:
 

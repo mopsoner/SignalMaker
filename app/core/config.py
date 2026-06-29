@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./signalmaker.db", alias="DATABASE_URL")
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
     create_tables_on_boot: bool = Field(default=True, alias="CREATE_TABLES_ON_BOOT")
-    cors_origins: str = Field(default="http://localhost:8090,http://localhost:5000", alias="CORS_ORIGINS")
+    cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5000,http://127.0.0.1:5000", alias="CORS_ORIGINS")
+    cors_origin_regex: str = Field(default="", alias="CORS_ORIGIN_REGEX")
 
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 

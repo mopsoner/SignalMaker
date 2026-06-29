@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FRONTEND_PORT="${FRONTEND_PORT:-8090}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 DIST_DIR="$APP_DIR/frontend/dist"
 
 if [ ! -d "$DIST_DIR" ]; then
