@@ -165,7 +165,7 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
 
 
 def load_admin_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
-    return _with_admin_aliases(load_runtime_settings(db))
+    return load_runtime_settings(db)
 
 
 def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
