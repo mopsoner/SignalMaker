@@ -18,13 +18,22 @@ EXECUTOR_PID=$!
 bash scripts/start_scheduler_worker.sh &
 SCHEDULER_PID=$!
 
-FRONTEND_PORT=${FRONTEND_PORT:-5000} bash scripts/start_frontend.sh &
-FRONTEND_PID=$!
+if [ "${RUN_FRONTEND:-0}" = "1" ]; then
+  FRONTEND_PORT=${FRONTEND_PORT:-5000} bash scripts/start_frontend.sh &
+  FRONTEND_PID=$!
+else
+  FRONTEND_PID=""
+  echo "Frontend Vite dev server disabled by default to reduce Raspberry Pi CPU usage."
+  echo "Set RUN_FRONTEND=1 to start it anyway."
+fi
 
 cleanup() {
-  kill "$API_PID" "$PIPELINE_PID" "$EXECUTOR_PID" "$SCHEDULER_PID" "$FRONTEND_PID" 2>/dev/null || true
+  kill "$API_PID" "$PIPELINE_PID" "$EXECUTOR_PID" "$SCHEDULER_PID" 2>/dev/null || true
+  if [ -n "$FRONTEND_PID" ]; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+  fi
 }
 
 trap cleanup EXIT INT TERM
 
-wait "$FRONTEND_PID"
+wait "$API_PID"
