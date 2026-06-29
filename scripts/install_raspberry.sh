@@ -71,26 +71,11 @@ python -m pip install -r requirements-raspberry.txt
 
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 if [ "$ARCH" = "armv6l" ]; then
-  echo "WARNING: ARMv6 detected. Build the frontend elsewhere and copy frontend/dist to this Raspberry Pi." >&2
+  echo "WARNING: ARMv6 detected. Using the lightweight static frontend; no Vite/esbuild build will run." >&2
 fi
 
-if [ ! -d "$APP_DIR/frontend/dist" ]; then
-  echo "WARNING: frontend/dist is missing. The frontend service will stay stopped until dist is copied." >&2
-  echo "WARNING: ARMv6 detected: Vite/esbuild may crash with Bus error. Prefer prebuilt frontend/dist." >&2
-fi
-
-echo "Installing frontend dependencies and attempting a production build..."
-echo "WARNING: Raspberry Pi Node/Vite/esbuild builds can fail with Bus error on older ARM devices." >&2
-echo "WARNING: Installation will continue if npm install or npm run build fails." >&2
-cd "$APP_DIR/frontend"
-if ! npm install; then
-  echo "WARNING: npm install failed. Continuing installation; copy a prebuilt frontend/dist or run scripts/build_frontend.sh on a compatible machine." >&2
-elif ! npm run build; then
-  echo "WARNING: npm run build failed. Continuing installation; copy a prebuilt frontend/dist from a compatible machine." >&2
-fi
-if [ ! -d "$APP_DIR/frontend/dist" ]; then
-  echo "WARNING: frontend/dist is not available. The frontend service will fail cleanly until dist is copied or FRONTEND_DEV_SERVER=true is set manually." >&2
-fi
+echo "Building lightweight frontend (HTML/CSS/JS only; no npm, Vite or esbuild)."
+bash "$APP_DIR/scripts/build_frontend.sh"
 
 mkdir -p logs data
 
@@ -203,7 +188,6 @@ install_systemd_services
 
 echo "Running final Raspberry install checks..."
 pg_isready -h localhost -p 5432
-command -v npm
 python -m scripts.init_db
 
 RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
