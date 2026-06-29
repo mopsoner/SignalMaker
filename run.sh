@@ -13,27 +13,66 @@ Commands:
   pipeline-loop   Start the pipeline worker loop
   executor-loop   Start the executor worker loop
   scheduler-loop  Start the scheduler worker loop
-  all             Start API and frontend together
+  all             Start API first, then workers/executor and frontend after the API is reachable
   reserved-vm     Alias for all
 
-If no command is provided, the API and frontend are started.
+If no command is provided, the API, workers/executor, and frontend are started.
 USAGE
 }
 
-start_api_and_frontend() {
-  bash scripts/start_api.sh "$@" &
-  API_PID=$!
+wait_for_api() {
+  local port="${APP_PORT:-5000}"
+  local health_url="http://127.0.0.1:${port}/healthz"
+  local timeout_seconds="${API_STARTUP_TIMEOUT:-60}"
+  local deadline=$((SECONDS + timeout_seconds))
 
-  bash scripts/start_frontend.sh &
-  FRONTEND_PID=$!
+  echo "Waiting for SignalMaker backend at ${health_url} before starting workers/executor and frontend..."
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+      echo "SignalMaker backend is ready; starting workers/executor and frontend."
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; workers/executor and frontend will not start." >&2
+  return 1
+}
+
+start_api_workers_and_frontend() {
+  local pids=()
+  local started_api=false
 
   cleanup() {
-    kill "$API_PID" "$FRONTEND_PID" 2>/dev/null || true
+    if [ "${#pids[@]}" -gt 0 ]; then
+      kill "${pids[@]}" 2>/dev/null || true
+    fi
   }
 
   trap cleanup EXIT INT TERM
 
-  wait "$API_PID"
+  bash scripts/start_api.sh "$@" &
+  pids+=("$!")
+  started_api=true
+
+  if ! wait_for_api; then
+    cleanup
+    if [ "$started_api" = true ]; then
+      wait "${pids[0]}" 2>/dev/null || true
+    fi
+    exit 1
+  fi
+
+  bash scripts/start_pipeline_worker.sh &
+  pids+=("$!")
+  bash scripts/start_executor_worker.sh &
+  pids+=("$!")
+  bash scripts/start_scheduler_worker.sh &
+  pids+=("$!")
+  bash scripts/start_frontend.sh &
+  pids+=("$!")
+
+  wait -n "${pids[@]}"
 }
 
 command="${1:-all}"
@@ -61,7 +100,7 @@ case "$command" in
     exec bash scripts/start_scheduler_worker.sh "$@"
     ;;
   all|reserved-vm)
-    start_api_and_frontend "$@"
+    start_api_workers_and_frontend "$@"
     ;;
   -h|--help|help)
     usage
