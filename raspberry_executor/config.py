@@ -68,11 +68,39 @@ def _float(values: dict[str, str], key: str, default: str) -> float:
         return float(default)
 
 
+def _runtime_overrides() -> dict[str, str]:
+    try:
+        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+
+        runtime, _diagnostics = load_runtime_settings_lightweight()
+    except Exception:
+        try:
+            from app.services.runtime_settings import load_runtime_settings
+
+            runtime = load_runtime_settings()
+        except Exception:
+            return {}
+    overrides: dict[str, str] = {}
+    kraken = runtime.get("kraken", {}) if isinstance(runtime.get("kraken"), dict) else {}
+    executor = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
+    if kraken.get("kraken_base_url"):
+        overrides["KRAKEN_BASE_URL"] = str(kraken["kraken_base_url"])
+    if kraken.get("kraken_api_key"):
+        overrides["KRAKEN_API_KEY"] = str(kraken["kraken_api_key"])
+    if kraken.get("kraken_secret_key"):
+        overrides["KRAKEN_SECRET_KEY"] = str(kraken["kraken_secret_key"])
+    if executor.get("execution_exchange"):
+        overrides["EXECUTION_EXCHANGE"] = str(executor["execution_exchange"])
+    if executor.get("quote_assets"):
+        value = executor["quote_assets"]
+        overrides["QUOTE_ASSETS"] = ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+    return overrides
+
+
 def load_settings() -> Settings:
-    # Use the persisted env store as the single source of truth.
-    # Do not use os.getenv here: systemd/process env can keep stale values such as
-    # DRY_RUN=true even after settings bootstrap restored .env to DRY_RUN=false.
-    values = read_env()
+    # Runtime DB settings are the source of truth for admin-managed values.
+    # The persisted env store remains the fallback when DB values are empty or unavailable.
+    values = {**read_env(), **_runtime_overrides()}
     quote_assets = _csv(values.get("QUOTE_ASSETS", "USDC"))
     return Settings(
         signalmaker_base_url=str(values.get("SIGNALMAKER_BASE_URL", "")).rstrip("/"),

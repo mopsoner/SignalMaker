@@ -23,6 +23,22 @@ from raspberry_executor.kraken_margin_client import KrakenMarginClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 
 
+def _runtime_settings_payload() -> dict[str, Any]:
+    try:
+        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+
+        payload, diagnostics = load_runtime_settings_lightweight()
+        payload["_diagnostics"] = diagnostics
+        return payload
+    except Exception as exc:
+        return {"_error": str(exc)}
+
+
+def _value_status(value: Any) -> dict[str, Any]:
+    loaded = value not in (None, "")
+    return {"loaded": loaded, "length": len(str(value)) if loaded else 0}
+
+
 DEFAULT_SYMBOL = "BTCUSD"
 
 
@@ -83,6 +99,8 @@ def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) 
         return {"checked": False, "reason": "missing_signalmaker_base_url"}
     try:
         response = requests.post(url, timeout=timeout)
+        if getattr(response, "status_code", None) == 405:
+            response = requests.get(url, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -100,19 +118,36 @@ def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) 
     }
 
 
-def _settings_with_runtime_overrides(settings: Settings) -> Settings:
-    """Return settings with values mirrored from Admin runtime settings when present.
+def _settings_with_runtime_overrides(settings: Settings, runtime: dict[str, Any] | None = None) -> Settings:
+    """Return settings with DB runtime values first, then env overrides when present.
 
-    load_settings() intentionally reads the persisted Raspberry .env file only.
     The full Kraken smoke test is also used from the Raspberry UI/debug flow,
-    where Kraken keys may live in SignalMaker Admin settings instead.  In that
-    case admin_settings_bridge mirrors them into os.environ for this process;
-    this helper applies only non-empty runtime overrides to the immutable
-    Settings object used by the smoke test.
+    where Kraken keys may live in SignalMaker Admin settings instead of the
+    local .env.  This helper applies non-empty DB runtime values first, then
+    non-empty environment values, to the immutable Settings object used by the
+    smoke test.
     """
     import os
 
     overrides: dict[str, Any] = {}
+    runtime = runtime or {}
+    kraken_runtime = runtime.get("kraken", {}) if isinstance(runtime.get("kraken"), dict) else {}
+    executor_runtime = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
+    if kraken_runtime.get("kraken_base_url"):
+        overrides["kraken_base_url"] = str(kraken_runtime["kraken_base_url"]).rstrip("/")
+    if kraken_runtime.get("kraken_api_key"):
+        overrides["kraken_api_key"] = str(kraken_runtime["kraken_api_key"])
+    if kraken_runtime.get("kraken_secret_key"):
+        overrides["kraken_secret_key"] = str(kraken_runtime["kraken_secret_key"])
+    if executor_runtime.get("execution_exchange"):
+        overrides["exchange"] = str(executor_runtime["execution_exchange"]).strip().lower()
+    if executor_runtime.get("quote_assets"):
+        value = executor_runtime["quote_assets"]
+        if isinstance(value, list):
+            overrides["quote_assets"] = [str(item).strip().upper() for item in value if str(item).strip()]
+        else:
+            overrides["quote_assets"] = [item.strip().upper() for item in str(value).split(",") if item.strip()]
+
     mapping = {
         "KRAKEN_BASE_URL": "kraken_base_url",
         "KRAKEN_API_KEY": "kraken_api_key",
@@ -123,7 +158,7 @@ def _settings_with_runtime_overrides(settings: Settings) -> Settings:
     }
     for env_key, attr in mapping.items():
         value = os.environ.get(env_key)
-        if value in (None, ""):
+        if value in (None, "") or attr in overrides:
             continue
         if attr == "quote_assets":
             overrides[attr] = [item.strip().upper() for item in value.split(",") if item.strip()]
@@ -143,17 +178,39 @@ def _settings_with_runtime_overrides(settings: Settings) -> Settings:
     return Settings(**{**settings.__dict__, **overrides})
 
 
-def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_kraken_test: dict[str, Any]) -> dict[str, Any]:
+def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_kraken_test: dict[str, Any], runtime: dict[str, Any] | None = None) -> dict[str, Any]:
     import os
 
     settings_file = load_settings()
+    kraken_runtime = (runtime or {}).get("kraken", {}) if isinstance((runtime or {}).get("kraken"), dict) else {}
+    db_api = kraken_runtime.get("kraken_api_key")
+    db_secret = kraken_runtime.get("kraken_secret_key")
+    env_api = os.environ.get("KRAKEN_API_KEY")
+    env_secret = os.environ.get("KRAKEN_SECRET_KEY")
+    file_api = settings_file.kraken_api_key
+    file_secret = settings_file.kraken_secret_key
+    if db_api and db_secret:
+        selected = "database canonical lowercase"
+    elif env_api and env_secret:
+        selected = "environment"
+    elif file_api and file_secret:
+        selected = "settings file"
+    else:
+        selected = "none"
     return {
         "api_key_loaded": bool(settings.kraken_api_key),
         "secret_key_loaded": bool(settings.kraken_secret_key),
-        "settings_file_api_key_loaded": bool(settings_file.kraken_api_key),
-        "settings_file_secret_key_loaded": bool(settings_file.kraken_secret_key),
-        "runtime_env_api_key_loaded": bool(os.environ.get("KRAKEN_API_KEY")),
-        "runtime_env_secret_key_loaded": bool(os.environ.get("KRAKEN_SECRET_KEY")),
+        "db_kraken_api_key_loaded": _value_status(db_api),
+        "db_kraken_secret_key_loaded": _value_status(db_secret),
+        "env_kraken_api_key_loaded": _value_status(env_api),
+        "env_kraken_secret_key_loaded": _value_status(env_secret),
+        "settings_file_api_key_loaded": _value_status(file_api),
+        "settings_file_secret_key_loaded": _value_status(file_secret),
+        "runtime_env_api_key_loaded": bool(env_api),
+        "runtime_env_secret_key_loaded": bool(env_secret),
+        "selected_source": selected,
+        "runtime_settings_error": (runtime or {}).get("_error") or ((runtime or {}).get("_diagnostics") or {}).get("db_error"),
+        "runtime_settings_diagnostics": (runtime or {}).get("_diagnostics"),
         "admin_settings_bridge": {k: v for k, v in admin_bridge.items() if k not in {"error"}},
         "admin_settings_error": admin_bridge.get("error"),
         "admin_kraken_test": admin_kraken_test,
@@ -227,9 +284,10 @@ def build_parser() -> argparse.ArgumentParser:
 def run_smoke(args: argparse.Namespace) -> SmokeResult:
     ensure_env()
     file_settings = load_settings()
+    runtime = _runtime_settings_payload()
     admin_bridge = apply_admin_settings_to_environ(file_settings.signalmaker_base_url)
     admin_kraken_test = _fetch_admin_kraken_credential_status(file_settings.signalmaker_base_url)
-    settings = _settings_with_runtime_overrides(file_settings)
+    settings = _settings_with_runtime_overrides(file_settings, runtime)
     base_url = (args.base_url or settings.kraken_base_url or "https://api.kraken.com").rstrip("/")
     quote_assets = settings.quote_assets or ["USD"]
     requested_symbol = str(args.symbol or "").strip()
@@ -243,7 +301,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         symbol=symbol,
         quote_assets=quote_assets,
         credentials_loaded=client.is_configured(),
-        credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test),
+        credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test, runtime),
     )
 
     _run_check(result, "public_time", lambda: {"server_time": client._public("/0/public/Time")})

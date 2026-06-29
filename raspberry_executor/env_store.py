@@ -42,6 +42,7 @@ DEFAULTS = {
     "WEB_HOST": "0.0.0.0",
     "WEB_PORT": "8090",
     "ADMIN_PASSWORD": "",
+    "DATABASE_URL": "postgresql+psycopg://postgres:postgres@localhost:5432/signalmaker",
 }
 
 LEGACY_KEYS = {
@@ -143,6 +144,8 @@ def write_env(values: dict[str, str]) -> None:
         f"WEB_HOST={merged['WEB_HOST']}",
         f"WEB_PORT={merged['WEB_PORT']}",
         f"ADMIN_PASSWORD={merged['ADMIN_PASSWORD']}",
+        "",
+        f"DATABASE_URL={merged['DATABASE_URL']}",
         "",
     ]
     ENV_PATH.write_text("\n".join(lines))
