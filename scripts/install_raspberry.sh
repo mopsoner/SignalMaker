@@ -76,6 +76,20 @@ fi
 
 if [ ! -d "$APP_DIR/frontend/dist" ]; then
   echo "WARNING: frontend/dist is missing. The frontend service will stay stopped until dist is copied." >&2
+  echo "WARNING: ARMv6 detected: Vite/esbuild may crash with Bus error. Prefer prebuilt frontend/dist." >&2
+fi
+
+echo "Installing frontend dependencies and attempting a production build..."
+echo "WARNING: Raspberry Pi Node/Vite/esbuild builds can fail with Bus error on older ARM devices." >&2
+echo "WARNING: Installation will continue if npm install or npm run build fails." >&2
+cd "$APP_DIR/frontend"
+if ! npm install; then
+  echo "WARNING: npm install failed. Continuing installation; copy a prebuilt frontend/dist or run scripts/build_frontend.sh on a compatible machine." >&2
+elif ! npm run build; then
+  echo "WARNING: npm run build failed. Continuing installation; copy a prebuilt frontend/dist from a compatible machine." >&2
+fi
+if [ ! -d "$APP_DIR/frontend/dist" ]; then
+  echo "WARNING: frontend/dist is not available. The frontend service will fail cleanly until dist is copied or FRONTEND_DEV_SERVER=true is set manually." >&2
 fi
 
 mkdir -p logs data
