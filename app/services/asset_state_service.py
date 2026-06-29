@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.asset_state import AssetStateCurrent
@@ -16,8 +16,16 @@ class AssetStateService:
         self._ensure_15m_columns()
 
     def _ensure_15m_columns(self) -> None:
-        self.db.execute(text("ALTER TABLE asset_state_current ADD COLUMN IF NOT EXISTS rsi_15m DOUBLE PRECISION"))
-        self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
+        bind = self.db.get_bind()
+        inspector = inspect(bind)
+        columns = {column["name"] for column in inspector.get_columns("asset_state_current")}
+
+        if "rsi_15m" not in columns:
+            self.db.execute(text("ALTER TABLE asset_state_current ADD COLUMN rsi_15m DOUBLE PRECISION"))
+
+        if "rsi_5m" in columns:
+            self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
+
         self.db.commit()
 
     def list_assets(self, *, limit: int, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
