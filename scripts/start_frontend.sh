@@ -12,4 +12,7 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
+echo "SignalMaker frontend starting on port ${FRONTEND_PORT:-3000}"
+echo "API base: ${VITE_API_BASE:-http://127.0.0.1:8080}"
+
 exec npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-3000}
