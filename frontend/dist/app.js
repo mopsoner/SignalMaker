@@ -56,6 +56,15 @@
 
 
   var adminSettingsPayload = null;
+  var adminSettingsDirty = false;
+
+  function isAdminSettingsInput(element) {
+    return !!(element && element.getAttribute && element.getAttribute('data-admin-section') && element.getAttribute('data-admin-key'));
+  }
+
+  function adminSettingsHasActiveEdit() {
+    return adminSettingsDirty || isAdminSettingsInput(document.activeElement);
+  }
 
   function parseAdminValue(raw, original) {
     if (typeof original === 'boolean') return raw === 'true' || raw === '1' || raw === 'on';
@@ -110,8 +119,9 @@
     }
   }
 
-  function loadAdminSettings() {
+  function loadAdminSettings(force) {
     if (!document.getElementById('admin-settings-content')) return Promise.resolve();
+    if (!force && adminSettingsHasActiveEdit()) return Promise.resolve();
     return fetchJson('/api/v1/admin/settings').then(function (payload) {
       setHtml('admin-settings-content', renderAdminSettings(payload));
     }).catch(function (error) { setHtml('admin-settings-content', '<p class="warn">Réglages indisponibles : ' + text(error.message) + '</p>'); });
@@ -127,6 +137,7 @@
       payload[section][key] = parseAdminValue(input.value, original);
     });
     fetchJson('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }).then(function (updated) {
+      adminSettingsDirty = false;
       setHtml('admin-save-result', 'Réglages sauvegardés.');
       setHtml('admin-settings-content', renderAdminSettings(updated));
     }).catch(function (error) { setHtml('admin-save-result', 'Erreur sauvegarde : ' + text(error.message)); });
@@ -221,7 +232,7 @@
     fetchJson('/api/v1/assets/' + encodeURIComponent(symbol)).then(function (p) { setHtml('asset-content', '<pre>'+text(JSON.stringify(p, null, 2))+'</pre>'); }).catch(function (e) { setHtml('asset-content', '<p class="warn">Actif indisponible : '+text(e.message)+'</p>'); });
   }
 
-  function refresh() {
+  function refresh(forceAdminSettings) {
     var updatedAt = document.getElementById('updated-at');
     if (updatedAt) updatedAt.textContent = new Date().toLocaleString();
     loadOperatorToken();
@@ -230,13 +241,21 @@
     if (document.getElementById('candidates-content')) loadCandidates();
     if (document.getElementById('momentum-content')) loadMomentum();
     if (document.getElementById('assets-content')) loadAssets();
-    loadAdminSettings(); loadAdminWorkers();
+    loadAdminSettings(!!forceAdminSettings); loadAdminWorkers();
     loadOps(); loadLogs(); loadMarketData(); loadAsset();
   }
 
+  document.addEventListener('input', function (event) {
+    if (isAdminSettingsInput(event.target)) adminSettingsDirty = true;
+  });
+
+  document.addEventListener('change', function (event) {
+    if (isAdminSettingsInput(event.target)) adminSettingsDirty = true;
+  });
+
   document.addEventListener('click', function (event) {
     var action = event.target && event.target.getAttribute('data-action');
-    if (action === 'refresh') refresh();
+    if (action === 'refresh') refresh(true);
     if (action === 'sync-momentum') fetchJson('/api/v1/executor/sync-momentum-candidates', { method: 'POST' }).then(function (p) { setHtml('sync-result', 'Sync OK : ' + text(JSON.stringify(p))); refresh(); }).catch(function (e) { setHtml('sync-result', 'Sync erreur : ' + text(e.message)); });
     if (action === 'test-ibkr') fetchJson('/admin/market-data/ibkr-feed/test-ingest', { method: 'POST' }).then(function (p) { setHtml('ibkr-result', 'Test OK : ' + text(JSON.stringify(p))); }).catch(function (e) { setHtml('ibkr-result', 'Test erreur : ' + text(e.message)); });
     if (action === 'load-asset') loadAsset();
