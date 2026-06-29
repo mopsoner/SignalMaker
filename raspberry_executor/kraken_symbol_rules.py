@@ -17,10 +17,26 @@ class KrakenSymbolRules:
     def _normalize_symbol(self, symbol: str) -> str:
         return symbol.upper().replace("/", "")
 
+    def _symbol_aliases(self, symbol: str) -> set[str]:
+        normalized = self._normalize_symbol(symbol)
+        aliases = {normalized}
+        if "BTC" in normalized:
+            aliases.add(normalized.replace("BTC", "XBT"))
+        if "XBT" in normalized:
+            aliases.add(normalized.replace("XBT", "BTC"))
+        return aliases
+
+    def _asset_name(self, asset: str) -> str:
+        value = str(asset or "").upper()
+        if value in {"XBT", "XXBT"}:
+            return "BTC"
+        return value.lstrip("XZ")
+
     def symbol_info(self, symbol: str) -> dict[str, Any]:
         symbol = self._normalize_symbol(symbol)
         if symbol in self._cache:
             return self._cache[symbol]
+        requested_aliases = self._symbol_aliases(symbol)
         response = requests.get(f"{self.base_url}/0/public/AssetPairs", params={"assetVersion": 1}, timeout=20)
         response.raise_for_status()
         data = response.json()
@@ -30,10 +46,11 @@ class KrakenSymbolRules:
         for key, row in (data.get("result") or {}).items():
             altname = str(row.get("altname") or key).upper().replace("/", "")
             wsname = str(row.get("wsname") or "").upper().replace("/", "")
-            if symbol in {altname, wsname}:
+            kraken_aliases = self._symbol_aliases(altname) | self._symbol_aliases(wsname)
+            if requested_aliases & kraken_aliases:
                 base = str(row.get("base") or "").upper()
                 quote = str(row.get("quote") or "").upper()
-                info = {**row, "pair_key": key, "symbol": symbol, "baseAsset": "BTC" if base == "XBT" else base.lstrip("XZ"), "quoteAsset": "BTC" if quote == "XBT" else quote.lstrip("XZ")}
+                info = {**row, "pair_key": key, "symbol": symbol, "baseAsset": self._asset_name(base), "quoteAsset": self._asset_name(quote)}
                 self._cache[symbol] = info
                 return info
         raise RuntimeError(f"symbol_not_found:{symbol}")
@@ -41,7 +58,7 @@ class KrakenSymbolRules:
     def base_asset(self, symbol: str) -> str:
         info = self.symbol_info(symbol)
         base = str(info.get("base") or "").upper()
-        return "BTC" if base == "XBT" else base
+        return self._asset_name(base)
 
     def _floor_decimals(self, value: float, decimals: int) -> str:
         factor = 10**max(decimals, 0)

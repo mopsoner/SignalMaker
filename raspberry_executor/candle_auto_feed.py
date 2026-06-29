@@ -179,9 +179,16 @@ def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], lim
 
 def _kraken_asset(asset: str) -> str:
     value = str(asset or "").upper()
-    if value == "XBT":
+    if value in {"XBT", "XXBT"}:
         return "BTC"
     return value.lstrip("XZ")
+
+
+def _kraken_symbol(row: dict, fallback_key: str) -> str:
+    symbol = str(row.get("altname") or fallback_key).upper().replace("/", "")
+    if symbol.startswith("XBT"):
+        return "BTC" + symbol.removeprefix("XBT")
+    return symbol
 
 
 def _kraken_asset_pairs(base_url: str) -> dict:
@@ -202,7 +209,7 @@ def discover_kraken_spot_symbols(base_url: str, quote_assets: list[str], limit: 
         quote = _kraken_asset(row.get("quote"))
         if status not in {"online", ""} or quote not in quotes:
             continue
-        symbols.append(str(row.get("altname") or key).upper().replace("/", ""))
+        symbols.append(_kraken_symbol(row, key))
     symbols = sorted(set(symbols))
     return symbols[:limit] if limit and limit > 0 else symbols
 
@@ -219,7 +226,7 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
             continue
         if not leverage_buy or not leverage_sell:
             continue
-        symbols.append(str(row.get("altname") or key).upper().replace("/", ""))
+        symbols.append(_kraken_symbol(row, key))
     symbols = sorted(set(symbols))
     return symbols[:limit] if limit and limit > 0 else symbols
 

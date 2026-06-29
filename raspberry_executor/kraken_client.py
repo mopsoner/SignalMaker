@@ -34,6 +34,21 @@ class KrakenClient:
     def _normalize_symbol(self, symbol: str) -> str:
         return symbol.upper().replace("/", "")
 
+    def _symbol_aliases(self, symbol: str) -> set[str]:
+        normalized = self._normalize_symbol(symbol)
+        aliases = {normalized}
+        if "BTC" in normalized:
+            aliases.add(normalized.replace("BTC", "XBT"))
+        if "XBT" in normalized:
+            aliases.add(normalized.replace("XBT", "BTC"))
+        return aliases
+
+    def _asset_name(self, asset: str) -> str:
+        value = str(asset or "").upper()
+        if value in {"XBT", "XXBT"}:
+            return "BTC"
+        return value.lstrip("XZ")
+
     def _public(self, path: str, params: dict[str, Any] | None = None) -> Any:
         response = self.session.get(f"{self.base_url}{path}", params=params or {}, timeout=20)
         response.raise_for_status()
@@ -68,14 +83,15 @@ class KrakenClient:
         if symbol in self._asset_pair_cache:
             return self._asset_pair_cache[symbol]
         rows = self._public("/0/public/AssetPairs", {"assetVersion": 1}) or {}
-        compact = symbol.replace("USDT", "USD") if symbol.endswith("USDT") else symbol
+        requested_aliases = self._symbol_aliases(symbol)
         for key, row in rows.items():
             altname = str(row.get("altname") or key).upper().replace("/", "")
             wsname = str(row.get("wsname") or "").upper().replace("/", "")
-            if symbol in {altname, wsname} or compact in {altname, wsname}:
+            kraken_aliases = self._symbol_aliases(altname) | self._symbol_aliases(wsname)
+            if requested_aliases & kraken_aliases:
                 base = str(row.get("base") or "").upper()
                 quote = str(row.get("quote") or "").upper()
-                info = {**row, "pair_key": key, "symbol": symbol, "baseAsset": "BTC" if base == "XBT" else base.lstrip("XZ"), "quoteAsset": "BTC" if quote == "XBT" else quote.lstrip("XZ")}
+                info = {**row, "pair_key": key, "symbol": symbol, "baseAsset": self._asset_name(base), "quoteAsset": self._asset_name(quote)}
                 self._asset_pair_cache[symbol] = info
                 return info
         raise RuntimeError(f"kraken_pair_not_found:{symbol}")

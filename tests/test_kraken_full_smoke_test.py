@@ -26,3 +26,10 @@ def test_parser_defaults_keep_order_validation_opt_in():
     assert args.validate_order is False
     assert args.skip_private is False
     assert args.order_quote == 20.0
+
+
+def test_discover_default_symbol_uses_kraken_discovery_before_btc_fallback(monkeypatch):
+    monkeypatch.setattr(kraken_full_smoke_test, "discover_kraken_margin_symbols", lambda *args, **kwargs: ["ETHUSDC"])
+    monkeypatch.setattr(kraken_full_smoke_test, "discover_kraken_spot_symbols", lambda *args, **kwargs: ["BTCUSDC"])
+
+    assert kraken_full_smoke_test._discover_default_symbol("https://kraken.test", ["USDC"]) == "ETHUSDC"

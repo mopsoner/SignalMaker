@@ -21,6 +21,7 @@ def kraken_asset_pairs_payload():
         "error": [],
         "result": {
             "XXBTZUSD": {"altname": "XBTUSD", "base": "XBT", "quote": "ZUSD", "status": "online", "leverage_buy": [2, 3, 4, 5], "leverage_sell": [2, 3, 4, 5]},
+            "XBTUSDC": {"altname": "XBTUSDC", "base": "XXBT", "quote": "USDC", "status": "online", "leverage_buy": [2, 3], "leverage_sell": [2, 3]},
             "ETHUSDC": {"altname": "ETHUSDC", "base": "ETH", "quote": "USDC", "status": "online", "leverage_buy": [2, 3], "leverage_sell": [2, 3]},
             "ADAUSDC": {"altname": "ADAUSDC", "base": "ADA", "quote": "USDC", "status": "online", "leverage_buy": [], "leverage_sell": []},
             "SOLUSDT": {"altname": "SOLUSDT", "base": "SOL", "quote": "USDT", "status": "online", "leverage_buy": [2], "leverage_sell": [2]},
@@ -32,7 +33,7 @@ def kraken_asset_pairs_payload():
 def test_discover_kraken_margin_symbols_keeps_only_margin_tradeable_quotes(monkeypatch):
     monkeypatch.setattr(candle_auto_feed.requests, "get", lambda *args, **kwargs: FakeResponse(kraken_asset_pairs_payload()))
 
-    assert candle_auto_feed.discover_kraken_margin_symbols("https://kraken.test", ["USDC"]) == ["ETHUSDC"]
+    assert candle_auto_feed.discover_kraken_margin_symbols("https://kraken.test", ["USDC"]) == ["BTCUSDC", "ETHUSDC"]
 
 
 def test_discover_symbols_for_exchange_uses_kraken_margin_filter_for_cross(monkeypatch):
@@ -41,11 +42,11 @@ def test_discover_symbols_for_exchange_uses_kraken_margin_filter_for_cross(monke
 
     symbols, source = candle_auto_feed.discover_symbols_for_exchange(settings, ["USDC"], "cross")
 
-    assert symbols == ["ETHUSDC"]
+    assert symbols == ["BTCUSDC", "ETHUSDC"]
     assert source == "kraken_margin"
 
 
 def test_discover_kraken_spot_symbols_can_include_non_margin_spot_pairs(monkeypatch):
     monkeypatch.setattr(candle_auto_feed.requests, "get", lambda *args, **kwargs: FakeResponse(kraken_asset_pairs_payload()))
 
-    assert candle_auto_feed.discover_kraken_spot_symbols("https://kraken.test", ["USDC"]) == ["ADAUSDC", "ETHUSDC"]
+    assert candle_auto_feed.discover_kraken_spot_symbols("https://kraken.test", ["USDC"]) == ["ADAUSDC", "BTCUSDC", "ETHUSDC"]

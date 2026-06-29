@@ -71,9 +71,26 @@ def _run_check(result: SmokeResult, name: str, func: Callable[[], dict[str, Any]
 
 def _find_symbol_for_quotes(base_url: str, quote_assets: list[str]) -> str:
     for quote in quote_assets:
+        if quote.upper() in {"USDC", "USDT", "USD", "EUR", "GBP"}:
         if quote.upper() in {"USD", "USDT", "USDC", "EUR", "GBP"}:
             return f"BTC{quote.upper()}"
     return DEFAULT_SYMBOL
+
+
+def _discover_default_symbol(base_url: str, quote_assets: list[str]) -> str:
+    try:
+        symbols = discover_kraken_margin_symbols(base_url, quote_assets, limit=1)
+        if symbols:
+            return symbols[0]
+    except Exception:
+        pass
+    try:
+        symbols = discover_kraken_spot_symbols(base_url, quote_assets, limit=1)
+        if symbols:
+            return symbols[0]
+    except Exception:
+        pass
+    return _find_symbol_for_quotes(base_url, quote_assets)
 
 
 def _safe_sample(values: list[str], limit: int = 10) -> list[str]:
@@ -84,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Teste les appels Kraken publics, les adaptateurs SignalMaker, et les appels privés sans placer d'ordre réel par défaut.",
     )
+    parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSDC, BTCUSDT, ETHUSDC. Par défaut: première paire découverte pour QUOTE_ASSETS.")
     parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSD, BTCUSDC, ETHUSD. Par défaut: BTC + premier QUOTE_ASSETS compatible.")
     parser.add_argument("--base-url", help="URL Kraken. Par défaut: KRAKEN_BASE_URL ou https://api.kraken.com.")
     parser.add_argument("--json", action="store_true", help="Affiche uniquement le JSON final, pratique à coller dans un ticket.")
@@ -102,6 +120,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     settings = load_settings()
     base_url = (args.base_url or settings.kraken_base_url or "https://api.kraken.com").rstrip("/")
     quote_assets = settings.quote_assets or ["USD"]
+    symbol = (args.symbol or _discover_default_symbol(base_url, quote_assets)).upper().replace("/", "")
     symbol = (args.symbol or _find_symbol_for_quotes(base_url, quote_assets)).upper().replace("/", "")
 
     client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
