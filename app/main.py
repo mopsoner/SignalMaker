@@ -8,7 +8,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.db.base import init_db
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -16,6 +15,8 @@ _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if settings.create_tables_on_boot:
+        from app.db.base import init_db
+
         init_db()
     yield
 
