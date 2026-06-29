@@ -54,7 +54,7 @@ class PipelineService:
         return f"binance_lookback_{interval}"
 
     def _bundle_limits(self, execution_interval: str) -> dict[str, int]:
-        runtime = self.collector.runtime["binance"]
+        runtime = self.collector.runtime.get("market_data", self.collector.runtime["binance"])
         return {
             execution_interval: int(runtime.get(self._lookback_key(execution_interval), 180)),
             "1h": int(runtime["binance_lookback_1h"]),
@@ -162,7 +162,7 @@ class PipelineService:
         structure_counts = Counter()
         interval_write_counts = Counter()
 
-        max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
+        max_workers = max(1, int(self.collector.runtime.get("market_data", self.collector.runtime["binance"]).get("binance_collect_max_workers", 4)))
         worker_count = min(max_workers, max(1, len(symbols)))
 
         fetched_exec, collect_errors = self._collect_interval_parallel(symbols, execution_interval, latest_close_times, worker_count)
@@ -314,7 +314,7 @@ class PipelineService:
             "execution_interval": execution_interval,
             "analysis_ordering": "score_desc_existing_asset_state",
             "analysis_top_symbols": analyzed_symbols[:10],
-            "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
+            "incremental_fetch_enabled": bool(self.collector.runtime.get("market_data", self.collector.runtime["binance"]).get("binance_incremental_fetch_enabled", True)),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
             "state_counts": dict(state_counts),
