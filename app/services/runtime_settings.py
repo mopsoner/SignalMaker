@@ -138,6 +138,14 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
 }
 
 
+def _canonical_admin_field(section: str, key: str) -> tuple[str, str]:
+    aliases = ADMIN_FIELD_ALIASES.get(section, {})
+    if key in aliases:
+        target_section = "general" if section == "admin/security" else section
+        return target_section, aliases[key]
+    return section, key
+
+
 def _with_admin_aliases(payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     admin_payload = {section: values.copy() for section, values in payload.items()}
     for section in ("general", "binance", "kraken", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
@@ -176,7 +184,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         rows = db.execute(select(AppSetting)).scalars().all()
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
         for row in rows:
-            payload.setdefault(row.category, {})[row.key] = row.value
+            category, key = _canonical_admin_field(row.category, row.key)
+            payload.setdefault(category, {})[key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
         payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
