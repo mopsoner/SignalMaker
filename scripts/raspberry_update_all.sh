@@ -62,7 +62,7 @@ User=pi
 WorkingDirectory=/home/pi/Desktop/SignalMaker
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
-Environment=SIGNALMAKER_KIOSK_URL=http://127.0.0.1:8090/positions
+Environment=SIGNALMAKER_KIOSK_URL=http://127.0.0.1:3000/positions.html
 ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_kiosk_browser.sh
 Restart=always
 RestartSec=10
