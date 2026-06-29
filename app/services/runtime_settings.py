@@ -18,10 +18,23 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "cors_origins": base_settings.cors_origins,
         "create_tables_on_boot": base_settings.create_tables_on_boot,
     },
+    "executor": {
+        "execution_exchange": os.getenv("EXECUTION_EXCHANGE", "binance"),
+        "quote_assets": base_settings.binance_quote_assets,
+    },
     "binance": {
+        "binance_exchange_name": "binance",
+        "binance_rest_base": base_settings.binance_rest_base,
         "binance_api_key": base_settings.binance_api_key,
         "binance_secret_key": base_settings.binance_secret_key,
-        "binance_rest_base": base_settings.binance_rest_base,
+    },
+    "kraken": {
+        "kraken_exchange_name": "kraken",
+        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", "https://api.kraken.com"),
+        "kraken_api_key": os.getenv("KRAKEN_API_KEY", ""),
+        "kraken_secret_key": os.getenv("KRAKEN_SECRET_KEY", ""),
+    },
+    "market_data": {
         "binance_collector_enabled": getattr(base_settings, "binance_collector_enabled", True),
         "binance_quote_assets": base_settings.binance_quote_assets,
         "binance_symbol_status": base_settings.binance_symbol_status,
@@ -41,12 +54,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "binance_lookback_15m": base_settings.binance_lookback_15m,
         "binance_lookback_1h": base_settings.binance_lookback_1h,
         "binance_lookback_4h": base_settings.binance_lookback_4h,
-    },
-    "kraken": {
-        "execution_exchange": os.getenv("EXECUTION_EXCHANGE", "binance"),
-        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", "https://api.kraken.com"),
-        "kraken_api_key": os.getenv("KRAKEN_API_KEY", ""),
-        "kraken_secret_key": os.getenv("KRAKEN_SECRET_KEY", ""),
     },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
@@ -101,13 +108,17 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
 
 ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
     "general": {"ADMIN_TOKEN": "admin_token"},
+    "executor": {
+        "EXECUTION_EXCHANGE": "execution_exchange",
+        "QUOTE_ASSETS": "quote_assets",
+    },
     "binance": {
+        "BINANCE_BASE_URL": "binance_rest_base",
         "BINANCE_API_KEY": "binance_api_key",
         "BINANCE_SECRET_KEY": "binance_secret_key",
         "BINANCE_USE_TESTNET": "binance_use_testnet",
     },
     "kraken": {
-        "EXECUTION_EXCHANGE": "execution_exchange",
         "KRAKEN_BASE_URL": "kraken_base_url",
         "KRAKEN_API_KEY": "kraken_api_key",
         "KRAKEN_SECRET_KEY": "kraken_secret_key",
@@ -138,6 +149,27 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
 }
 
 
+
+def _apply_legacy_admin_setting_locations(payload: dict[str, dict[str, Any]]) -> None:
+    """Keep old persisted admin rows working after splitting executor/market data settings."""
+    binance = payload.setdefault("binance", {})
+    executor = payload.setdefault("executor", {})
+    kraken = payload.setdefault("kraken", {})
+    market_data = payload.setdefault("market_data", {})
+
+    for legacy_key in ("execution_exchange", "EXECUTION_EXCHANGE"):
+        if legacy_key in kraken:
+            executor["execution_exchange"] = kraken.pop(legacy_key)
+    for legacy_key in ("binance_quote_assets", "BINANCE_QUOTE_ASSETS"):
+        if legacy_key in binance:
+            executor["quote_assets"] = binance.get(legacy_key)
+    market_data_keys = {key for key in DEFAULT_SETTINGS["market_data"] if key != "binance_quote_assets"}
+    market_data_keys.add("binance_quote_assets")
+    for key in list(binance.keys()):
+        if key in market_data_keys:
+            market_data[key] = binance.pop(key)
+    market_data.setdefault("binance_quote_assets", executor.get("quote_assets", base_settings.binance_quote_assets))
+
 def _canonical_admin_field(section: str, key: str) -> tuple[str, str]:
     aliases = ADMIN_FIELD_ALIASES.get(section, {})
     if key in aliases:
@@ -148,7 +180,7 @@ def _canonical_admin_field(section: str, key: str) -> tuple[str, str]:
 
 def _with_admin_aliases(payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     admin_payload = {section: values.copy() for section, values in payload.items()}
-    for section in ("general", "binance", "kraken", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
+    for section in ("general", "executor", "binance", "kraken", "market_data", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
         admin_payload.setdefault(section, {})
     for section, aliases in ADMIN_FIELD_ALIASES.items():
         for display_key, runtime_key in aliases.items():
@@ -187,7 +219,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             category, key = _canonical_admin_field(row.category, row.key)
             payload.setdefault(category, {})[key] = row.value
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
-        payload.setdefault("binance", {})["binance_collector_enabled"] = bool(payload.get("binance", {}).get("binance_collector_enabled", True))
+        payload.setdefault("market_data", {})["binance_collector_enabled"] = bool(payload.get("market_data", {}).get("binance_collector_enabled", True))
+        _apply_legacy_admin_setting_locations(payload)
         payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
         payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
         return payload

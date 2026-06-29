@@ -21,8 +21,10 @@ class SettingsPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     general: dict[str, Any] = {}
+    executor: dict[str, Any] = {}
     binance: dict[str, Any] = {}
     kraken: dict[str, Any] = {}
+    market_data: dict[str, Any] = {}
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
     bot: dict[str, Any] = {}

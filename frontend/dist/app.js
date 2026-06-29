@@ -78,7 +78,7 @@
 
   function renderAdminSettings(payload) {
     adminSettingsPayload = payload || {};
-    var preferred = ['general', 'binance', 'kraken', 'strategy', 'notifications', 'bot', 'live', 'momentum', 'admin/security'];
+    var preferred = ['general', 'executor', 'binance', 'kraken', 'market_data', 'strategy', 'notifications', 'bot', 'live', 'momentum', 'admin/security'];
     var seen = {};
     var sections = preferred.concat(Object.keys(adminSettingsPayload)).filter(function (section) {
       if (seen[section]) return false;
