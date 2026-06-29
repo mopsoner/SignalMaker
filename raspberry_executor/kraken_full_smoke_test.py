@@ -144,6 +144,7 @@ def _settings_with_runtime_overrides(settings: Settings) -> Settings:
 
 
 def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_kraken_test: dict[str, Any]) -> dict[str, Any]:
+def _credential_sources(settings: Settings, admin_bridge: dict[str, Any]) -> dict[str, Any]:
     import os
 
     return {
@@ -158,6 +159,8 @@ def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_
         "admin_kraken_test": admin_kraken_test,
     }
 
+
+    }
 
 def _error_details(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, requests.HTTPError) and exc.response is not None:
@@ -243,6 +246,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         quote_assets=quote_assets,
         credentials_loaded=client.is_configured(),
         credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test),
+        credential_sources=_credential_sources(settings, admin_bridge),
     )
 
     _run_check(result, "public_time", lambda: {"server_time": client._public("/0/public/Time")})
