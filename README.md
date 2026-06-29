@@ -37,12 +37,12 @@ Build or refresh the static files with:
 bash scripts/build_frontend.sh
 ```
 
-Start the frontend with:
-```bash
-bash scripts/start_frontend.sh
-```
+No separate frontend process is needed on Raspberry: the backend serves `frontend/dist`, so `http://IP_DU_RASPBERRY:5000` shows the same lightweight UI next to the API.
 
-The backend also serves `frontend/dist` when it exists, so `http://IP_DU_RASPBERRY:5000` can show the same lightweight UI next to the API.
+For development only, a standalone static server can still be started explicitly:
+```bash
+RUN_STANDALONE_FRONTEND=1 bash scripts/start_frontend.sh
+```
 
 ## Main endpoints
 - `GET /healthz`
@@ -65,7 +65,7 @@ bash run.sh init-db
 bash run.sh all
 ```
 
-`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, scheduler worker, and frontend. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
+`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
 
 ## Raspberry Pi install
 Run the full Raspberry Pi setup from a fresh checkout with one command:
@@ -83,95 +83,58 @@ The installer provisions PostgreSQL locally, creates the `signalmaker` database,
 Older Raspberry Pi devices / `armv6l` can fail on Vite/esbuild with `Bus error`. SignalMaker now avoids that path: run `bash scripts/build_frontend.sh` to refresh `frontend/dist` with static files only.
 
 ### Raspberry UI
-After installation, start the backend API and frontend UI services:
+After installation, the main Raspberry service is `signalmaker-api`. It serves both the FastAPI API and the lightweight static pages copied into `frontend/dist`; the separate `signalmaker-frontend` service is optional and is not required for Raspberry usage.
 
 ```bash
-sudo systemctl start signalmaker-api signalmaker-frontend
+sudo systemctl start signalmaker-api
 ```
 
-Open SignalMaker from another device on the same network:
+Open SignalMaker from another device on the same network using port `5000` only:
 
-- API: `http://IP_DU_RASPBERRY:5000`
-- UI: `http://IP_DU_RASPBERRY:3000`
+- Status: `http://IP_DU_RASPBERRY:5000/index.html`
+- Admin: `http://IP_DU_RASPBERRY:5000/admin.html`
+- Dashboard: `http://IP_DU_RASPBERRY:5000/dashboard.html`
+
+Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
 Useful Raspberry debug commands:
 
 ```bash
 uname -m
 systemctl status signalmaker-api
-systemctl status signalmaker-frontend
-journalctl -u signalmaker-frontend -f
+journalctl -u signalmaker-api -f
 curl http://localhost:5000/healthz
-curl -I http://localhost:3000/index.html
-curl -I http://localhost:3000/dashboard.html
+curl -I http://localhost:5000/index.html
+curl -I http://localhost:5000/admin.html
+curl -I http://localhost:5000/dashboard.html
 ```
 
-### Raspberry frontend/API port debugging
+### Raspberry frontend/API validation
 
-On Raspberry Pi installs, port `3000` is only the static frontend served from `frontend/dist`, while port `5000` is the backend API. The frontend should load pages such as `index.html` and `dashboard.html` from `http://IP_DU_RASPBERRY:3000`, but API calls must target `http://IP_DU_RASPBERRY:5000`.
-
-Port convention used by the Raspberry scripts and systemd units:
-
-- API / Uvicorn: `APP_PORT=5000`, health check `http://localhost:5000/healthz`.
-- Static frontend: `FRONTEND_PORT=3000`, pages such as `http://localhost:3000/index.html`.
-- Frontend JavaScript API base: `http://<same-host>:5000` by default, unless `window.SIGNALMAKER_API_BASE` overrides it.
-
-Use these checks when debugging frontend/API routing:
+Use these commands after updating the Raspberry frontend or service files:
 
 ```bash
-curl http://localhost:5000/healthz
-curl -I http://localhost:3000/index.html
-curl -I http://localhost:3000/dashboard.html
-```
-
-Requests under `/api/v1/...` must never be served by the static frontend on port `3000`; they should go to the backend API on port `5000`. If the frontend server logs show 404s for `/api/v1/...`, rebuild `frontend/dist` with `bash scripts/build_frontend.sh` and restart the frontend service with `sudo systemctl restart signalmaker-frontend`.
-
-The UI can also be served directly by the API on port `5000`:
-
-```text
-http://IP_DU_RASPBERRY:5000/index.html
-```
-
-In that mode the frontend and API share the same origin, so there is no CORS path at all. The static frontend on port `3000` can remain useful, but using port `5000` is the simplest Raspberry Pi mode when debugging browser/API connectivity.
-
-### Raspberry CORS preflight debugging
-
-If browser API calls from `http://IP_DU_RASPBERRY:3000` fail with `OPTIONS ... 400 Bad Request`, verify the backend CORS preflight response from the Raspberry Pi:
-
-Frontend `GET` requests to `/api/v1/...` should not trigger CORS preflight `OPTIONS` requests. Keep those requests simple: `Accept: application/json` is OK, but `Content-Type: application/json` must only be added when the request has a body, such as JSON `POST` or `PUT` calls. After changing `frontend/app.js`, rebuild the copied static files and restart both services:
-
-```bash
+cd ~/Desktop/SignalMaker
 bash scripts/build_frontend.sh
-sudo systemctl restart signalmaker-api signalmaker-frontend
-curl http://localhost:5000/healthz
+sudo systemctl restart signalmaker-api
+curl -i http://localhost:5000/healthz
+curl -i http://localhost:5000/api/v1/admin/settings
+curl -I http://localhost:5000/admin.html
 ```
 
-```bash
-curl -i -X OPTIONS "http://localhost:5000/api/v1/health" \
-  -H "Origin: http://RASPBERRY_IP:3000" \
-  -H "Access-Control-Request-Method: GET"
-```
-
-The response should include:
+The expected HTTP status for the curl checks is:
 
 ```text
 HTTP/1.1 200 OK
-access-control-allow-origin: http://RASPBERRY_IP:3000
 ```
 
-If the allowed origin is missing, check that `.env` contains either the Raspberry IP in `CORS_ORIGINS` or a LAN-compatible `CORS_ORIGIN_REGEX`, then restart the API service:
+Then open:
 
-```bash
-grep -E '^CORS_ORIGINS=|^CORS_ORIGIN_REGEX=' .env
-sudo systemctl restart signalmaker-api
+```text
+http://IP_DU_RASPBERRY:5000/admin.html
 ```
 
-To keep the Raspberry Pi running without the UI temporarily, disable only the frontend service:
-
-```bash
-sudo systemctl stop signalmaker-frontend
-sudo systemctl disable signalmaker-frontend
-```
+The static frontend remains plain HTML/CSS/JS: `bash scripts/build_frontend.sh` only copies files into `frontend/dist` and does not require npm, Vite or esbuild.
 
 ## VM deploy helper
 ```bash
@@ -186,14 +149,15 @@ Use the all-in-one launcher for local startup:
 bash run.sh all
 ```
 
-It starts the backend first, waits for the backend health check, then starts the pipeline worker, executor worker, scheduler worker, and frontend. You can still run individual processes when debugging:
+It starts the backend first, waits for the backend health check, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. You can still run individual processes when debugging:
 
 ```bash
 bash scripts/start_api.sh
 bash scripts/start_pipeline_worker.sh
 bash scripts/start_executor_worker.sh
 bash scripts/start_scheduler_worker.sh
-bash scripts/start_frontend.sh
+# Optional development-only standalone static server:
+# RUN_STANDALONE_FRONTEND=1 bash scripts/start_frontend.sh
 ```
 
 ## Production env

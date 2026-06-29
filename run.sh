@@ -9,14 +9,14 @@ Usage: ./run.sh [command]
 Commands:
   api             Start the FastAPI backend on APP_PORT (default: 5000)
   init-db         Initialize database tables
-  frontend        Start the lightweight static frontend
+  frontend        Legacy no-op: frontend is served by the API on APP_PORT
   pipeline-loop   Start the pipeline worker loop
   executor-loop   Start the executor worker loop
   scheduler-loop  Start the scheduler worker loop
-  all             Start API first, then workers/executor and frontend after the API is reachable
+  all             Start API first, then workers/executor after the API is reachable
   reserved-vm     Alias for all
 
-If no command is provided, the API, workers/executor, and frontend are started.
+If no command is provided, the API and workers/executor are started. The HTML UI is served by the API.
 USAGE
 }
 
@@ -32,11 +32,11 @@ wait_for_api() {
 
   local deadline=$((SECONDS + timeout_seconds))
 
-  echo "Waiting for SignalMaker backend at ${health_url} before starting workers/executor and frontend..."
+  echo "Waiting for SignalMaker backend at ${health_url} before starting workers/executor..."
   echo "Health check timeout: ${timeout_seconds}s; interval: ${check_interval_seconds}s."
   while [ "$SECONDS" -lt "$deadline" ]; do
     if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
-      echo "SignalMaker backend is ready; starting workers/executor and frontend."
+      echo "SignalMaker backend is ready; starting workers/executor."
       return 0
     fi
     local remaining=$((deadline - SECONDS))
@@ -50,11 +50,11 @@ wait_for_api() {
     fi
   done
 
-  echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; workers/executor and frontend will not start." >&2
+  echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; workers/executor will not start." >&2
   return 1
 }
 
-start_api_workers_and_frontend() {
+start_api_and_workers() {
   local pids=()
   local started_api=false
 
@@ -84,8 +84,6 @@ start_api_workers_and_frontend() {
   pids+=("$!")
   bash scripts/start_scheduler_worker.sh &
   pids+=("$!")
-  bash scripts/start_frontend.sh &
-  pids+=("$!")
 
   wait -n "${pids[@]}"
 }
@@ -103,7 +101,8 @@ case "$command" in
     exec python -m scripts.init_db "$@"
     ;;
   frontend)
-    exec bash scripts/start_frontend.sh "$@"
+    echo "The Raspberry frontend is served by signalmaker-api on http://127.0.0.1:${APP_PORT:-5000}/index.html; no separate frontend server is started."
+    exit 0
     ;;
   pipeline-loop)
     exec bash scripts/start_pipeline_worker.sh "$@"
@@ -115,7 +114,7 @@ case "$command" in
     exec bash scripts/start_scheduler_worker.sh "$@"
     ;;
   all|reserved-vm)
-    start_api_workers_and_frontend "$@"
+    start_api_and_workers "$@"
     ;;
   -h|--help|help)
     usage

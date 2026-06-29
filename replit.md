@@ -22,7 +22,7 @@ FastAPI trading app (Binance public REST, paper trading) with a lightweight stat
 
 - **SignalMaker API** (`bash SignalMaker/run.sh api`): local dev API on port 5000
 - **Build frontend** (`bash scripts/build_frontend.sh`): copy static frontend files to `frontend/dist`
-- **Start frontend** (`bash scripts/start_frontend.sh`): serve `frontend/dist` with Python http.server
+- **Frontend is served by API** (`bash scripts/start_frontend.sh`): use API-served `frontend/dist`; standalone server is development-only
 
 ## Key Configuration
 

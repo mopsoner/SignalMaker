@@ -19,12 +19,12 @@ bash scripts/start_scheduler_worker.sh &
 SCHEDULER_PID=$!
 
 if [ "${RUN_FRONTEND:-0}" = "1" ]; then
-  FRONTEND_PORT=${FRONTEND_PORT:-3000} bash scripts/start_frontend.sh &
+  RUN_STANDALONE_FRONTEND=1 FRONTEND_PORT=${FRONTEND_PORT:-5001} bash scripts/start_frontend.sh &
   FRONTEND_PID=$!
 else
   FRONTEND_PID=""
   echo "Lightweight static frontend disabled by default to reduce Raspberry Pi CPU usage."
-  echo "Set RUN_FRONTEND=1 to start it anyway."
+  echo "Set RUN_FRONTEND=1 to start the optional development-only standalone server anyway."
 fi
 
 cleanup() {

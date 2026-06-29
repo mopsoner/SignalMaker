@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from sqlalchemy import select
@@ -11,12 +12,15 @@ from app.models.app_setting import AppSetting
 
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
+        "admin_token": base_settings.admin_token,
         "app_name": base_settings.app_name,
         "app_env": base_settings.app_env,
         "cors_origins": base_settings.cors_origins,
         "create_tables_on_boot": base_settings.create_tables_on_boot,
     },
     "binance": {
+        "binance_api_key": base_settings.binance_api_key,
+        "binance_secret_key": base_settings.binance_secret_key,
         "binance_rest_base": base_settings.binance_rest_base,
         "binance_collector_enabled": getattr(base_settings, "binance_collector_enabled", True),
         "binance_quote_assets": base_settings.binance_quote_assets,
@@ -37,6 +41,12 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "binance_lookback_15m": base_settings.binance_lookback_15m,
         "binance_lookback_1h": base_settings.binance_lookback_1h,
         "binance_lookback_4h": base_settings.binance_lookback_4h,
+    },
+    "kraken": {
+        "execution_exchange": os.getenv("EXECUTION_EXCHANGE", "binance"),
+        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", "https://api.kraken.com"),
+        "kraken_api_key": os.getenv("KRAKEN_API_KEY", ""),
+        "kraken_secret_key": os.getenv("KRAKEN_SECRET_KEY", ""),
     },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
@@ -89,6 +99,74 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
 }
 
+ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "general": {"ADMIN_TOKEN": "admin_token"},
+    "binance": {
+        "BINANCE_API_KEY": "binance_api_key",
+        "BINANCE_SECRET_KEY": "binance_secret_key",
+        "BINANCE_USE_TESTNET": "binance_use_testnet",
+    },
+    "kraken": {
+        "EXECUTION_EXCHANGE": "execution_exchange",
+        "KRAKEN_BASE_URL": "kraken_base_url",
+        "KRAKEN_API_KEY": "kraken_api_key",
+        "KRAKEN_SECRET_KEY": "kraken_secret_key",
+    },
+    "notifications": {
+        "TELEGRAM_BOT_TOKEN": "telegram_secret",
+        "TELEGRAM_CHAT_ID": "telegram_chat_id",
+        "DISCORD_WEBHOOK_URL": "discord_url",
+    },
+    "bot": {
+        "BOT_PIPELINE_ENABLED": "bot_pipeline_enabled",
+        "BOT_EXECUTOR_ENABLED": "bot_executor_enabled",
+        "BOT_SCHEDULER_ENABLED": "bot_scheduler_enabled",
+        "BOT_PIPELINE_INTERVAL_SEC": "bot_pipeline_interval_sec",
+        "BOT_EXECUTOR_INTERVAL_SEC": "bot_executor_interval_sec",
+    },
+    "live": {
+        "LIVE_TRADING_ENABLED": "live_trading_enabled",
+        "LIVE_MAX_OPEN_POSITIONS": "live_max_open_positions",
+        "LIVE_MAX_NOTIONAL_PER_TRADE": "live_max_notional_per_trade",
+    },
+    "momentum": {
+        "MOMENTUM_CANDIDATES_SYNC_ENABLED": "momentum_candidates_sync_enabled",
+        "MOMENTUM_CANDIDATES_LIMIT": "momentum_candidates_limit",
+        "MOMENTUM_CANDIDATES_MIN_SCORE": "momentum_candidates_min_score",
+    },
+    "admin/security": {"ADMIN_TOKEN": "admin_token"},
+}
+
+
+def _with_admin_aliases(payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    admin_payload = {section: values.copy() for section, values in payload.items()}
+    for section in ("general", "binance", "kraken", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
+        admin_payload.setdefault(section, {})
+    for section, aliases in ADMIN_FIELD_ALIASES.items():
+        for display_key, runtime_key in aliases.items():
+            source_section = "general" if section == "admin/security" else section
+            if runtime_key in payload.get(source_section, {}):
+                admin_payload[section][display_key] = payload[source_section][runtime_key]
+    return admin_payload
+
+
+def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    normalized = {section: values.copy() for section, values in payload.items() if isinstance(values, dict)}
+    for section, aliases in ADMIN_FIELD_ALIASES.items():
+        values = payload.get(section, {})
+        if not isinstance(values, dict):
+            continue
+        target_section = "general" if section == "admin/security" else section
+        normalized.setdefault(target_section, {})
+        for display_key, runtime_key in aliases.items():
+            if display_key in values:
+                normalized[target_section][runtime_key] = values[display_key]
+    return normalized
+
+
+def load_admin_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
+    return _with_admin_aliases(load_runtime_settings(db))
+
 
 def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
     owns_session = db is None
@@ -110,6 +188,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
 
 
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    payload = _normalize_admin_payload(payload)
     strategy = payload.get("strategy")
     if isinstance(strategy, dict):
         strategy["signal_execution_interval"] = "15m"

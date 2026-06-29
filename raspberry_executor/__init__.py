@@ -58,6 +58,7 @@ def _bootstrap_runtime_from_admin() -> None:
 
     live = payload.get("live") or {}
     binance = payload.get("binance") or {}
+    kraken = payload.get("kraken") or {}
 
     if "live_trading_enabled" in live:
         dry_run_value = "false" if _bool(live.get("live_trading_enabled"), default=False) else "true"
@@ -72,6 +73,15 @@ def _bootstrap_runtime_from_admin() -> None:
 
     if binance.get("binance_quote_assets"):
         os.environ["QUOTE_ASSETS"] = str(binance.get("binance_quote_assets"))
+
+    if kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE"):
+        os.environ["EXECUTION_EXCHANGE"] = str(kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE")).strip().lower()
+    if kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL"):
+        os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL")).rstrip("/")
+    if kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY"):
+        os.environ["KRAKEN_API_KEY"] = str(kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY"))
+    if kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"):
+        os.environ["KRAKEN_SECRET_KEY"] = str(kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"))
 
     if _bool(live.get("binance_use_testnet"), default=False) and live.get("binance_testnet_rest_base"):
         os.environ["BINANCE_BASE_URL"] = str(live.get("binance_testnet_rest_base")).rstrip("/")
