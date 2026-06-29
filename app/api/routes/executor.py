@@ -2,8 +2,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.services.executor_service import ExecutorService
-from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
 
 router = APIRouter()
 
@@ -16,6 +14,8 @@ def execute_candidates(
     sync_momentum_first: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.services.executor_service import ExecutorService
+
     return ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode, sync_momentum_first=sync_momentum_first)
 
 
@@ -27,6 +27,8 @@ def sync_momentum_candidates(
     require_wyckoff_context: bool | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
+
     return MomentumCandidateSyncService(db).sync(
         limit=limit,
         min_momentum_score=min_momentum_score,
@@ -37,4 +39,6 @@ def sync_momentum_candidates(
 
 @router.post('/executor/reconcile')
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
+    from app.services.executor_service import ExecutorService
+
     return ExecutorService(db).reconcile_live_positions()
