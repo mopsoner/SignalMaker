@@ -1,5 +1,5 @@
 (function () {
-  var apiBase = window.SIGNALMAKER_API_BASE || (window.location.protocol + '//' + window.location.hostname + ':5000');
+  var apiBase = window.SIGNALMAKER_API_BASE || '';
 
   function text(value) {
     if (value === null || value === undefined || value === '') return '-';
@@ -69,11 +69,17 @@
 
   function renderAdminSettings(payload) {
     adminSettingsPayload = payload || {};
-    var sections = Object.keys(adminSettingsPayload);
-    if (!sections.length) return '<p class="muted">Aucun réglage.</p>';
+    var preferred = ['general', 'binance', 'kraken', 'strategy', 'notifications', 'bot', 'live', 'momentum', 'admin/security'];
+    var seen = {};
+    var sections = preferred.concat(Object.keys(adminSettingsPayload)).filter(function (section) {
+      if (seen[section]) return false;
+      seen[section] = true;
+      return true;
+    });
     return sections.map(function (section) {
       var values = adminSettingsPayload[section] || {};
-      var rows = Object.keys(values).map(function (key) {
+      var keys = Object.keys(values);
+      var rows = keys.map(function (key) {
         var value = values[key];
         var inputType = typeof value === 'number' ? 'number' : 'text';
         if (typeof value === 'boolean') {
@@ -81,8 +87,27 @@
         }
         return '<tr><td><code>' + text(key) + '</code></td><td><input type="' + inputType + '" data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '" value="' + text(Array.isArray(value) ? value.join(',') : value) + '"></td></tr>';
       }).join('');
+      if (!rows) rows = '<tr><td colspan="2" class="muted">Section vide.</td></tr>';
       return '<details open><summary>' + text(section) + '</summary><div class="scroll"><table><tbody>' + rows + '</tbody></table></div></details>';
     }).join('');
+  }
+
+  function loadOperatorToken() {
+    var input = document.getElementById('operator-key-input');
+    if (!input) return;
+    if (document.activeElement === input || input.getAttribute('data-loaded') === 'true') return;
+    try { input.value = window.localStorage.getItem('signalmaker_operator_key') || ''; input.setAttribute('data-loaded', 'true'); } catch (error) {}
+  }
+
+  function saveOperatorToken() {
+    var input = document.getElementById('operator-key-input');
+    if (!input) return;
+    try {
+      window.localStorage.setItem('signalmaker_operator_key', input.value || '');
+      setHtml('operator-key-result', 'Token admin local sauvegardé.');
+    } catch (error) {
+      setHtml('operator-key-result', 'Impossible de sauvegarder le token local : ' + text(error.message));
+    }
   }
 
   function loadAdminSettings() {
@@ -199,6 +224,7 @@
   function refresh() {
     var updatedAt = document.getElementById('updated-at');
     if (updatedAt) updatedAt.textContent = new Date().toLocaleString();
+    loadOperatorToken();
     if (document.getElementById('health')) loadHealth();
     if (document.getElementById('positions-content')) loadPositions();
     if (document.getElementById('candidates-content')) loadCandidates();
@@ -214,6 +240,7 @@
     if (action === 'sync-momentum') fetchJson('/api/v1/executor/sync-momentum-candidates', { method: 'POST' }).then(function (p) { setHtml('sync-result', 'Sync OK : ' + text(JSON.stringify(p))); refresh(); }).catch(function (e) { setHtml('sync-result', 'Sync erreur : ' + text(e.message)); });
     if (action === 'test-ibkr') fetchJson('/admin/market-data/ibkr-feed/test-ingest', { method: 'POST' }).then(function (p) { setHtml('ibkr-result', 'Test OK : ' + text(JSON.stringify(p))); }).catch(function (e) { setHtml('ibkr-result', 'Test erreur : ' + text(e.message)); });
     if (action === 'load-asset') loadAsset();
+    if (action === 'save-operator-token') saveOperatorToken();
     if (action === 'save-admin-settings') saveAdminSettings();
     if (action === 'reset-database' && window.confirm('Reset database runtime ?')) postAdminAction('/api/v1/admin/reset-database', 'admin-action-result');
     if (action === 'test-binance') postAdminAction('/api/v1/admin/test/binance', 'admin-action-result');
