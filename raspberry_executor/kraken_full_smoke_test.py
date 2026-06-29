@@ -101,6 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Teste les appels Kraken publics, les adaptateurs SignalMaker, et les appels privés sans placer d'ordre réel par défaut.",
     )
+    parser.add_argument(
+        "--symbol",
+        nargs="?",
+        const="",
+        default=None,
+        help="Symbole à tester, ex: BTCUSDC, BTCUSDT, ETHUSDC. Si vide ou absent: première paire découverte pour QUOTE_ASSETS.",
+    )
     parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSDC, BTCUSDT, ETHUSDC. Par défaut: première paire découverte pour QUOTE_ASSETS.")
     parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSD, BTCUSDC, ETHUSD. Par défaut: BTC + premier QUOTE_ASSETS compatible.")
     parser.add_argument("--base-url", help="URL Kraken. Par défaut: KRAKEN_BASE_URL ou https://api.kraken.com.")
@@ -120,6 +127,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     settings = load_settings()
     base_url = (args.base_url or settings.kraken_base_url or "https://api.kraken.com").rstrip("/")
     quote_assets = settings.quote_assets or ["USD"]
+    requested_symbol = str(args.symbol or "").strip()
+    symbol = (requested_symbol or _discover_default_symbol(base_url, quote_assets)).upper().replace("/", "")
     symbol = (args.symbol or _discover_default_symbol(base_url, quote_assets)).upper().replace("/", "")
     symbol = (args.symbol or _find_symbol_for_quotes(base_url, quote_assets)).upper().replace("/", "")
 

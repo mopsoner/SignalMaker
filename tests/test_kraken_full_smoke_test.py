@@ -33,3 +33,9 @@ def test_discover_default_symbol_uses_kraken_discovery_before_btc_fallback(monke
     monkeypatch.setattr(kraken_full_smoke_test, "discover_kraken_spot_symbols", lambda *args, **kwargs: ["BTCUSDC"])
 
     assert kraken_full_smoke_test._discover_default_symbol("https://kraken.test", ["USDC"]) == "ETHUSDC"
+
+
+def test_parser_allows_symbol_flag_without_value_for_discovery_mode():
+    args = kraken_full_smoke_test.build_parser().parse_args(["--symbol"])
+
+    assert args.symbol == ""
