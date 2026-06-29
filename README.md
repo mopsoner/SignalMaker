@@ -77,7 +77,9 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services, including `signalmaker-candle-feed` for the `raspberry_executor.candle_auto_feed.run_loop` process. It does not run Vite, npm or esbuild on the Raspberry Pi.
+
+When `EXECUTION_EXCHANGE=kraken`, the candle feed discovers Kraken spot or margin pairs, fetches OHLC candles from Kraken, then pushes only missing/new candles to the configured remote `SIGNALMAKER_BASE_URL` through `/api/v1/market-data/candles`. Set `CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE` to tune the Kraken public OHLC request pace.
 
 ### Lightweight frontend for older Raspberry Pi devices
 Older Raspberry Pi devices / `armv6l` can fail on Vite/esbuild with `Bus error`. SignalMaker now avoids that path: run `bash scripts/build_frontend.sh` to refresh `frontend/dist` with static files only.
@@ -103,7 +105,9 @@ Useful Raspberry debug commands:
 ```bash
 uname -m
 systemctl status signalmaker-api
+systemctl status signalmaker-candle-feed
 journalctl -u signalmaker-api -f
+journalctl -u signalmaker-candle-feed -f
 curl http://localhost:5000/healthz
 curl -I http://localhost:5000/index.html
 curl -I http://localhost:5000/admin.html

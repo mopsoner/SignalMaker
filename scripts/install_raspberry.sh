@@ -174,6 +174,24 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+  cat > "$service_dir/signalmaker-candle-feed.service" <<EOF
+[Unit]
+Description=SignalMaker Candle Feed
+After=network-online.target signalmaker-api.service
+Wants=network-online.target signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+ExecStart=/bin/bash $APP_DIR/scripts/start_candle_feed.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   cat > "$service_dir/signalmaker-frontend.service" <<EOF
 [Unit]
 Description=SignalMaker Frontend UI
@@ -195,7 +213,7 @@ EOF
   sudo cp "$service_dir"/signalmaker-*.service /etc/systemd/system/
   sudo chmod 644 /etc/systemd/system/signalmaker-*.service
   sudo systemctl daemon-reload
-  sudo systemctl enable signalmaker-api signalmaker-executor signalmaker-pipeline signalmaker-scheduler
+  sudo systemctl enable signalmaker-api signalmaker-executor signalmaker-pipeline signalmaker-scheduler signalmaker-candle-feed
   rm -rf "$service_dir"
 }
 

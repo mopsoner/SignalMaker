@@ -1,0 +1,15 @@
+[Unit]
+Description=SignalMaker Candle Feed
+After=network-online.target signalmaker-api.service
+Wants=network-online.target signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_candle_feed.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
