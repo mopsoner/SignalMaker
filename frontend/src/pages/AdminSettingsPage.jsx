@@ -125,8 +125,8 @@ export default function AdminSettingsPage() {
     }
   }
 
-  async function doCleanup(label, action) {
-    const ok = window.confirm(`${label}? This only deletes SignalMaker database rows for this category.`)
+  async function doCleanup(label, action, confirmMessage = `${label}? This only deletes SignalMaker database rows for this category.`) {
+    const ok = window.confirm(confirmMessage)
     if (!ok) return
     try {
       const result = await action()
@@ -178,6 +178,17 @@ export default function AdminSettingsPage() {
           </CleanupCard>
           <CleanupCard title="ETF & stock analysis" description="Clear generated ETF/stock analysis results, candidate/position views and queued job logs while keeping assets, universes and candles.">
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear ETF and stock analysis, trades/positions and job logs', api.clearStockEtfGeneratedData)}>Clear ETF/stock generated data</button>
+          </CleanupCard>
+          <CleanupCard title="All app data" description="Clear all runtime/application rows in one action, including market universes, market assets, candles, fills, live runs and asset state, while preserving only app settings.">
+            <button
+              className="button"
+              style={dangerButtonStyle}
+              onClick={() => doCleanup(
+                'Clear all app data except configuration',
+                api.clearApplicationData,
+                'Clear all app data? This deletes every app data table, including market_universes, market_assets, candles, candidates, orders, fills, positions, live runs, momentum data and job logs. Only app_settings is preserved.'
+              )}
+            >Clear all app data</button>
           </CleanupCard>
         </div>
       </section>
