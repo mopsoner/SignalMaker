@@ -193,6 +193,12 @@ python -m scripts.init_db
 RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 RASPBERRY_IP="${RASPBERRY_IP:-<raspberry-ip>}"
 
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files signalmaker-frontend.service >/dev/null 2>&1; then
+  echo "Frontend service installed. After future frontend updates, rebuild and restart with:"
+  echo "  bash scripts/build_frontend.sh"
+  echo "  sudo systemctl restart signalmaker-frontend"
+fi
+
 echo "SignalMaker Raspberry install complete"
 echo "Run SignalMaker with:"
 echo "  bash run.sh api"
