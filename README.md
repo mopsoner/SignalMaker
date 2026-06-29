@@ -62,10 +62,10 @@ The backend also serves `frontend/dist` when it exists, so `http://IP_DU_RASPBER
 ```bash
 cp .env.example .env
 bash run.sh init-db
-bash run.sh api
-bash scripts/start_frontend.sh
+bash run.sh all
 ```
 
+`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the frontend. You can tune the wait with `API_STARTUP_TIMEOUT` (default: 60 seconds).
 
 ## Raspberry Pi install
 Run the full Raspberry Pi setup from a fresh checkout with one command:

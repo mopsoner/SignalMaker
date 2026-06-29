@@ -13,27 +13,56 @@ Commands:
   pipeline-loop   Start the pipeline worker loop
   executor-loop   Start the executor worker loop
   scheduler-loop  Start the scheduler worker loop
-  all             Start API and frontend together
+  all             Start API first, then frontend after the API is reachable
   reserved-vm     Alias for all
 
 If no command is provided, the API and frontend are started.
 USAGE
 }
 
+wait_for_api() {
+  local port="${APP_PORT:-5000}"
+  local health_url="http://127.0.0.1:${port}/healthz"
+  local timeout_seconds="${API_STARTUP_TIMEOUT:-60}"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  echo "Waiting for SignalMaker backend at ${health_url} before starting the frontend..."
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+      echo "SignalMaker backend is ready; starting frontend."
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; frontend will not start." >&2
+  return 1
+}
+
 start_api_and_frontend() {
   bash scripts/start_api.sh "$@" &
   API_PID=$!
-
-  bash scripts/start_frontend.sh &
-  FRONTEND_PID=$!
+  FRONTEND_PID=""
 
   cleanup() {
-    kill "$API_PID" "$FRONTEND_PID" 2>/dev/null || true
+    if [ -n "${FRONTEND_PID}" ]; then
+      kill "$FRONTEND_PID" 2>/dev/null || true
+    fi
+    kill "$API_PID" 2>/dev/null || true
   }
 
   trap cleanup EXIT INT TERM
 
-  wait "$API_PID"
+  if ! wait_for_api; then
+    kill "$API_PID" 2>/dev/null || true
+    wait "$API_PID" 2>/dev/null || true
+    exit 1
+  fi
+
+  bash scripts/start_frontend.sh &
+  FRONTEND_PID=$!
+
+  wait -n "$API_PID" "$FRONTEND_PID"
 }
 
 command="${1:-all}"
