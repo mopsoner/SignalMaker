@@ -45,6 +45,11 @@ def healthz() -> dict[str, str]:
 if _FRONTEND_DIST.is_dir():
     app.mount("/static", StaticFiles(directory=_FRONTEND_DIST), name="static_frontend")
 
+    @app.get("/admin", include_in_schema=False)
+    @app.get("/admin/", include_in_schema=False)
+    def serve_admin_frontend() -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "admin.html")
+
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_static_frontend(full_path: str) -> FileResponse:
         requested = (_FRONTEND_DIST / full_path).resolve()

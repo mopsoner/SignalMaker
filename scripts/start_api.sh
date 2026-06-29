@@ -21,4 +21,4 @@ if ! "$PYTHON" -c "import uvicorn" >/dev/null 2>&1; then
   "$PYTHON" -m pip install -q -r "$REQUIREMENTS_FILE"
 fi
 
-exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port "${APP_PORT:-8080}"
+exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port "${APP_PORT:-5000}"

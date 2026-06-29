@@ -19,7 +19,7 @@ bash scripts/start_scheduler_worker.sh &
 SCHEDULER_PID=$!
 
 if [ "${RUN_FRONTEND:-0}" = "1" ]; then
-  FRONTEND_PORT=${FRONTEND_PORT:-5000} bash scripts/start_frontend.sh &
+  FRONTEND_PORT=${FRONTEND_PORT:-8090} bash scripts/start_frontend.sh &
   FRONTEND_PID=$!
 else
   FRONTEND_PID=""

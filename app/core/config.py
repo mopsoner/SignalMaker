@@ -32,11 +32,11 @@ class Settings(BaseSettings):
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
-    app_port: int = Field(default=8080, alias="APP_PORT")
+    app_port: int = Field(default=5000, alias="APP_PORT")
     database_url: str = Field(default="sqlite:///./signalmaker.db", alias="DATABASE_URL")
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
     create_tables_on_boot: bool = Field(default=True, alias="CREATE_TABLES_ON_BOOT")
-    cors_origins: str = Field(default="http://localhost:3000,http://localhost:8080", alias="CORS_ORIGINS")
+    cors_origins: str = Field(default="http://localhost:8090,http://localhost:5000", alias="CORS_ORIGINS")
 
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
