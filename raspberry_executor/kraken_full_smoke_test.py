@@ -72,6 +72,7 @@ def _run_check(result: SmokeResult, name: str, func: Callable[[], dict[str, Any]
 def _find_symbol_for_quotes(base_url: str, quote_assets: list[str]) -> str:
     for quote in quote_assets:
         if quote.upper() in {"USDC", "USDT", "USD", "EUR", "GBP"}:
+        if quote.upper() in {"USD", "USDT", "USDC", "EUR", "GBP"}:
             return f"BTC{quote.upper()}"
     return DEFAULT_SYMBOL
 
@@ -107,6 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Symbole à tester, ex: BTCUSDC, BTCUSDT, ETHUSDC. Si vide ou absent: première paire découverte pour QUOTE_ASSETS.",
     )
+    parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSDC, BTCUSDT, ETHUSDC. Par défaut: première paire découverte pour QUOTE_ASSETS.")
+    parser.add_argument("--symbol", help="Symbole à tester, ex: BTCUSD, BTCUSDC, ETHUSD. Par défaut: BTC + premier QUOTE_ASSETS compatible.")
     parser.add_argument("--base-url", help="URL Kraken. Par défaut: KRAKEN_BASE_URL ou https://api.kraken.com.")
     parser.add_argument("--json", action="store_true", help="Affiche uniquement le JSON final, pratique à coller dans un ticket.")
     parser.add_argument("--skip-private", action="store_true", help="Ignore les appels privés même si les clés Kraken sont présentes.")
@@ -126,6 +129,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     quote_assets = settings.quote_assets or ["USD"]
     requested_symbol = str(args.symbol or "").strip()
     symbol = (requested_symbol or _discover_default_symbol(base_url, quote_assets)).upper().replace("/", "")
+    symbol = (args.symbol or _discover_default_symbol(base_url, quote_assets)).upper().replace("/", "")
+    symbol = (args.symbol or _find_symbol_for_quotes(base_url, quote_assets)).upper().replace("/", "")
 
     client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
     rules = KrakenSymbolRules(base_url, quote_assets=quote_assets)
