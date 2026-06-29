@@ -144,14 +144,14 @@ def _settings_with_runtime_overrides(settings: Settings) -> Settings:
 
 
 def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_kraken_test: dict[str, Any]) -> dict[str, Any]:
-def _credential_sources(settings: Settings, admin_bridge: dict[str, Any]) -> dict[str, Any]:
     import os
 
+    settings_file = load_settings()
     return {
         "api_key_loaded": bool(settings.kraken_api_key),
         "secret_key_loaded": bool(settings.kraken_secret_key),
-        "settings_file_api_key_loaded": bool(load_settings().kraken_api_key),
-        "settings_file_secret_key_loaded": bool(load_settings().kraken_secret_key),
+        "settings_file_api_key_loaded": bool(settings_file.kraken_api_key),
+        "settings_file_secret_key_loaded": bool(settings_file.kraken_secret_key),
         "runtime_env_api_key_loaded": bool(os.environ.get("KRAKEN_API_KEY")),
         "runtime_env_secret_key_loaded": bool(os.environ.get("KRAKEN_SECRET_KEY")),
         "admin_settings_bridge": {k: v for k, v in admin_bridge.items() if k not in {"error"}},
@@ -159,8 +159,6 @@ def _credential_sources(settings: Settings, admin_bridge: dict[str, Any]) -> dic
         "admin_kraken_test": admin_kraken_test,
     }
 
-
-    }
 
 def _error_details(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, requests.HTTPError) and exc.response is not None:
@@ -246,7 +244,6 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         quote_assets=quote_assets,
         credentials_loaded=client.is_configured(),
         credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test),
-        credential_sources=_credential_sources(settings, admin_bridge),
     )
 
     _run_check(result, "public_time", lambda: {"server_time": client._public("/0/public/Time")})
