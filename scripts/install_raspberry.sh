@@ -15,8 +15,6 @@ REQUIRED_PACKAGES=(
   libpq-dev
   python3-dev
   build-essential
-  nodejs
-  npm
 )
 
 apt_install() {
@@ -73,6 +71,11 @@ python -m pip install -r requirements-raspberry.txt
 
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 if [ "$ARCH" = "armv6l" ]; then
+  echo "WARNING: ARMv6 detected. Build the frontend elsewhere and copy frontend/dist to this Raspberry Pi." >&2
+fi
+
+if [ ! -d "$APP_DIR/frontend/dist" ]; then
+  echo "WARNING: frontend/dist is missing. The frontend service will stay stopped until dist is copied." >&2
   echo "WARNING: ARMv6 detected: Vite/esbuild may crash with Bus error. Prefer prebuilt frontend/dist." >&2
 fi
 
@@ -88,7 +91,6 @@ fi
 if [ ! -d "$APP_DIR/frontend/dist" ]; then
   echo "WARNING: frontend/dist is not available. The frontend service will fail cleanly until dist is copied or FRONTEND_DEV_SERVER=true is set manually." >&2
 fi
-cd "$APP_DIR"
 
 mkdir -p logs data
 
