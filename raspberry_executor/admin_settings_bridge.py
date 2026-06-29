@@ -14,6 +14,12 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _secret_present(value: Any) -> bool:
+    if value in (None, ""):
+        return False
+    return str(value).strip() not in {"********", "******", "***"}
+
+
 def _settings_url(base_url: str) -> str:
     base = str(base_url or "").rstrip("/")
     if not base:
@@ -67,10 +73,12 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         os.environ["EXECUTION_EXCHANGE"] = str(execution_exchange).strip().lower()
     if kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL"):
         os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL")).rstrip("/")
-    if kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY"):
-        os.environ["KRAKEN_API_KEY"] = str(kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY"))
-    if kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"):
-        os.environ["KRAKEN_SECRET_KEY"] = str(kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"))
+    kraken_api_key = kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY")
+    kraken_secret_key = kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY")
+    if _secret_present(kraken_api_key):
+        os.environ["KRAKEN_API_KEY"] = str(kraken_api_key)
+    if _secret_present(kraken_secret_key):
+        os.environ["KRAKEN_SECRET_KEY"] = str(kraken_secret_key)
 
     if _bool(live.get("binance_use_testnet"), default=False) and live.get("binance_testnet_rest_base"):
         os.environ["BINANCE_BASE_URL"] = str(live.get("binance_testnet_rest_base")).rstrip("/")
@@ -92,4 +100,8 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         "binance_base_url": os.environ.get("BINANCE_BASE_URL"),
         "execution_exchange": os.environ.get("EXECUTION_EXCHANGE"),
         "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
+        "kraken_api_key_in_admin_payload": bool(kraken_api_key),
+        "kraken_secret_key_in_admin_payload": bool(kraken_secret_key),
+        "kraken_api_key_applied_to_env": _secret_present(kraken_api_key),
+        "kraken_secret_key_applied_to_env": _secret_present(kraken_secret_key),
     }
