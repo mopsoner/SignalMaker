@@ -2,6 +2,27 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+requirements_hash() {
+  python3 - <<'PY'
+from pathlib import Path
+import hashlib
+print(hashlib.sha256(Path("requirements.txt").read_bytes()).hexdigest())
+PY
+}
+
+required_python_modules_present() {
+  python - <<'PY'
+import importlib.util
+missing = [module for module in ("fastapi", "uvicorn", "sqlalchemy", "pydantic_settings") if importlib.util.find_spec(module) is None]
+if missing:
+    raise SystemExit(1)
+PY
+}
+
+mark_requirements_installed() {
+  requirements_hash > .venv/.requirements-installed
+}
+
 ensure_venv() {
   if [ ! -d .venv ] || ! grep -q "include-system-site-packages = true" .venv/pyvenv.cfg 2>/dev/null; then
     echo "Creating Python virtual environment in .venv..."
@@ -12,19 +33,35 @@ ensure_venv() {
   # shellcheck disable=SC1091
   source .venv/bin/activate
 
-  if [ ! -f .venv/.requirements-installed ] || [ requirements.txt -nt .venv/.requirements-installed ]; then
-    echo "Installing Python dependencies from requirements.txt..."
-    if python -m pip install -r requirements.txt; then
-      touch .venv/.requirements-installed
+  local current_hash installed_hash
+  current_hash="$(requirements_hash)"
+  installed_hash="$(cat .venv/.requirements-installed 2>/dev/null || true)"
+  if [ "$current_hash" = "$installed_hash" ]; then
+    return 0
+  fi
+
+  # Fast path for normal launches: if the runtime modules are already importable,
+  # avoid running pip just because timestamps changed after a checkout or copy.
+  if [ "${RUN_STRICT_DEPS:-0}" != "1" ] && required_python_modules_present; then
+    mark_requirements_installed
+    return 0
+  fi
+
+  if [ "${RUN_AUTO_INSTALL:-1}" = "0" ]; then
+    echo "Python dependencies are not marked as installed. Run: python -m pip install -r requirements.txt" >&2
+    exit 1
+  fi
+
+  echo "Installing Python dependencies from requirements.txt..."
+  if python -m pip install -r requirements.txt; then
+    mark_requirements_installed
+  else
+    echo "Dependency installation failed; checking whether required modules are already available..." >&2
+    if required_python_modules_present; then
+      mark_requirements_installed
     else
-      echo "Dependency installation failed; checking whether required modules are already available..." >&2
-      python - <<'PY'
-import importlib.util
-missing = [module for module in ("fastapi", "uvicorn", "sqlalchemy", "pydantic_settings") if importlib.util.find_spec(module) is None]
-if missing:
-    raise SystemExit("Missing Python modules: " + ", ".join(missing) + ". Run: python -m pip install -r requirements.txt")
-PY
-      touch .venv/.requirements-installed
+      echo "Missing Python modules. Run: python -m pip install -r requirements.txt" >&2
+      exit 1
     fi
   fi
 }
