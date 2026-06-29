@@ -78,26 +78,42 @@
 
   function renderAdminSettings(payload) {
     adminSettingsPayload = payload || {};
-    var preferred = ['general', 'executor', 'binance', 'kraken', 'market_data', 'strategy', 'notifications', 'bot', 'live', 'momentum', 'admin/security'];
-    var seen = {};
-    var sections = preferred.concat(Object.keys(adminSettingsPayload)).filter(function (section) {
-      if (seen[section]) return false;
-      seen[section] = true;
-      return true;
-    });
-    return sections.map(function (section) {
+    var sectionLabels = {
+      general: 'Paramètres généraux',
+      executor: 'Exécution',
+      binance: 'Plateforme Binance',
+      kraken: 'Plateforme Kraken',
+      notifications: 'Notifications',
+      bot: 'Workers / bot',
+      live: 'Trading live',
+      momentum: 'Momentum'
+    };
+    var sectionHelp = {
+      general: 'Paramètres globaux de l’application. Aucune clé exchange ici.',
+      executor: 'Choix de la plateforme d’exécution et actifs de cotation communs.',
+      binance: 'Paramètres propres à Binance uniquement.',
+      kraken: 'Paramètres propres à Kraken uniquement.',
+      notifications: 'Canaux de notification.',
+      bot: 'Activation et fréquence des workers.',
+      live: 'Garde-fous de trading réel communs aux plateformes.',
+      momentum: 'Synchronisation Momentum.'
+    };
+    var preferred = ['general', 'executor', 'binance', 'kraken', 'notifications', 'bot', 'live', 'momentum'];
+    return preferred.map(function (section) {
       var values = adminSettingsPayload[section] || {};
-      var keys = Object.keys(values);
+      var keys = Object.keys(values).filter(function (key) { return values[key] !== null && values[key] !== undefined; });
       var rows = keys.map(function (key) {
         var value = values[key];
-        var inputType = typeof value === 'number' ? 'number' : 'text';
+        var isSecret = /(_api_key|_secret_key|telegram_secret|discord_url)$/i.test(key);
+        var inputType = isSecret ? 'password' : (typeof value === 'number' ? 'number' : 'text');
+        var displayValue = Array.isArray(value) ? value.join(',') : value;
         if (typeof value === 'boolean') {
           return '<tr><td><code>' + text(key) + '</code></td><td><select data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '"><option value="true"' + (value ? ' selected' : '') + '>true</option><option value="false"' + (!value ? ' selected' : '') + '>false</option></select></td></tr>';
         }
-        return '<tr><td><code>' + text(key) + '</code></td><td><input type="' + inputType + '" data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '" value="' + text(Array.isArray(value) ? value.join(',') : value) + '"></td></tr>';
+        return '<tr><td><code>' + text(key) + '</code></td><td><input type="' + inputType + '" autocomplete="off" data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '" value="' + text(displayValue) + '"></td></tr>';
       }).join('');
-      if (!rows) rows = '<tr><td colspan="2" class="muted">Section vide.</td></tr>';
-      return '<details open><summary>' + text(section) + '</summary><div class="scroll"><table><tbody>' + rows + '</tbody></table></div></details>';
+      if (!rows) rows = '<tr><td colspan="2" class="muted">Aucun paramètre modifiable dans cette section.</td></tr>';
+      return '<details open><summary>' + text(sectionLabels[section] || section) + '</summary><p class="muted">' + text(sectionHelp[section] || '') + '</p><div class="scroll"><table><tbody>' + rows + '</tbody></table></div></details>';
     }).join('');
   }
 
