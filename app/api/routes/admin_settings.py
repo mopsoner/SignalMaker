@@ -12,6 +12,7 @@ from app.services.database_reset_service import reset_database_preserving_config
 from app.services.notifier_service import NotifierService
 from app.services.runtime_settings import load_admin_settings, load_runtime_settings, persist_runtime_settings
 from app.services.worker_control_service import WorkerControlService
+from raspberry_executor.kraken_client import KrakenClient
 
 router = APIRouter()
 
@@ -65,6 +66,54 @@ def test_binance(db: Session = Depends(get_db)) -> dict:
     base = load_runtime_settings(db)['binance']['binance_rest_base'].rstrip('/')
     response = requests.get(f'{base}/api/v3/ping', timeout=10)
     return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
+
+
+@router.post('/admin/test/kraken')
+def test_kraken(db: Session = Depends(get_db)) -> dict:
+    runtime = load_runtime_settings(db)['kraken']
+    base = runtime['kraken_base_url'].rstrip('/')
+    client = KrakenClient(
+        base,
+        str(runtime.get('kraken_api_key') or ''),
+        str(runtime.get('kraken_secret_key') or ''),
+        dry_run=True,
+    )
+    credentials_loaded = client.is_configured()
+    if not credentials_loaded:
+        return {
+            'status': 'error',
+            'base_url': base,
+            'api_key_loaded': bool(client.api_key),
+            'secret_key_loaded': bool(client.secret_key),
+            'error': 'missing_kraken_api_credentials',
+        }
+    try:
+        account = client.account()
+        return {
+            'status': 'ok',
+            'base_url': base,
+            'api_key_loaded': True,
+            'secret_key_loaded': True,
+            'account_keys': sorted(account.keys())[:20] if isinstance(account, dict) else [],
+        }
+    except requests.HTTPError as exc:
+        response = exc.response
+        return {
+            'status': 'error',
+            'base_url': base,
+            'api_key_loaded': True,
+            'secret_key_loaded': True,
+            'http_status': getattr(response, 'status_code', None),
+            'error': response.text[:500] if response is not None else str(exc),
+        }
+    except Exception as exc:
+        return {
+            'status': 'error',
+            'base_url': base,
+            'api_key_loaded': True,
+            'secret_key_loaded': True,
+            'error': str(exc),
+        }
 
 
 _ALLOWED_WORKERS = {"pipeline", "executor", "scheduler"}

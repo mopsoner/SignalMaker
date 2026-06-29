@@ -263,6 +263,7 @@
     if (action === 'save-admin-settings') saveAdminSettings();
     if (action === 'reset-database' && window.confirm('Reset database runtime ?')) postAdminAction('/api/v1/admin/reset-database', 'admin-action-result');
     if (action === 'test-binance') postAdminAction('/api/v1/admin/test/binance', 'admin-action-result');
+    if (action === 'test-kraken') postAdminAction('/api/v1/admin/test/kraken', 'admin-action-result');
     if (action === 'test-notifications') postAdminAction('/api/v1/admin/test/notifications', 'admin-action-result');
   });
   refresh();
