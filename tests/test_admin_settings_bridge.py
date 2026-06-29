@@ -19,6 +19,7 @@ def test_admin_settings_bridge_reports_kraken_secret_presence_without_masked_env
 
     monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
     monkeypatch.delenv("KRAKEN_SECRET_KEY", raising=False)
+    monkeypatch.setattr(admin_settings_bridge, "_local_runtime_settings", lambda: ({}, None))
     monkeypatch.setattr(admin_settings_bridge.requests, "get", lambda *args, **kwargs: FakeResponse())
 
     result = admin_settings_bridge.apply_admin_settings_to_environ("https://signalmaker.test")
@@ -47,6 +48,7 @@ def test_admin_settings_bridge_applies_unmasked_kraken_credentials(monkeypatch):
 
     monkeypatch.delenv("KRAKEN_API_KEY", raising=False)
     monkeypatch.delenv("KRAKEN_SECRET_KEY", raising=False)
+    monkeypatch.setattr(admin_settings_bridge, "_local_runtime_settings", lambda: ({}, None))
     monkeypatch.setattr(admin_settings_bridge.requests, "get", lambda *args, **kwargs: FakeResponse())
 
     result = admin_settings_bridge.apply_admin_settings_to_environ("https://signalmaker.test")

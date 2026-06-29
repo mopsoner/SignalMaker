@@ -265,3 +265,68 @@ def test_missing_local_credentials_reports_when_admin_has_credentials(monkeypatc
         check.get("reason") == "missing_local_kraken_api_credentials_admin_has_credentials"
         for check in result.checks
     )
+
+
+def test_settings_with_runtime_db_credentials_override_env(monkeypatch):
+    monkeypatch.setenv("KRAKEN_API_KEY", "env-key")
+    monkeypatch.setenv("KRAKEN_SECRET_KEY", "env-secret")
+    runtime = {"kraken": {"kraken_api_key": "db-key", "kraken_secret_key": "db-secret", "kraken_base_url": "https://db.kraken/"}}
+
+    settings = kraken_full_smoke_test._settings_with_runtime_overrides(_settings(), runtime)
+
+    assert settings.kraken_api_key == "db-key"
+    assert settings.kraken_secret_key == "db-secret"
+    assert settings.kraken_base_url == "https://db.kraken"
+
+
+def test_credential_sources_reports_selected_database(monkeypatch):
+    monkeypatch.setattr(kraken_full_smoke_test, "load_settings", lambda: _settings(kraken_api_key="file-key", kraken_secret_key="file-secret"))
+    runtime = {"kraken": {"kraken_api_key": "db-key", "kraken_secret_key": "db-secret"}}
+
+    sources = kraken_full_smoke_test._credential_sources(
+        _settings(kraken_api_key="db-key", kraken_secret_key="db-secret"), {}, {}, runtime
+    )
+
+    assert sources["db_kraken_api_key_loaded"] == {"loaded": True, "length": 6}
+    assert sources["db_kraken_secret_key_loaded"] == {"loaded": True, "length": 9}
+    assert sources["selected_source"] == "database canonical lowercase"
+
+
+def test_admin_kraken_status_falls_back_to_get_on_405(monkeypatch):
+    calls = []
+
+    class Post405:
+        status_code = 405
+
+        def raise_for_status(self):
+            raise AssertionError("POST 405 should be retried with GET before raise_for_status")
+
+    class GetOk:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"status": "ok", "api_key_loaded": True, "secret_key_loaded": True}
+
+    def fake_post(url, timeout):
+        calls.append(("POST", url, timeout))
+        return Post405()
+
+    def fake_get(url, timeout):
+        calls.append(("GET", url, timeout))
+        return GetOk()
+
+    monkeypatch.setattr(kraken_full_smoke_test.requests, "post", fake_post)
+    monkeypatch.setattr(kraken_full_smoke_test.requests, "get", fake_get)
+
+    status = kraken_full_smoke_test._fetch_admin_kraken_credential_status("https://signalmaker.test", timeout=2.5)
+
+    assert calls == [
+        ("POST", "https://signalmaker.test/api/v1/admin/test/kraken", 2.5),
+        ("GET", "https://signalmaker.test/api/v1/admin/test/kraken", 2.5),
+    ]
+    assert status["checked"] is True
+    assert status["api_key_loaded"] is True
+    assert status["secret_key_loaded"] is True
