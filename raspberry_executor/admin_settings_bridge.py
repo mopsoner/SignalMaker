@@ -31,10 +31,10 @@ def _settings_url(base_url: str) -> str:
 
 def _local_runtime_settings() -> tuple[dict, str | None]:
     try:
-        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+        from app.services.runtime_settings import load_runtime_settings
 
-        payload, diagnostics = load_runtime_settings_lightweight()
-        return payload if isinstance(payload, dict) else {}, diagnostics.get("db_error")
+        payload = load_runtime_settings()
+        return payload if isinstance(payload, dict) else {}, None
     except Exception as exc:
         return {}, str(exc)
 

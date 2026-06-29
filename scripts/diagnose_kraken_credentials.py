@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import os
 
+from sqlalchemy import select
+
+from app.db.session import SessionLocal
+from app.models.app_setting import AppSetting
+from app.services.runtime_settings import load_runtime_settings
 from raspberry_executor.config import load_settings
-from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
 
 
 def _status(value: object) -> str:
@@ -13,9 +17,21 @@ def _status(value: object) -> str:
 
 
 def main() -> int:
-    runtime, diagnostics = load_runtime_settings_lightweight()
+    legacy = {}
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(AppSetting).where(
+                AppSetting.category == "kraken",
+                AppSetting.key.in_(["KRAKEN_API_KEY", "KRAKEN_SECRET_KEY"]),
+            )
+        ).scalars().all()
+        legacy = {row.key: row.value for row in rows}
+    finally:
+        db.close()
+
+    runtime = load_runtime_settings()
     kraken = runtime.get("kraken", {})
-    legacy = (diagnostics.get("legacy_aliases_seen") or {}).get("kraken", {})
     settings_file = load_settings()
     db_api = kraken.get("kraken_api_key")
     db_secret = kraken.get("kraken_secret_key")
@@ -30,8 +46,6 @@ def main() -> int:
     print(f"ENV KRAKEN_SECRET_KEY: {_status(env_secret)}")
     print(f"Settings file KRAKEN_API_KEY: {_status(settings_file.kraken_api_key)}")
     print(f"Settings file KRAKEN_SECRET_KEY: {_status(settings_file.kraken_secret_key)}")
-    if diagnostics.get("db_error"):
-        print(f"DB diagnostic error: {diagnostics['db_error']}")
 
     if db_api and db_secret:
         selected = "database canonical lowercase"

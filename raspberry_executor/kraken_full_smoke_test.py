@@ -25,11 +25,9 @@ from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 
 def _runtime_settings_payload() -> dict[str, Any]:
     try:
-        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+        from app.services.runtime_settings import load_runtime_settings
 
-        payload, diagnostics = load_runtime_settings_lightweight()
-        payload["_diagnostics"] = diagnostics
-        return payload
+        return load_runtime_settings()
     except Exception as exc:
         return {"_error": str(exc)}
 
@@ -209,8 +207,6 @@ def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_
         "runtime_env_api_key_loaded": bool(env_api),
         "runtime_env_secret_key_loaded": bool(env_secret),
         "selected_source": selected,
-        "runtime_settings_error": (runtime or {}).get("_error") or ((runtime or {}).get("_diagnostics") or {}).get("db_error"),
-        "runtime_settings_diagnostics": (runtime or {}).get("_diagnostics"),
         "admin_settings_bridge": {k: v for k, v in admin_bridge.items() if k not in {"error"}},
         "admin_settings_error": admin_bridge.get("error"),
         "admin_kraken_test": admin_kraken_test,

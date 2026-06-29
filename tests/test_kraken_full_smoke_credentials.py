@@ -330,22 +330,3 @@ def test_admin_kraken_status_falls_back_to_get_on_405(monkeypatch):
     assert status["checked"] is True
     assert status["api_key_loaded"] is True
     assert status["secret_key_loaded"] is True
-
-
-def test_runtime_settings_payload_uses_lightweight_loader_without_app_import(monkeypatch):
-    expected = {
-        "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
-        "kraken": {"kraken_api_key": "db-key", "kraken_secret_key": "db-secret", "kraken_base_url": "https://api.kraken.com"},
-    }
-
-    def fake_lightweight():
-        return expected, {"db_error": None}
-
-    import raspberry_executor.runtime_db_settings as runtime_db_settings
-
-    monkeypatch.setattr(runtime_db_settings, "load_runtime_settings_lightweight", fake_lightweight)
-
-    payload = kraken_full_smoke_test._runtime_settings_payload()
-
-    assert payload["kraken"]["kraken_api_key"] == "db-key"
-    assert payload["_diagnostics"] == {"db_error": None}

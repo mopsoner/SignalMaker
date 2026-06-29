@@ -70,16 +70,11 @@ def _float(values: dict[str, str], key: str, default: str) -> float:
 
 def _runtime_overrides() -> dict[str, str]:
     try:
-        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+        from app.services.runtime_settings import load_runtime_settings
 
-        runtime, _diagnostics = load_runtime_settings_lightweight()
+        runtime = load_runtime_settings()
     except Exception:
-        try:
-            from app.services.runtime_settings import load_runtime_settings
-
-            runtime = load_runtime_settings()
-        except Exception:
-            return {}
+        return {}
     overrides: dict[str, str] = {}
     kraken = runtime.get("kraken", {}) if isinstance(runtime.get("kraken"), dict) else {}
     executor = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
