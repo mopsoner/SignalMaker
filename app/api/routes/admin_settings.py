@@ -43,6 +43,8 @@ _APP_DATA_CLEANUP_TABLES = [
     "market_data_import_runs",
     "market_data_job_requests",
     "market_candles",
+    "market_assets",
+    "market_universes",
     # Paper/live trading data.
     "fills",
     "orders",
@@ -72,6 +74,8 @@ def _delete_table_rows(db: Session, table_name: str) -> int:
 def clear_application_data(db: Session = Depends(get_db)) -> dict:
     """Clear application/runtime data while preserving configuration tables.
 
+    This deliberately leaves app_settings untouched because it stores
+    operator-managed runtime configuration.
     This deliberately leaves app_settings plus market_universes and market_assets
     untouched because they are operator-managed configuration/reference data.
     """
@@ -80,6 +84,7 @@ def clear_application_data(db: Session = Depends(get_db)) -> dict:
     return {
         'deleted': sum(details.values()),
         'details': details,
+        'preserved': ['app_settings'],
         'preserved': ['app_settings', 'market_universes', 'market_assets'],
     }
 
