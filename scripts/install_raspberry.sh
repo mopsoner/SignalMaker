@@ -71,12 +71,22 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements-raspberry.txt
 
-echo "Installing frontend dependencies..."
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+if [ "$ARCH" = "armv6l" ]; then
+  echo "WARNING: ARMv6 detected: Vite/esbuild may crash with Bus error. Prefer prebuilt frontend/dist." >&2
+fi
+
+echo "Installing frontend dependencies and attempting a production build..."
+echo "WARNING: Raspberry Pi Node/Vite/esbuild builds can fail with Bus error on older ARM devices." >&2
+echo "WARNING: Installation will continue if npm install or npm run build fails." >&2
 cd "$APP_DIR/frontend"
-npm install
-if ! npm run build; then
-  echo "WARNING: Frontend build failed. Continuing installation because Raspberry Pi resources may be limited." >&2
-  echo "WARNING: The frontend service will still run the Vite dev server on port ${FRONTEND_PORT:-3000}." >&2
+if ! npm install; then
+  echo "WARNING: npm install failed. Continuing installation; copy a prebuilt frontend/dist or run scripts/build_frontend.sh on a compatible machine." >&2
+elif ! npm run build; then
+  echo "WARNING: npm run build failed. Continuing installation; copy a prebuilt frontend/dist from a compatible machine." >&2
+fi
+if [ ! -d "$APP_DIR/frontend/dist" ]; then
+  echo "WARNING: frontend/dist is not available. The frontend service will fail cleanly until dist is copied or FRONTEND_DEV_SERVER=true is set manually." >&2
 fi
 cd "$APP_DIR"
 
@@ -171,7 +181,7 @@ After=network.target signalmaker-api.service
 Type=simple
 WorkingDirectory=$APP_DIR
 ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
-Restart=always
+Restart=on-failure
 RestartSec=5
 Environment=FRONTEND_PORT=3000
 Environment=VITE_API_BASE=http://127.0.0.1:8080

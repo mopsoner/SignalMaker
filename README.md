@@ -29,9 +29,23 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 ## Frontend
 The React/Vite app lives in `frontend/`.
 
-Start it with:
+By default, `scripts/start_frontend.sh` serves the prebuilt `frontend/dist`
+directory with Python's static file server. This avoids keeping the Vite dev
+server running on Raspberry Pi devices where Node/Vite/esbuild can crash.
+
+Build the frontend locally with:
+```bash
+bash scripts/build_frontend.sh
+```
+
+Start the frontend with:
 ```bash
 bash scripts/start_frontend.sh
+```
+
+If `frontend/dist` is missing and you explicitly want the Vite dev server, run:
+```bash
+FRONTEND_DEV_SERVER=true bash scripts/start_frontend.sh
 ```
 
 Set an alternate API base if needed:
@@ -72,7 +86,22 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, installs the React/Vite frontend dependencies, initializes the schema, and enables the SignalMaker systemd services.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, attempts to install/build the frontend, initializes the schema, and enables the SignalMaker systemd services. On older Raspberry Pi devices, especially `armv6l`, the frontend build can fail with `Bus error`; the backend API, executor, pipeline, and scheduler services can still run without the frontend.
+
+### Prebuilt frontend for older Raspberry Pi devices
+On older Raspberry Pi devices / `armv6l`, building Vite/esbuild directly on the Raspberry Pi can crash with `Bus error`. The recommended method is to build on a compatible machine, then copy the generated `frontend/dist` directory to the Raspberry Pi.
+
+On a compatible machine:
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Then copy the `frontend/dist` directory to the Raspberry Pi checkout:
+```bash
+scp -r frontend/dist pi@IP_DU_RASPBERRY:~/Desktop/SignalMaker/frontend/dist
+```
 
 ### Raspberry UI
 After installation, start the backend API and frontend UI services:
@@ -89,10 +118,20 @@ Open SignalMaker from another device on the same network:
 Useful Raspberry debug commands:
 
 ```bash
+uname -m
+node -v
+npm -v
 systemctl status signalmaker-api
 systemctl status signalmaker-frontend
 journalctl -u signalmaker-frontend -f
 curl http://localhost:8080/healthz
+```
+
+If the frontend triggers `Bus error` or you want to keep the Raspberry Pi running without the UI temporarily, disable only the frontend service:
+
+```bash
+sudo systemctl stop signalmaker-frontend
+sudo systemctl disable signalmaker-frontend
 ```
 
 ## VM deploy helper
