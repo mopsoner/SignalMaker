@@ -26,4 +26,4 @@ Install it into `/etc/systemd/system/`, reload systemd, enable the service, then
 
 ## Safety
 
-The app keeps a local SQLite state database to avoid duplicate execution after restart. The Raspberry reads `/api/v1/momentum/ranking` diagnostic rankings from `main` and creates BUY/HOLD/ROTATE decisions locally, unless `MOMENTUM_DECISION_PATH` is explicitly set to a custom decision endpoint.
+The app keeps a local SQLite state database to avoid duplicate execution after restart. The Raspberry reads `/api/v1/momentum` diagnostic rankings from `main` and creates BUY/HOLD/ROTATE decisions locally, unless `MOMENTUM_DECISION_PATH` is explicitly set to a custom decision endpoint.

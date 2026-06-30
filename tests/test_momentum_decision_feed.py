@@ -572,7 +572,7 @@ def test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeyp
 
     decision = fetch_decision()
 
-    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum/ranking"]
+    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum"]
     assert decision["action"] == "BUY"
     assert decision["buy_symbol"] == "BANKUSDC"
     assert decision["source"] == "momentum_rankings"
@@ -611,9 +611,42 @@ def test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpo
 
     assert [call["url"] for call in calls] == [
         "https://central.test/api/v1/custom-decision",
-        "https://central.test/api/v1/momentum/ranking",
+        "https://central.test/api/v1/momentum",
     ]
     assert decision["source"] == "momentum_decision_endpoint_fallback"
+    assert decision["buy_symbol"] == "BANKUSDC"
+
+
+def test_fetch_decision_maps_legacy_momentum_ranking_path_to_main_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_PATH", "")
+    monkeypatch.setenv("MOMENTUM_CANDIDATES_PATH", "/api/v1/momentum/ranking")
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, status_code, url):
+            self._payload = payload
+            self.status_code = status_code
+            self.url = url
+            self.ok = status_code < 400
+            self.headers = {"content-type": "application/json"}
+            self.text = "{}"
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return FakeResponse([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}], 200, url)
+
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.get", fake_get)
+
+    from raspberry_executor.momentum_decision_feed import fetch_decision
+
+    decision = fetch_decision()
+
+    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum"]
     assert decision["buy_symbol"] == "BANKUSDC"
 
 

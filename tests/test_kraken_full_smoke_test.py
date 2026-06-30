@@ -215,7 +215,7 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
             return [{"rank": 1, "symbol": "BTCUSD", "momentum_score": 12.0, "rsi_1h": 50.0, "price": 100.0}]
 
         def sync_momentum_candidates(self, limit=25, min_momentum_score=None):
-            raise AssertionError("signalmaker_market_data_momentum_ranking must only read GET /api/v1/momentum/ranking")
+            raise AssertionError("signalmaker_market_data_momentum_ranking must only read GET /api/v1/momentum")
 
     monkeypatch.setattr(kraken_full_smoke_test, "ensure_env", lambda: None)
     monkeypatch.setattr(kraken_full_smoke_test, "load_settings", lambda: settings)
