@@ -112,6 +112,7 @@ def test_recoverable_margin_unavailable_falls_back_to_spot(monkeypatch):
     assert state.positions["cand-1"]["mode"] == "spot"
     assert [event for _, event, _ in state.events_log] == [
         "candidate_margin_attempt_failed",
+        "candidate_margin_attempt_failed",
         "candidate_margin_fallback_spot",
         "position_opened",
     ]
@@ -135,7 +136,96 @@ def test_recoverable_margin_spot_fallback_failure_is_explicit(monkeypatch):
     assert len(spot.calls) == 1
     assert [event for _, event, _ in state.events_log] == [
         "candidate_margin_attempt_failed",
+        "candidate_margin_attempt_failed",
         "candidate_margin_fallback_spot",
         "candidate_spot_fallback_failed",
         "execution_error",
     ]
+
+
+class SequencedMarginManager:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def open_long_with_margin_take_profit(self, **kwargs):
+        self.calls.append(kwargs)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {
+            "quantity": "2.0",
+            "entry_price": 10.0,
+            "entry_order_id": f"margin-entry-{kwargs.get('leverage')}",
+            "tp_order_id": f"margin-tp-{kwargs.get('leverage')}",
+            "entry_payload": {"leverage": str(kwargs.get("leverage"))},
+            "tp_payload": {"side": "SELL", "type": "LIMIT"},
+            "leverage": str(kwargs.get("leverage")),
+        }
+
+
+def run_candidate_with_margin(monkeypatch, margin_manager):
+    monkeypatch.setattr(executor, "margin_enabled", lambda: True)
+    monkeypatch.setattr(executor, "_ensure_candidate_visible", lambda candidate: None)
+    monkeypatch.setattr(executor, "_mark_remote_executed", lambda candidate_id: None)
+    monkeypatch.setattr(executor, "remove_pending", lambda candidate_id: None)
+    state = FakeState()
+    spot = FakeSpotManager()
+    result = executor.execute_classic_candidate(
+        SimpleNamespace(order_quote_amount=20.0, exchange="kraken"),
+        FakeExchange(free_quote=100.0),
+        FakeRules(),
+        margin_manager,
+        spot,
+        state,
+        RiskGuard(["USDC"], 999999),
+        candidate(),
+    )
+    return result, state, spot
+
+
+def test_classic_margin_succeeds_on_first_shared_leverage(monkeypatch):
+    margin = SequencedMarginManager(["success"])
+
+    result, state, spot = run_candidate_with_margin(monkeypatch, margin)
+
+    assert result == "opened"
+    assert [call["leverage"] for call in margin.calls] == [5]
+    assert spot.calls == []
+    assert state.positions["cand-1"]["mode"] == "cross_margin"
+    assert state.positions["cand-1"]["margin_payload"]["leverage"] == "5"
+    assert [event for _, event, _ in state.events_log] == ["position_opened"]
+
+
+def test_classic_margin_succeeds_on_second_shared_leverage(monkeypatch):
+    margin = SequencedMarginManager([RuntimeError("leverage unavailable at 5"), "success"])
+
+    result, state, spot = run_candidate_with_margin(monkeypatch, margin)
+
+    assert result == "opened"
+    assert [call["leverage"] for call in margin.calls] == [5, 3]
+    assert spot.calls == []
+    assert state.positions["cand-1"]["margin_payload"]["leverage"] == "3"
+    assert [event for _, event, _ in state.events_log] == [
+        "candidate_margin_attempt_failed",
+        "position_opened",
+    ]
+
+
+def test_classic_margin_falls_back_to_spot_after_all_shared_leverages_fail(monkeypatch):
+    margin = SequencedMarginManager([RuntimeError("leverage unavailable at 5"), RuntimeError("leverage unavailable at 3")])
+
+    result, state, spot = run_candidate_with_margin(monkeypatch, margin)
+
+    assert result == "opened_spot_fallback"
+    assert [call["leverage"] for call in margin.calls] == [5, 3]
+    assert len(spot.calls) == 1
+    assert state.positions["cand-1"]["mode"] == "spot"
+    assert [event for _, event, _ in state.events_log] == [
+        "candidate_margin_attempt_failed",
+        "candidate_margin_attempt_failed",
+        "candidate_margin_fallback_spot",
+        "position_opened",
+    ]
+    fallback_payload = state.events_log[2][2]
+    assert [attempt["leverage"] for attempt in fallback_payload["margin_attempts"]] == [5, 3]

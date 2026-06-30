@@ -13,7 +13,7 @@ from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_multiplier
+from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_leverage_attempts, margin_multiplier
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-momentum-decision")
@@ -912,7 +912,7 @@ def buy_symbol(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: 
     should_try_margin = bool(decision.get("force_cross_margin")) or explicit_cross_margin or settings_cross_margin or kraken_cross_margin
     if should_try_margin:
         margin_failures: list[dict[str, Any]] = []
-        for leverage in (5, 3):
+        for leverage in margin_leverage_attempts():
             try:
                 result = _buy_symbol_cross_margin(settings, kraken, rules, state, symbol, decision, quote, use_available_quote=use_available_quote, leverage=leverage)
                 if result.startswith("bought_cross_margin:"):

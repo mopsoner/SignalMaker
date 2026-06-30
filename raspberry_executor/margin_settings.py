@@ -140,5 +140,15 @@ def margin_multiplier() -> float:
         return 5.0
 
 
+def margin_leverage_attempts() -> tuple[int, ...]:
+    """Return the shared margin leverage ladder before falling back to spot.
+
+    Both the classic candidate and momentum workflows try these leverage
+    levels in order. Spot fallback is handled by each workflow after all
+    returned leverage attempts fail.
+    """
+    return (5, 3)
+
+
 def margin_transfer_spot_balance() -> bool:
     return _bool(read_margin_settings().get("MARGIN_TRANSFER_SPOT_BALANCE"), default=True)
