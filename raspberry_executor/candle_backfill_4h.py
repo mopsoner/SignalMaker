@@ -1,7 +1,7 @@
 """4H history backfill sender.
 
-Runs on the Raspberry executor. It fetches older Binance 4h candles and sends
-those candles to SignalMaker main through POST /api/v1/market-data/candles.
+Runs on the Raspberry executor. It fetches older Binance/Kraken 4h candles and sends
+those candles to remote SignalMaker through POST /api/v1/market-data/candles.
 Main does not fetch any missing candles itself.
 """
 
@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from raspberry_executor.candle_auto_feed import RateLimiter, effective_binance_requests_per_minute, resolve_feed_symbols
-from raspberry_executor.candle_push_once import fetch_klines
+from raspberry_executor.candle_push_once import fetch_exchange_klines
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ROOT, ensure_env, read_env
 from raspberry_executor.logging_setup import setup_logging
@@ -84,10 +84,10 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
     while cursor < now_ms - FOUR_HOURS_MS and chunks < max_chunks:
         try:
             limiter.wait()
-            candles = fetch_klines(settings.binance_base_url, symbol, INTERVAL, chunk_limit, start_time=cursor)
+            candles = fetch_exchange_klines(getattr(settings, "exchange", "binance"), settings.kraken_base_url if str(getattr(settings, "exchange", "binance")).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url, symbol, INTERVAL, chunk_limit, start_time=cursor)
             candles = [candle for candle in candles if int(candle.get("open_time", 0)) >= cursor]
             if not candles:
-                symbol_state.update({"status": "complete_or_no_more_binance_data", "next_start_time": cursor, "last_checked_at": datetime.now(timezone.utc).isoformat()})
+                symbol_state.update({"status": "complete_or_no_more_exchange_data", "next_start_time": cursor, "last_checked_at": datetime.now(timezone.utc).isoformat()})
                 _save_state(state)
                 break
             response = client.post_candles(symbol, INTERVAL, candles, source=f"{settings.gateway_id}-backfill-4h-365d")
@@ -128,11 +128,13 @@ def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     if run_symbol_limit > 0:
         symbols = symbols[:run_symbol_limit]
-    requests_per_minute, doc_limit, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
+    exchange = getattr(settings, "exchange", "binance")
+    exchange_base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url
+    requests_per_minute, doc_limit, weight_ratio = effective_binance_requests_per_minute(exchange_base_url, env)
     limiter = RateLimiter(requests_per_minute)
     state = _load_state()
     results = [backfill_symbol(settings, client, limiter, state, symbol, days=days, chunk_limit=chunk_limit, max_chunks=max_chunks, post_sleep=post_sleep) for symbol in symbols]
-    summary = {"status": "completed", "interval": INTERVAL, "days": days, "symbols_requested": len(symbols), "quote_assets": quote_assets, "execution_mode": mode, "binance_requests_per_minute": requests_per_minute, "binance_doc_weight_limit_1m": doc_limit, "weight_ratio": weight_ratio, "pushed": sum(int(item.get("pushed") or 0) for item in results), "chunks": sum(int(item.get("chunks") or 0) for item in results), "errors": [item for item in results if item.get("errors")], "results": results, "completed_at": datetime.now(timezone.utc).isoformat()}
+    summary = {"status": "completed", "interval": INTERVAL, "days": days, "symbols_requested": len(symbols), "quote_assets": quote_assets, "execution_mode": mode, "exchange_requests_per_minute": requests_per_minute, "binance_doc_weight_limit_1m": doc_limit, "exchange": exchange, "weight_ratio": weight_ratio, "pushed": sum(int(item.get("pushed") or 0) for item in results), "chunks": sum(int(item.get("chunks") or 0) for item in results), "errors": [item for item in results if item.get("errors")], "results": results, "completed_at": datetime.now(timezone.utc).isoformat()}
     state.setdefault("runs", []).append({k: v for k, v in summary.items() if k != "results"})
     state["runs"] = state["runs"][-20:]
     _save_state(state)
@@ -156,7 +158,7 @@ def run_loop() -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Backfill 365 days of 4h candles from Raspberry to SignalMaker main")
+    parser = argparse.ArgumentParser(description="Backfill 4h candles from Raspberry exchange to remote SignalMaker")
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--max-symbols", type=int, default=None)
     parser.add_argument("--max-chunks-per-symbol", type=int, default=None)

@@ -10,6 +10,7 @@ from raspberry_executor.state import StateStore
 from raspberry_executor.web_local import Handler as LocalHandler
 
 RETRY_PATH = ROOT / "raspberry_executor" / "candle_retry_queue.json"
+BACKFILL_STATE_PATH = ROOT / "raspberry_executor" / "candle_backfill_4h_state.json"
 
 
 def c(value):
@@ -67,7 +68,8 @@ def dashboard():
     config = "".join(f"<p><b>{c(k)}</b>: {c(env.get(k))}</p>" for k in ["SIGNALMAKER_BASE_URL", "GATEWAY_ID", "ORDER_QUOTE_AMOUNT", "QUOTE_ASSETS", "CANDLE_FEED_MAX_SYMBOLS", "MOMENTUM_DECISION_POLL_SECONDS"])
     momentum_html = momentum_summary_box(momentum)
     return f"""
-    <h1>Raspberry 360 Dashboard</h1>
+    <h1>SignalMaker Raspberry Executor</h1>
+    <div class='box'><b>Connecté à :</b> <code>{c(env.get('SIGNALMAKER_BASE_URL'))}</code> · <b>Exchange local :</b> <code>{c(env.get('EXECUTION_EXCHANGE') or 'binance')}</code> · <b>Mode :</b> <code>Device</code></div>
     <div class='grid'>
       <div class='card'><b>Open positions</b><span>{open_count}</span></div>
       <div class='card'><b>Closed positions</b><span>{closed_count}</span></div>
@@ -84,13 +86,17 @@ def dashboard():
 
 def nav_links():
     return " | ".join([
-        "<a href='/positions'>Positions</a>",
-        "<a href='/candidates'>Candidates</a>",
+        "<a href='/device-status'>Device Status</a>",
+        "<a href='/remote-signalmaker'>Remote SignalMaker</a>",
         "<a href='/candle-feed'>Candle Feed</a>",
-        "<a href='/momentum-decision'>Momentum Decision</a>",
-        "<a href='/events'>Events</a>",
+        "<a href='/backfill'>Backfill</a>",
+        "<a href='/candidates'>Trade Candidates</a>",
+        "<a href='/momentum-decision'>Momentum Orders</a>",
+        "<a href='/positions'>Positions</a>",
+        "<a href='/orders'>Orders / Fills</a>",
+        "<a href='/kraken-diagnostics'>Kraken Diagnostics</a>",
+        "<a href='/admin'>Settings</a>",
         "<a href='/logs'>Logs</a>",
-        "<a href='/admin'>Admin</a>",
     ])
 
 
@@ -169,7 +175,7 @@ def candle_feed_page():
     skipped = summary.get("skipped") or []
     errors = summary.get("errors") or []
     retry_rows = list(_retry_queue().values())
-    html = "<h1>Candle Feed</h1><div class='grid'>"
+    html = "<h1>Candle Feed</h1><p class='muted'>Raspberry demande la dernière candle au SignalMaker distant, récupère les candles manquantes chez Kraken/Binance, puis pousse vers SignalMaker distant.</p><div class='grid'>"
     for label, value in [("Status", _status_pill(summary.get("status") or latest.get("status") or "never")), ("Last run", c(latest.get("timestamp") or "never")), ("Symbols", c(summary.get("symbol_count") or latest.get("symbol_count") or 0)), ("Pushed", c(len(pushed))), ("Skipped", c(len(skipped))), ("Errors", c(len(errors))), ("Retry queue", c(len(retry_rows))), ("Mode", c(summary.get("execution_mode") or ""))]:
         html += f"<div class='card'><b>{label}</b><span>{value}</span></div>"
     html += "</div><div class='box'><h2>Config</h2>"
@@ -184,6 +190,36 @@ def candle_feed_page():
     html += _simple_table("Run history", history, ["timestamp", "status", "symbol_count", "pushed_count", "skipped_count", "error_count", "retry_queue_size"], limit=25)
     return html
 
+
+
+def _backfill_state():
+    if not BACKFILL_STATE_PATH.exists():
+        return {"symbols": {}, "runs": []}
+    try:
+        data = json.loads(BACKFILL_STATE_PATH.read_text())
+        return data if isinstance(data, dict) else {"symbols": {}, "runs": []}
+    except Exception:
+        return {"symbols": {}, "runs": []}
+
+
+def backfill_page():
+    env = read_env()
+    state = _backfill_state()
+    runs = list(reversed(state.get("runs") or []))
+    symbols = state.get("symbols") or {}
+    symbol_rows = [{"symbol": k, **(v if isinstance(v, dict) else {})} for k, v in symbols.items()]
+    latest = runs[0] if runs else {}
+    html = "<h1>Backfill</h1><p class='muted'>Backfill historique device: SignalMaker distant expose/stocke le dernier état, le Raspberry récupère des candles historiques chez l'exchange local puis les pousse vers le SignalMaker distant. Lancer avec <code>./run.sh backfill</code>.</p>"
+    html += "<div class='grid'>"
+    for label, value in [("Status", _status_pill(latest.get("status") or "never")), ("Dernier run", c(latest.get("completed_at") or "never")), ("Pushed", c(latest.get("pushed") or 0)), ("Chunks", c(latest.get("chunks") or 0)), ("Exchange", c(env.get("EXECUTION_EXCHANGE") or "binance")), ("Quote assets", c(env.get("QUOTE_ASSETS")))]:
+        html += f"<div class='card'><b>{label}</b><span>{value}</span></div>"
+    html += "</div><div class='box'><h2>Config</h2>"
+    for key in ["SIGNALMAKER_BASE_URL", "EXECUTION_EXCHANGE", "QUOTE_ASSETS", "BACKFILL_4H_ENABLED", "BACKFILL_4H_DAYS", "BACKFILL_4H_MAX_SYMBOLS_PER_RUN", "BACKFILL_4H_MAX_CHUNKS_PER_SYMBOL", "BACKFILL_4H_CHUNK_LIMIT"]:
+        html += f"<p><b>{c(key)}</b>: <code>{c(env.get(key))}</code></p>"
+    html += "</div>"
+    html += _simple_table("Symbol status", symbol_rows, ["symbol", "status", "next_start_time", "last_close_time_sent", "last_sent_at", "last_error"], limit=100)
+    html += _simple_table("Run history", runs, ["completed_at", "status", "interval", "days", "symbols_requested", "pushed", "chunks", "execution_mode", "exchange"], limit=25)
+    return html
 
 def raw_payload(event):
     return str(event.get("payload") or {})
@@ -237,7 +273,7 @@ def events_page(limit: int = 250):
 
 
 def page(body):
-    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='10'><title>Raspberry 360</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/'>Dashboard</a><a href='/positions'>Positions</a><a href='/candidates'>Candidates</a><a href='/candle-feed'>Candle Feed</a><a href='/momentum-decision'>Momentum Decision</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><main>"""
+    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='10'><title>SignalMaker Raspberry Executor</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/'>Device Status</a><a href='/remote-signalmaker'>Remote SignalMaker</a><a href='/candle-feed'>Candle Feed</a><a href='/backfill'>Backfill</a><a href='/candidates'>Trade Candidates</a><a href='/momentum-decision'>Momentum Orders</a><a href='/positions'>Positions</a><a href='/orders'>Orders / Fills</a><a href='/kraken-diagnostics'>Kraken Diagnostics</a><a href='/admin'>Settings</a><a href='/logs'>Logs</a></nav><main>"""
     return (head + body + "</main></body></html>").encode()
 
 
@@ -250,6 +286,10 @@ class Handler(LocalHandler):
             data = page(dashboard())
         elif self.path.startswith("/candle-feed"):
             data = page(candle_feed_page())
+        elif self.path.startswith("/backfill"):
+            data = page(backfill_page())
+        elif self.path.startswith("/device-status") or self.path.startswith("/remote-signalmaker") or self.path.startswith("/kraken-diagnostics"):
+            data = page(dashboard())
         elif self.path.startswith("/momentum-decision"):
             data = page(momentum_decision_page())
         elif self.path.startswith("/events"):

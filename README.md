@@ -1,6 +1,18 @@
-# SignalMaker
+# SignalMaker Raspberry Executor
 
-Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
+This branch runs the Raspberry Executor device connected to a remote SignalMaker. Historical device mode pulls missing candles from the local exchange (Kraken/Binance), pushes them to the remote SignalMaker, reads trade candidates/momentum decisions from that remote service, and executes orders locally.
+
+Run modes:
+
+```bash
+./run.sh device       # historical device mode: candle feed + executor + supporting loops
+./run.sh candle-feed  # only exchange -> remote SignalMaker candle sync
+./run.sh backfill     # historical 4h exchange -> remote SignalMaker backfill
+./run.sh executor     # only remote SignalMaker -> local exchange execution
+./run.sh local-api    # only local Raspberry Executor monitoring UI/API
+./run.sh all-local    # explicit local API + local pipeline + local executor + scheduler
+```
+
 
 ## Included
 - FastAPI application layer
@@ -89,7 +101,7 @@ After installation, the main Raspberry service is `signalmaker-api`. It serves b
 sudo systemctl start signalmaker-api
 ```
 
-Open SignalMaker from another device on the same network using port `5000` only:
+Open SignalMaker Raspberry Executor from another device on the same network using port `5000` only:
 
 - Status: `http://IP_DU_RASPBERRY:5000/index.html`
 - Admin: `http://IP_DU_RASPBERRY:5000/admin.html`
@@ -154,7 +166,7 @@ python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSDT
 python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSD
 ```
 
-Without `--symbol`, the script discovers a Kraken pair from your configured `QUOTE_ASSETS` such as `USDC` or `USDT` instead of hard-coding a base asset. By default, it tests public Kraken endpoints, SignalMaker symbol rules, Kraken candle retrieval, SignalMaker candle ingestion/verification across `15m,1h,4h`, trade-candidate fetch/replay, momentum rankings, momentum candidate sync, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--candle-intervals`, `--candle-limit`, and `--momentum-limit` to tune the SignalMaker feed checks, or `--skip-signalmaker` to run only the Kraken/execution adapter checks. Use `--json` for a compact JSON-only report.
+Without `--symbol`, the script discovers a Kraken pair from your configured `QUOTE_ASSETS` such as `USDC` or `USDT` instead of hard-coding a base asset. By default, it tests public Kraken endpoints, SignalMaker symbol rules, Kraken candle retrieval, and the historical device candle-feed flow against the remote SignalMaker: `latest_candle -> start_time -> fetch_exchange_klines(Kraken) -> post_candles`. It also runs a constrained 4h backfill smoke (`--backfill-days`, one symbol, one chunk), trade-candidate fetch/replay, momentum rankings, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--candle-intervals`, `--candle-limit`, `--momentum-limit`, `--backfill-days`, or `--skip-backfill` to tune the remote SignalMaker checks, or `--skip-signalmaker` to run only the Kraken/execution adapter checks. Use `--json` for a compact JSON-only report.
 
 Useful Raspberry debug commands:
 

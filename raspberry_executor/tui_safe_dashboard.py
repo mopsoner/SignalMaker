@@ -40,7 +40,7 @@ def _init_screen(stdscr) -> None:
 def _draw_boot(stdscr, message: str = "Starting") -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
-    title = "SignalMaker Raspberry TUI"
+    title = "SignalMaker Raspberry Executor TUI"
     _add(stdscr, 0, 0, " " * max(0, width - 1), curses.color_pair(1) | curses.A_BOLD)
     _add(stdscr, 0, 2, f" {title} ", curses.color_pair(1) | curses.A_BOLD)
     _add(stdscr, 2, 2, message, curses.color_pair(3) | curses.A_BOLD)
@@ -60,7 +60,7 @@ def _draw_error(stdscr, exc: BaseException, has_previous_data: bool = False) -> 
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     _add(stdscr, 0, 0, " " * max(0, width - 1), curses.color_pair(1) | curses.A_BOLD)
-    _add(stdscr, 0, 2, " SignalMaker Raspberry TUI - ERROR ", curses.color_pair(1) | curses.A_BOLD)
+    _add(stdscr, 0, 2, " SignalMaker Raspberry Executor TUI - ERROR ", curses.color_pair(1) | curses.A_BOLD)
     _add(stdscr, 2, 2, "Le TUI est lance, mais le chargement des donnees a echoue.", curses.color_pair(5) | curses.A_BOLD)
     _add(stdscr, 4, 2, f"Erreur: {type(exc).__name__}: {exc}", curses.color_pair(5))
     tb = traceback.format_exc().splitlines()[-8:]
@@ -78,7 +78,7 @@ def main_loop(stdscr) -> None:
     last_refresh = 0.0
     last_error: BaseException | None = None
 
-    _draw_boot(stdscr, "Starting SignalMaker TUI...")
+    _draw_boot(stdscr, "Starting Raspberry Executor TUI...")
 
     while True:
         now = time.monotonic()

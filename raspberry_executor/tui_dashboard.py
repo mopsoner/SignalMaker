@@ -224,7 +224,7 @@ def position_result(row: dict) -> str:
 
 def render_header(stdscr, width, data):
     add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
-    add(stdscr, 0, 2, " SignalMaker Raspberry TUI ", curses.color_pair(1) | curses.A_BOLD)
+    add(stdscr, 0, 2, " SignalMaker Raspberry Executor TUI ", curses.color_pair(1) | curses.A_BOLD)
     right = f"mode={data['execution_mode']} dry={data['margin_dry_run']} shorts={data['shorts_enabled']} {data['refreshed_at']}"
     add(stdscr, 0, max(2, width - len(right) - 2), right, curses.color_pair(1))
 

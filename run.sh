@@ -7,16 +7,22 @@ usage() {
 Usage: ./run.sh [command]
 
 Commands:
-  api             Start the FastAPI backend on APP_PORT (default: 5000)
+  device          Historical Raspberry device mode: remote candle feed + remote executor loops + local monitoring UI
+  candle-feed     Start only the Raspberry -> remote SignalMaker candle feed loop
+  backfill        Run the historical Raspberry -> remote SignalMaker candle backfill once
+  executor        Start only the remote SignalMaker trade/momentum executor loop
+  local-api       Start only the local Raspberry Executor monitoring API/UI
+  all-local       Start local API + local pipeline + local executor + local scheduler
+  api             Alias for local-api
   init-db         Initialize database tables
   frontend        Legacy no-op: frontend is served by the API on APP_PORT
-  pipeline-loop   Start the pipeline worker loop
-  executor-loop   Start the executor worker loop
-  scheduler-loop  Start the scheduler worker loop
-  all             Start API first, then workers/executor after the API is reachable
-  reserved-vm     Alias for all
+  pipeline-loop   Start the local pipeline worker loop
+  executor-loop   Start the local executor worker loop
+  scheduler-loop  Start the local scheduler worker loop
+  all             Alias for device (historical default)
+  reserved-vm     Alias for all-local
 
-If no command is provided, the API and workers/executor are started. The HTML UI is served by the API.
+If no command is provided, historical Raspberry device mode is started.
 USAGE
 }
 
@@ -32,11 +38,11 @@ wait_for_api() {
 
   local deadline=$((SECONDS + timeout_seconds))
 
-  echo "Waiting for SignalMaker backend at ${health_url} before starting workers/executor..."
+  echo "Waiting for SignalMaker Raspberry Executor local API at ${health_url} before starting workers/executor..."
   echo "Health check timeout: ${timeout_seconds}s; interval: ${check_interval_seconds}s."
   while [ "$SECONDS" -lt "$deadline" ]; do
     if curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
-      echo "SignalMaker backend is ready; starting workers/executor."
+      echo "SignalMaker Raspberry Executor local API is ready; starting workers/executor."
       return 0
     fi
     local remaining=$((deadline - SECONDS))
@@ -52,6 +58,14 @@ wait_for_api() {
 
   echo "Backend did not become ready at ${health_url} within ${timeout_seconds}s; workers/executor will not start." >&2
   return 1
+}
+
+python_cmd() {
+  if [ -x ".venv/bin/python" ]; then
+    echo ".venv/bin/python"
+  else
+    echo "python3"
+  fi
 }
 
 start_api_and_workers() {
@@ -88,13 +102,25 @@ start_api_and_workers() {
   wait -n "${pids[@]}"
 }
 
-command="${1:-all}"
+command="${1:-device}"
 if [ "$#" -gt 0 ]; then
   shift
 fi
 
 case "$command" in
-  api)
+  device|all)
+    exec "$(python_cmd)" -m raspberry_executor.run_all_v2 "$@"
+    ;;
+  candle-feed)
+    exec "$(python_cmd)" -m raspberry_executor.candle_auto_feed "$@"
+    ;;
+  backfill)
+    exec "$(python_cmd)" -m raspberry_executor.candle_backfill_4h --run "$@"
+    ;;
+  executor)
+    exec "$(python_cmd)" -c 'from raspberry_executor.run_all_v2 import executor_main; executor_main()'
+    ;;
+  local-api|api)
     exec bash scripts/start_api.sh "$@"
     ;;
   init-db)
@@ -113,7 +139,7 @@ case "$command" in
   scheduler-loop)
     exec bash scripts/start_scheduler_worker.sh "$@"
     ;;
-  all|reserved-vm)
+  all-local|reserved-vm)
     start_api_and_workers "$@"
     ;;
   -h|--help|help)
