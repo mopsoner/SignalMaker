@@ -60,7 +60,7 @@ class CollectorService:
         runtime = load_runtime_settings()
         self.runtime = runtime
         self.base_url = runtime['binance']['binance_rest_base'].rstrip('/')
-        self.collector_enabled = bool(runtime['binance'].get('binance_collector_enabled', True))
+        self.collector_enabled = bool(runtime.get('market_data', runtime['binance']).get('binance_collector_enabled', False))
         self.session = requests.Session()
         self._rate = RateLimiter()
 
@@ -129,7 +129,7 @@ class CollectorService:
     def _runtime_csv(self, key: str) -> list[str]:
         return [
             item.strip().upper()
-            for item in str(self.runtime['binance'].get(key, '')).split(',')
+            for item in str(self.runtime.get('market_data', self.runtime['binance']).get(key, '')).split(',')
             if item.strip()
         ]
 
@@ -145,8 +145,8 @@ class CollectorService:
         info = self._get('/api/v3/exchangeInfo')
         allowed_quotes = self._runtime_csv('binance_quote_assets')
         excluded_bases = set(self._runtime_csv('binance_excluded_base_assets'))
-        status_name = self.runtime['binance']['binance_symbol_status']
-        max_symbols = int(limit or self.runtime['binance']['binance_max_symbols'])
+        status_name = self.runtime.get('market_data', self.runtime['binance'])['binance_symbol_status']
+        max_symbols = int(limit or self.runtime.get('market_data', self.runtime['binance'])['binance_max_symbols'])
 
         symbols: list[str] = []
         for row in info.get('symbols', []):
@@ -199,10 +199,10 @@ class CollectorService:
         ]
 
     def _full_lookback(self, interval: str) -> int:
-        return int(self.runtime['binance'][f'binance_lookback_{interval}'])
+        return int(self.runtime.get('market_data', self.runtime['binance'])[f'binance_lookback_{interval}'])
 
     def _incremental_min(self, interval: str) -> int:
-        return int(self.runtime['binance'].get(f'binance_incremental_min_{interval}', 2))
+        return int(self.runtime.get('market_data', self.runtime['binance']).get(f'binance_incremental_min_{interval}', 2))
 
     def _interval_due(self, interval: str, latest_close_time: int | None) -> bool:
         if interval not in DUE_BASED_INTERVALS:
@@ -216,7 +216,7 @@ class CollectorService:
         full_limit = self._full_lookback(interval)
         if interval in DUE_BASED_INTERVALS and not self._interval_due(interval, latest_close_time):
             return 0, None
-        if not self.runtime['binance'].get('binance_incremental_fetch_enabled', True) or latest_close_time is None:
+        if not self.runtime.get('market_data', self.runtime['binance']).get('binance_incremental_fetch_enabled', True) or latest_close_time is None:
             return full_limit, None
         interval_ms = INTERVAL_MS[interval]
         now_ms = int(time.time() * 1000)

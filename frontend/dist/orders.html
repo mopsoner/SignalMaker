@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker - Orders/Fills</title>
+    <meta name="description" content="Ordres et fills du Raspberry executor.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Orders / Fills</h1>
+      <p>Entry, take-profit, stop-loss, statuts et fills exécutés par l’executor.</p>
+      <nav>
+        <a href="./index.html">Executor</a>
+        <a href="./candidates.html">Trade Candidates</a>
+        <a href="./momentum-candidates.html">Momentum</a>
+        <a href="./positions.html">Positions</a>
+        <a href="./orders.html" aria-current="page">Orders/Fills</a>
+        <a href="./settings.html">Settings</a>
+        <a href="./admin.html">Admin</a>
+        <a href="./logs.html">Logs</a>
+      </nav>
+    </header>
+    <main>
+      <section class="card"><h2>Orders</h2><div id="orders-content" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Fills</h2><div id="fills-content" class="muted">Chargement...</div></section>
+      <button data-action="refresh">Rafraîchir</button>
+    </main>
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

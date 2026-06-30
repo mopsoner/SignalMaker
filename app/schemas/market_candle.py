@@ -46,7 +46,7 @@ class MarketCandleIn(BaseModel):
 class CandleIngestRequest(BaseModel):
     symbol: str
     interval: str
-    source: str = "external"
+    source: str = "raspberry"
     candles: list[MarketCandleIn] = Field(default_factory=list)
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.asset_state import AssetStateCurrent
@@ -16,8 +16,16 @@ class AssetStateService:
         self._ensure_15m_columns()
 
     def _ensure_15m_columns(self) -> None:
-        self.db.execute(text("ALTER TABLE asset_state_current ADD COLUMN IF NOT EXISTS rsi_15m DOUBLE PRECISION"))
-        self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
+        bind = self.db.get_bind()
+        inspector = inspect(bind)
+        columns = {column["name"] for column in inspector.get_columns("asset_state_current")}
+
+        if "rsi_15m" not in columns:
+            self.db.execute(text("ALTER TABLE asset_state_current ADD COLUMN rsi_15m DOUBLE PRECISION"))
+
+        if "rsi_5m" in columns:
+            self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
+
         self.db.commit()
 
     def list_assets(self, *, limit: int, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
@@ -60,17 +68,8 @@ class AssetStateService:
         self.db.refresh(row)
         return row
 
-    def _normalize_public_score(self, signal: dict) -> dict:
-        payload = dict(signal)
-        if payload.get("final_score") is not None:
-            payload.setdefault("legacy_score", payload.get("score", 0.0))
-            payload.setdefault("legacy_score_breakdown", payload.get("score_breakdown", {}) or {})
-            payload["score"] = payload.get("final_score", 0.0)
-            payload["score_breakdown"] = payload.get("final_score_breakdown", {}) or {}
-        return payload
-
     def _public_signal_payload(self, signal: dict) -> dict:
-        payload = self._normalize_public_score(signal)
+        payload = dict(signal)
         execution_trigger = payload.get("execution_trigger") or payload.get("execution_trigger_5m")
         if execution_trigger:
             payload["execution_trigger"] = execution_trigger
@@ -100,18 +99,17 @@ class AssetStateService:
         return "collect"
 
     def upsert_from_signal(self, signal: dict) -> AssetStateCurrent:
-        public_payload = self._public_signal_payload(signal)
         payload = AssetStateUpsert(
-            stage=self._stage_from_signal(public_payload),
-            bias=public_payload.get("bias"),
-            session=public_payload.get("session"),
-            score=float(public_payload.get("score", 0.0)),
-            price=public_payload.get("price"),
-            rsi_1h=public_payload.get("rsi_htf"),
-            rsi_15m=public_payload.get("rsi_main"),
-            liquidity_context=public_payload.get("liquidity_context"),
-            execution_target=public_payload.get("execution_target"),
-            planner_notes=public_payload.get("confirm_source"),
-            state_payload=public_payload,
+            stage=self._stage_from_signal(signal),
+            bias=signal.get("bias"),
+            session=signal.get("session"),
+            score=float(signal.get("score", 0.0)),
+            price=signal.get("price"),
+            rsi_1h=signal.get("rsi_htf"),
+            rsi_15m=signal.get("rsi_main"),
+            liquidity_context=signal.get("liquidity_context"),
+            execution_target=signal.get("execution_target"),
+            planner_notes=signal.get("confirm_source"),
+            state_payload=self._public_signal_payload(signal),
         )
-        return self.upsert(symbol=public_payload["symbol"], payload=payload)
+        return self.upsert(symbol=signal["symbol"], payload=payload)

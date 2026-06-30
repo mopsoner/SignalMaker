@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker - Détail actif</title>
+    <meta name="description" content="Détail léger d’un actif via ?symbol=BTCUSDT.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Détail actif</h1>
+      <p>Détail léger d’un actif via ?symbol=BTCUSDT.</p>
+      <nav>
+        <a href="./index.html">Status</a>
+        <a href="./momentum-candidates.html">Candidate Sync</a>
+        <a href="./positions.html">Positions</a>
+        <a href="./settings.html">Réglages</a>
+        <a href="./admin.html">Admin</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./candidates.html">Trade Candidates</a>
+        <a href="./ops.html">Ops</a>
+        <a href="./logs.html">Logs</a>
+        <a href="./market-data.html">Market Data</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card"><h2>Actif</h2><label>Symbol <input id="asset-symbol" placeholder="BTCUSDT"></label> <button data-action="load-asset">Charger</button><div id="asset-content" class="muted">Indiquez un symbol.</div></section>
+    </main>
+
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

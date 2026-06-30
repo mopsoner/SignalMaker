@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from raspberry_executor.env_store import read_env
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Settings:
     signalmaker_base_url: str
     gateway_id: str
@@ -20,6 +20,14 @@ class Settings:
     kraken_base_url: str
     kraken_api_key: str
     kraken_secret_key: str
+
+    def __init__(self, **values):
+        fields = self.__dataclass_fields__
+        for name in fields:
+            if name in values:
+                object.__setattr__(self, name, values[name])
+            else:
+                raise TypeError(f"Settings missing required field: {name}")
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
