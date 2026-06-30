@@ -1,5 +1,5 @@
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.config import load_settings
 from raspberry_executor.state import StateStore
 
@@ -15,8 +15,8 @@ def _local_positions():
 
 def scan_inventory(min_notional=1.0):
     settings = load_settings()
-    client = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
-    rules = BinanceSymbolRules(settings.binance_base_url)
+    client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
+    rules = KrakenSymbolRules(settings.kraken_base_url)
     local = _local_positions()
     rows = []
     if settings.dry_run:

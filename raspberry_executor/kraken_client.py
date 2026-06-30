@@ -11,7 +11,7 @@ import requests
 
 
 class KrakenClient:
-    """Kraken Spot REST adapter with the BinanceClient surface used by SignalMaker."""
+    """Kraken Spot REST adapter with the KrakenClient surface used by SignalMaker."""
 
     exchange_name = "kraken"
 
@@ -27,7 +27,7 @@ class KrakenClient:
         return bool(self.api_key and self.secret_key)
 
     def recv_window_ms(self) -> int:
-        # Compatibility with BinanceClient; Kraken private requests use nonces
+        # Compatibility with KrakenClient; Kraken private requests use nonces
         # instead of recvWindow.
         return 0
 

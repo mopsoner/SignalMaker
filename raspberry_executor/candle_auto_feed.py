@@ -88,94 +88,9 @@ def _clear_retry(queue: dict[str, dict], symbol: str, interval: str) -> None:
     queue.pop(_pair_key(symbol, interval), None)
 
 
-def _exchange_info(base_url: str) -> dict:
-    response = requests.get(f"{base_url.rstrip('/')}/api/v3/exchangeInfo", timeout=20)
-    response.raise_for_status()
-    return response.json()
-
-
-def _public_get(base_url: str, path: str, params: dict | None = None, api_key: str | None = None) -> dict | list:
-    headers = {"X-MBX-APIKEY": api_key} if api_key else {}
-    response = requests.get(f"{base_url.rstrip('/')}{path}", params=params or {}, headers=headers, timeout=20)
-    if not response.ok:
-        raise RuntimeError(f"Binance GET {path} failed status={response.status_code} body={response.text[:300]}")
-    return response.json()
-
-
-def binance_request_weight_limit_per_minute(base_url: str) -> int:
-    data = _exchange_info(base_url)
-    for item in data.get("rateLimits", []):
-        if item.get("rateLimitType") == "REQUEST_WEIGHT" and item.get("interval") == "MINUTE" and int(item.get("intervalNum", 1)) == 1:
-            return int(item.get("limit"))
-    return 6000
-
-
-def effective_binance_requests_per_minute(base_url: str, env: dict[str, str]) -> tuple[int, int, float]:
-    doc_limit = binance_request_weight_limit_per_minute(base_url)
-    ratio = float(env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60") or "0.60")
-    ratio = min(max(ratio, 0.05), 0.95)
-    override = int(env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0") or "0")
-    computed = max(1, int(doc_limit * ratio))
-    if override > 0:
-        return min(override, computed), doc_limit, ratio
-    return computed, doc_limit, ratio
-
-
-def discover_spot_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
-    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
-    if not quotes:
-        return []
-    data = _exchange_info(base_url)
-    symbols = []
-    for row in data.get("symbols", []):
-        symbol = str(row.get("symbol", "")).upper()
-        quote_asset = str(row.get("quoteAsset", "")).upper()
-        if row.get("status") != "TRADING" or quote_asset not in quotes:
-            continue
-        if not row.get("isSpotTradingAllowed", False):
-            continue
-        symbols.append(symbol)
-    symbols = sorted(set(symbols))
-    return symbols[:limit] if limit and limit > 0 else symbols
-
-
-def discover_cross_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0, api_key: str | None = None) -> list[str]:
-    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
-    if not quotes:
-        return []
-    data = _public_get(base_url, "/sapi/v1/margin/allPairs", api_key=api_key)
-    symbols = []
-    for row in data if isinstance(data, list) else []:
-        symbol = str(row.get("symbol", "")).upper()
-        quote = str(row.get("quote", "")).upper()
-        if quote not in quotes:
-            continue
-        if row.get("isMarginTrade") is False:
-            continue
-        if row.get("isBuyAllowed") is False or row.get("isSellAllowed") is False:
-            continue
-        symbols.append(symbol)
-    symbols = sorted(set(symbols))
-    return symbols[:limit] if limit and limit > 0 else symbols
-
-
-def discover_isolated_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0, api_key: str | None = None) -> list[str]:
-    quotes = {quote.upper() for quote in quote_assets if quote.strip()}
-    if not quotes:
-        return []
-    data = _public_get(base_url, "/sapi/v1/margin/isolated/allPairs", api_key=api_key)
-    symbols = []
-    for row in data if isinstance(data, list) else []:
-        symbol = str(row.get("symbol", "")).upper()
-        quote = str(row.get("quote", "")).upper()
-        if quote not in quotes:
-            continue
-        if row.get("isBuyAllowed") is False or row.get("isSellAllowed") is False:
-            continue
-        symbols.append(symbol)
-    symbols = sorted(set(symbols))
-    return symbols[:limit] if limit and limit > 0 else symbols
-
+def effective_kraken_requests_per_minute(base_url: str, env: dict[str, str]) -> tuple[int, int, float]:
+    doc_limit = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
+    return doc_limit, doc_limit, 1.0
 
 def _kraken_asset(asset: str) -> str:
     value = str(asset or "").upper()
@@ -232,28 +147,9 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
 
 
 def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, limit: int = 0) -> tuple[list[str], str]:
-    exchange = str(getattr(settings, "exchange", "binance") or "binance").lower()
-    if exchange in {"kraken", "kraken_pro"}:
-        if mode in {"cross", "isolated"}:
-            return discover_kraken_margin_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_margin"
-        return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
-    return discover_symbols_for_execution_mode(settings.binance_base_url, quote_assets, mode, limit=limit, api_key=settings.binance_api_key)
-
-
-def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], mode: str, limit: int = 0, api_key: str | None = None) -> tuple[list[str], str]:
-    if mode == "cross":
-        try:
-            return discover_cross_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key), "cross_margin"
-        except Exception as exc:
-            logger.warning("cross margin symbol discovery failed; falling back to spot candle symbols error=%s", str(exc))
-            return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot_fallback_for_cross"
-    if mode == "isolated":
-        try:
-            return discover_isolated_margin_symbols(base_url, quote_assets, limit=limit, api_key=api_key), "isolated_margin"
-        except Exception as exc:
-            logger.warning("isolated margin symbol discovery failed; falling back to spot candle symbols error=%s", str(exc))
-            return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot_fallback_for_isolated"
-    return discover_spot_symbols(base_url, quote_assets, limit=limit), "spot"
+    if mode in {"cross", "isolated"}:
+        return discover_kraken_margin_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_margin"
+    return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
@@ -279,8 +175,8 @@ def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, sym
     latest = client.latest_candle(symbol, interval)
     start_time = _start_time_from_latest(latest)
     limiter.wait()
-    exchange = getattr(settings, "exchange", "binance")
-    base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url
+    exchange = getattr(settings, "exchange", "kraken")
+    base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.kraken_base_url
     candles = fetch_exchange_klines(exchange, base_url, symbol, interval, limit, start_time=start_time)
     if not candles:
         return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_candle_remote": latest, "latest_close_time": latest.get("close_time") if latest else None}
@@ -322,13 +218,9 @@ def run_once() -> dict:
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     limit = int(env.get("CANDLE_FEED_LIMIT", "120") or "120")
     max_workers = max(1, int(env.get("CANDLE_FEED_MAX_WORKERS", "3") or "3"))
-    exchange = str(getattr(settings, "exchange", "binance") or "binance").lower()
-    if exchange in {"kraken", "kraken_pro"}:
-        binance_doc_weight_limit_1m = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
-        weight_ratio = 1.0
-        requests_per_minute = binance_doc_weight_limit_1m
-    else:
-        requests_per_minute, binance_doc_weight_limit_1m, weight_ratio = effective_binance_requests_per_minute(settings.binance_base_url, env)
+    kraken_doc_weight_limit_1m = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
+    weight_ratio = 1.0
+    requests_per_minute = kraken_doc_weight_limit_1m
     retry_queue = _load_retry_queue()
 
     if not symbols:
@@ -361,12 +253,12 @@ def run_once() -> dict:
             except Exception as exc:
                 error_text = str(exc)
                 if "429" in error_text or "418" in error_text:
-                    logger.warning("Binance rate-limit response seen; reduce pressure error=%s", error_text)
+                    logger.warning("Kraken rate-limit response seen; reduce pressure error=%s", error_text)
                 _mark_retry(retry_queue, symbol, interval, error_text)
                 errors.append({"symbol": symbol, "interval": interval, "error": error_text, "retry_queued": True})
 
     _save_retry_queue(retry_queue)
-    result = {"status": "ok" if not errors else "partial", "execution_mode": mode, "symbol_count": len(symbols), "quote_assets": quote_assets, "intervals": intervals, "max_workers": worker_count, "binance_doc_request_weight_limit_1m": binance_doc_weight_limit_1m, "binance_request_weight_ratio": weight_ratio, "binance_effective_requests_per_minute": requests_per_minute, "pushed": pushed, "skipped": skipped, "errors": errors, "retry_queue_size": len(retry_queue), "retry_queue_path": str(RETRY_PATH)}
+    result = {"status": "ok" if not errors else "partial", "execution_mode": mode, "symbol_count": len(symbols), "quote_assets": quote_assets, "intervals": intervals, "max_workers": worker_count, "kraken_doc_request_weight_limit_1m": kraken_doc_weight_limit_1m, "kraken_request_weight_ratio": weight_ratio, "kraken_effective_requests_per_minute": requests_per_minute, "pushed": pushed, "skipped": skipped, "errors": errors, "retry_queue_size": len(retry_queue), "retry_queue_path": str(RETRY_PATH)}
     record_feed_run(result)
     return result
 
@@ -381,11 +273,12 @@ def run_loop() -> None:
         return
 
     poll_seconds = int(env.get("CANDLE_FEED_POLL_SECONDS", "60") or "60")
-    try:
-        doc_limit = binance_request_weight_limit_per_minute(load_settings().binance_base_url)
-    except Exception:
-        doc_limit = 6000
-    logger.info("candle feed started execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s binance_doc_weight_limit_1m=%s weight_ratio=%s rpm_override=%s", execution_mode(), env.get("QUOTE_ASSETS", "USDT"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, env.get("CANDLE_FEED_BINANCE_REQUEST_WEIGHT_RATIO", "0.60"), env.get("CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "0"))
+    settings = load_settings()
+    exchange = "kraken"
+    doc_limit = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
+    rpm_override = env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60")
+    weight_ratio = "1.0"
+    logger.info("candle feed started exchange=%s execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s request_limit_1m=%s weight_ratio=%s rpm_override=%s", exchange, execution_mode(), env.get("QUOTE_ASSETS", "USDC"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, weight_ratio, rpm_override)
 
     while True:
         try:

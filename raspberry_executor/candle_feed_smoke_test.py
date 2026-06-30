@@ -70,14 +70,14 @@ def main() -> int:
         return 1
 
     try:
-        total_tradeable_symbols = discover_spot_symbols(settings.binance_base_url, settings.quote_assets, limit=0)
+        total_tradeable_symbols = discover_spot_symbols(settings.kraken_base_url, settings.quote_assets, limit=0)
         symbols, quote_assets = resolve_feed_symbols(settings)
     except Exception as exc:
         return _fail(result, {
             "name": "resolve_feed_symbols",
             "ok": False,
             "error": str(exc),
-            "hint": "Check BINANCE_BASE_URL and QUOTE_ASSETS. Example: QUOTE_ASSETS=USDT or QUOTE_ASSETS=USDC.",
+            "hint": "Check KRAKEN_BASE_URL and QUOTE_ASSETS. Example: QUOTE_ASSETS=USDT or QUOTE_ASSETS=USDC.",
         })
 
     selected_symbols = symbols[:smoke_symbol_limit]
@@ -112,7 +112,7 @@ def main() -> int:
                 before_summary = _find_summary(client.candle_summary(symbol), symbol, interval)
                 before_count = int(before_summary.get("candle_count", 0)) if before_summary else 0
 
-                candles = fetch_klines(settings.binance_base_url, symbol, interval, limit)
+                candles = fetch_klines(settings.kraken_base_url, symbol, interval, limit)
                 if not candles:
                     errors.append({"symbol": symbol, "interval": interval, "error": "no_candles_returned"})
                     continue

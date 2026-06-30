@@ -13,13 +13,10 @@ class Settings:
     allowed_symbols: list[str]
     order_quote_amount: float
     max_candidate_age_seconds: int
-    binance_base_url: str
-    binance_api_key: str
-    binance_secret_key: str
-    exchange: str
     kraken_base_url: str
     kraken_api_key: str
     kraken_secret_key: str
+    exchange: str
 
     def __init__(self, **values):
         fields = self.__dataclass_fields__
@@ -93,11 +90,8 @@ def load_settings() -> Settings:
         allowed_symbols=quote_assets,
         order_quote_amount=_float(values, "ORDER_QUOTE_AMOUNT", "20"),
         max_candidate_age_seconds=_int(values, "MAX_CANDIDATE_AGE_SECONDS", "900"),
-        binance_base_url=str(values.get("BINANCE_BASE_URL", "https://api.binance.com")).rstrip("/"),
-        binance_api_key=str(values.get("BINANCE_API_KEY", "")),
-        binance_secret_key=str(values.get("BINANCE_SECRET_KEY", "")),
-        exchange=str(values.get("EXECUTION_EXCHANGE", "binance") or "binance").strip().lower(),
         kraken_base_url=str(values.get("KRAKEN_BASE_URL", "https://api.kraken.com")).rstrip("/"),
         kraken_api_key=str(values.get("KRAKEN_API_KEY", "")),
         kraken_secret_key=str(values.get("KRAKEN_SECRET_KEY", "")),
+        exchange=str(values.get("EXECUTION_EXCHANGE", "kraken") or "kraken").strip().lower(),
     )

@@ -1,4 +1,4 @@
-from raspberry_executor.binance_client import BinanceClient
+from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.config import load_settings
 
 
@@ -35,7 +35,7 @@ def pnl_for_position(row, price_cache=None, is_closed=False):
             mark = price_cache[symbol]
         else:
             settings = load_settings()
-            client = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
+            client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
             try:
                 mark = client.current_price(symbol)
             except Exception:

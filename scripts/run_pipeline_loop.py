@@ -26,14 +26,14 @@ if __name__ == "__main__":
         try:
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
-            binance = runtime.get("binance", {})
+            kraken = runtime.get("kraken", {})
 
             if not bot.get("bot_pipeline_enabled", True):
                 print("Pipeline disabled — sleeping 30s", flush=True)
                 time.sleep(30)
                 continue
 
-            limit = int(binance.get("binance_max_symbols", DEFAULT_LIMIT))
+            limit = int(kraken.get("kraken_max_symbols", DEFAULT_LIMIT))
             interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
 
             result = PipelineService(db).run_once(limit=limit)

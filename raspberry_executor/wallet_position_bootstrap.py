@@ -1,4 +1,4 @@
-from raspberry_executor.binance_client import BinanceClient
+from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import execution_mode
@@ -26,7 +26,7 @@ def _existing_symbols(state: StateStore):
     return symbols
 
 
-def _first_valid_symbol(client: BinanceClient, asset: str, quote_assets: list[str]):
+def _first_valid_symbol(client: KrakenClient, asset: str, quote_assets: list[str]):
     for quote in quote_assets:
         symbol = f"{asset}{quote.upper()}"
         try:
@@ -85,7 +85,7 @@ def _bootstrap_spot(client, state, existing, quote_assets, min_notional):
         if notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side="long", mode="spot", quantity=total, price=price, source="binance_spot_bootstrap", extra={"wallet_asset": asset, "wallet_quote": quote, "wallet_free": free, "wallet_locked": locked, "wallet_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side="long", mode="spot", quantity=total, price=price, source="kraken_spot_bootstrap", extra={"wallet_asset": asset, "wallet_quote": quote, "wallet_free": free, "wallet_locked": locked, "wallet_notional": notional}):
             created += 1
     return seen, created, skipped
 
@@ -127,7 +127,7 @@ def _bootstrap_cross(client, state, existing, quote_assets, min_notional):
         if qty <= 0 or notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="cross_margin", quantity=qty, price=price, source="binance_cross_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side=side, mode="cross_margin", quantity=qty, price=price, source="kraken_cross_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
             created += 1
     return seen, created, skipped
 
@@ -163,7 +163,7 @@ def _bootstrap_isolated(client, state, existing, quote_assets, min_notional):
         if qty <= 0 or notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="isolated_margin", quantity=qty, price=price, source="binance_isolated_margin_bootstrap", extra={"margin_asset": base, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side=side, mode="isolated_margin", quantity=qty, price=price, source="kraken_isolated_margin_bootstrap", extra={"margin_asset": base, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
             created += 1
     return seen, created, skipped
 
@@ -171,7 +171,7 @@ def _bootstrap_isolated(client, state, existing, quote_assets, min_notional):
 def bootstrap_wallet_positions(min_notional: float = 1.0):
     settings = load_settings()
     state = StateStore()
-    client = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
+    client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
     quote_assets = [q.upper() for q in settings.quote_assets]
     existing = _existing_symbols(state)
     mode = execution_mode()

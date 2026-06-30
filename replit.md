@@ -1,6 +1,6 @@
 # SignalMaker
 
-FastAPI trading app (Binance public REST, paper trading) with a lightweight static HTML/CSS/JS dashboard.
+FastAPI trading app (Kraken public REST, paper trading) with a lightweight static HTML/CSS/JS dashboard.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ FastAPI trading app (Binance public REST, paper trading) with a lightweight stat
 ## Key Configuration
 
 - `DATABASE_URL`: Auto-converted `postgres://` → `postgresql+psycopg://` via `@field_validator` in `app/core/config.py`
-- **Binance**: `api.binance.us` (NOT `api.binance.com` — datacenter IPs are 451-blocked)
+- **Kraken**: `api.kraken.us` (NOT `api.kraken.com` — datacenter IPs are 451-blocked)
 - Settings persisted in `AppSetting` DB table; defaults come from `config.py`
 
 ## Data Model Notes
@@ -45,7 +45,7 @@ FastAPI trading app (Binance public REST, paper trading) with a lightweight stat
 
 ## Pipeline Flow
 
-1. **Collector** fetches top-N symbols from Binance + 1m candles (180 bars)
+1. **Collector** fetches top-N symbols from Kraken + 1m candles (180 bars)
 2. **Signal Engine** applies `legacy_wyckoff_v231` strategy
 3. **Planner** filters by min_score ≥ 4.0 and min_rr ≥ 0.8
 4. Results stored in PostgreSQL; live-runs logged with stats

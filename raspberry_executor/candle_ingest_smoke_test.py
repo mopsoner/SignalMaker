@@ -41,7 +41,7 @@ def main() -> int:
     result["before"] = before or {}
     result["checks"].append({"name": "summary_before", "ok": True, "candle_count": before_count, "last_close": before_last_close})
 
-    candles = fetch_klines(settings.binance_base_url, symbol, interval, limit)
+    candles = fetch_klines(settings.kraken_base_url, symbol, interval, limit)
     if not candles:
         result["status"] = "failed"
         result["checks"].append({"name": "fetch_klines", "ok": False, "error": "no_candles_returned"})

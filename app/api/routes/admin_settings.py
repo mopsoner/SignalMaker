@@ -22,7 +22,7 @@ class SettingsPayload(BaseModel):
 
     general: dict[str, Any] = {}
     executor: dict[str, Any] = {}
-    binance: dict[str, Any] = {}
+    kraken: dict[str, Any] = {}
     kraken: dict[str, Any] = {}
     market_data: dict[str, Any] = {}
     strategy: dict[str, Any] = {}
@@ -63,9 +63,9 @@ def reset_database(db: Session = Depends(get_db)) -> dict:
     return reset_database_preserving_config(db)
 
 
-@router.post('/admin/test/binance')
-def test_binance(db: Session = Depends(get_db)) -> dict:
-    base = load_runtime_settings(db)['binance']['binance_rest_base'].rstrip('/')
+@router.post('/admin/test/kraken')
+def test_kraken(db: Session = Depends(get_db)) -> dict:
+    base = load_runtime_settings(db)['kraken']['kraken_rest_base'].rstrip('/')
     response = requests.get(f'{base}/api/v3/ping', timeout=10)
     return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
 

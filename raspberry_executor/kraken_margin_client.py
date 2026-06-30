@@ -23,7 +23,7 @@ def _kraken_order_type(order_type: str) -> str:
 class KrakenMarginClient:
     """Kraken spot-margin adapter for the existing MarginClient surface.
 
-    Kraken Spot margin does not expose Binance-style isolated accounts or an
+    Kraken Spot margin does not expose Kraken-style isolated accounts or an
     explicit borrow/repay endpoint. Borrowing is implicit when an order is sent
     with a `leverage` value; repayment happens when the margin position is
     closed or settled. This adapter keeps the executor contract intact and
@@ -31,7 +31,7 @@ class KrakenMarginClient:
     """
 
     def __init__(self, kraken: KrakenClient, *, isolated: bool = False, dry_run: bool = True) -> None:
-        self.binance = kraken  # Compatibility with existing manager attribute names.
+        self.kraken = kraken  # Compatibility with existing manager attribute names.
         self.kraken = kraken
         self.isolated = False
         self.requested_isolated = isolated

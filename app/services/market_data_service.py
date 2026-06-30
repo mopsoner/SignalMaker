@@ -21,13 +21,13 @@ class MarketDataService:
         self._ensure_optional_candle_columns()
 
     def _ensure_optional_candle_columns(self) -> None:
-        """Keep existing Replit/Postgres databases compatible with new Binance kline fields."""
+        """Keep existing Replit/Postgres databases compatible with new Kraken kline fields."""
         columns = {
             "quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
             "number_of_trades": "INTEGER NOT NULL DEFAULT 0",
             "taker_buy_base_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
             "taker_buy_quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
-            "provider": "VARCHAR(32) NOT NULL DEFAULT 'BINANCE'",
+            "provider": "VARCHAR(32) NOT NULL DEFAULT 'KRAKEN'",
             "asset_id": "VARCHAR(96)",
             "provider_symbol": "VARCHAR(64)",
             "asset_type": "VARCHAR(32)",
@@ -225,7 +225,7 @@ class MarketDataService:
             row.number_of_trades = int(candle.get("number_of_trades") or 0)
             row.taker_buy_base_volume = float(candle.get("taker_buy_base_volume") or 0.0)
             row.taker_buy_quote_volume = float(candle.get("taker_buy_quote_volume") or 0.0)
-            row.provider = str(candle.get("provider") or "BINANCE").upper()
+            row.provider = str(candle.get("provider") or "KRAKEN").upper()
             row.asset_id = candle.get("asset_id")
             row.provider_symbol = candle.get("provider_symbol")
             row.asset_type = candle.get("asset_type")
@@ -242,7 +242,7 @@ class MarketDataService:
     def count_market_candles_by_provider(self, provider: str) -> int:
         return int(self.db.execute(text("SELECT COUNT(*) FROM market_candles WHERE provider = :provider"), {"provider": provider.upper()}).scalar() or 0)
 
-    def last_import_run(self, provider: str = "BINANCE") -> dict[str, Any] | None:
+    def last_import_run(self, provider: str = "KRAKEN") -> dict[str, Any] | None:
         try:
             row = self.db.execute(text("SELECT * FROM market_data_import_runs WHERE provider = :provider ORDER BY started_at DESC LIMIT 1"), {"provider": provider.upper()}).mappings().first()
             return dict(row) if row else None
@@ -250,7 +250,7 @@ class MarketDataService:
             self.db.rollback()
             return None
 
-    def candle_quality(self, provider: str = "BINANCE") -> dict[str, Any]:
+    def candle_quality(self, provider: str = "KRAKEN") -> dict[str, Any]:
         return {"provider": provider.upper(), "candles": self.count_market_candles_by_provider(provider)}
 
     def latest_analysis_results(self, provider: str | None = None) -> list[dict[str, Any]]:

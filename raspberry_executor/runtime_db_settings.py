@@ -11,18 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
 DEFAULT_RUNTIME: dict[str, dict[str, Any]] = {
-    "executor": {"execution_exchange": "binance", "quote_assets": "USDC"},
+    "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
     "kraken": {
         "kraken_exchange_name": "kraken",
         "kraken_base_url": "https://api.kraken.com",
         "kraken_api_key": "",
         "kraken_secret_key": "",
-    },
-    "binance": {
-        "binance_exchange_name": "binance",
-        "binance_rest_base": "https://api.binance.com",
-        "binance_api_key": "",
-        "binance_secret_key": "",
     },
 }
 
@@ -33,9 +27,6 @@ LEGACY_ALIASES: dict[tuple[str, str], tuple[str, str]] = {
     ("kraken", "EXECUTION_EXCHANGE"): ("executor", "execution_exchange"),
     ("executor", "EXECUTION_EXCHANGE"): ("executor", "execution_exchange"),
     ("executor", "QUOTE_ASSETS"): ("executor", "quote_assets"),
-    ("binance", "BINANCE_BASE_URL"): ("binance", "binance_rest_base"),
-    ("binance", "BINANCE_API_KEY"): ("binance", "binance_api_key"),
-    ("binance", "BINANCE_SECRET_KEY"): ("binance", "binance_secret_key"),
 }
 
 

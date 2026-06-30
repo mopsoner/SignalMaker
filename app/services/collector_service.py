@@ -13,7 +13,7 @@ from app.services.runtime_settings import load_runtime_settings
 
 logger = logging.getLogger(__name__)
 
-BINANCE_WEIGHT_LIMIT = 1200
+KRAKEN_WEIGHT_LIMIT = 1200
 WEIGHT_SAFETY_THRESHOLD = 1000
 KLINES_WEIGHT = 2
 INTERVAL_MS = {
@@ -28,7 +28,7 @@ DUE_BASED_INTERVALS = {"1h", "4h"}
 
 
 class RateLimiter:
-    """Tracks Binance rolling-minute weight and pauses when approaching the limit."""
+    """Tracks Kraken rolling-minute weight and pauses when approaching the limit."""
 
     def __init__(self) -> None:
         self._used_weight: int = 0
@@ -47,8 +47,8 @@ class RateLimiter:
             wait = max(0.0, 61.0 - elapsed)
             if wait > 0:
                 logger.warning(
-                    "Binance weight %d/%d — pause %.1fs avant reset",
-                    self._used_weight, BINANCE_WEIGHT_LIMIT, wait,
+                    "Kraken weight %d/%d — pause %.1fs avant reset",
+                    self._used_weight, KRAKEN_WEIGHT_LIMIT, wait,
                 )
                 time.sleep(wait)
                 self._used_weight = 0
@@ -59,8 +59,8 @@ class CollectorService:
     def __init__(self) -> None:
         runtime = load_runtime_settings()
         self.runtime = runtime
-        self.base_url = runtime['binance']['binance_rest_base'].rstrip('/')
-        self.collector_enabled = bool(runtime.get('market_data', runtime['binance']).get('binance_collector_enabled', False))
+        self.base_url = runtime['kraken']['kraken_rest_base'].rstrip('/')
+        self.collector_enabled = bool(runtime.get('market_data', runtime['kraken']).get('kraken_collector_enabled', False))
         self.session = requests.Session()
         self._rate = RateLimiter()
 
@@ -76,7 +76,7 @@ class CollectorService:
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         if not self.collector_enabled:
-            raise RuntimeError('Binance collector is disabled; use POST /api/v1/market-data/candles to ingest candles')
+            raise RuntimeError('Kraken collector is disabled; use POST /api/v1/market-data/candles to ingest candles')
         self._rate.wait_if_needed()
         url = f"{self.base_url}{path}"
         for attempt in range(3):
@@ -95,17 +95,17 @@ class CollectorService:
             if res.status_code == 418:
                 retry_after = int(res.headers.get('Retry-After', 120))
                 logger.error(
-                    "Binance IP ban (418) — attente %ds avant reprise", retry_after
+                    "Kraken IP ban (418) — attente %ds avant reprise", retry_after
                 )
                 raise RuntimeError(
-                    f"Binance a banni l'IP temporairement (418). "
+                    f"Kraken a banni l'IP temporairement (418). "
                     f"Attendez {retry_after}s avant de relancer le pipeline."
                 )
 
             if res.status_code == 429:
                 retry_after = int(res.headers.get('Retry-After', 60))
                 logger.warning(
-                    "Binance rate-limit (429) — attente %ds (tentative %d/3)",
+                    "Kraken rate-limit (429) — attente %ds (tentative %d/3)",
                     retry_after, attempt + 1,
                 )
                 time.sleep(retry_after)
@@ -114,7 +114,7 @@ class CollectorService:
             res.raise_for_status()
             return res.json()
 
-        raise RuntimeError(f"Binance: échec après 3 tentatives sur {path}")
+        raise RuntimeError(f"Kraken: échec après 3 tentatives sur {path}")
 
     def heartbeat(self) -> dict:
         return {
@@ -123,13 +123,13 @@ class CollectorService:
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'base_url': self.base_url,
             'pipeline_intervals': list(PIPELINE_INTERVALS),
-            'binance_collector_enabled': self.collector_enabled,
+            'kraken_collector_enabled': self.collector_enabled,
         }
 
     def _runtime_csv(self, key: str) -> list[str]:
         return [
             item.strip().upper()
-            for item in str(self.runtime.get('market_data', self.runtime['binance']).get(key, '')).split(',')
+            for item in str(self.runtime.get('market_data', self.runtime['kraken']).get(key, '')).split(',')
             if item.strip()
         ]
 
@@ -137,16 +137,16 @@ class CollectorService:
         if not self.collector_enabled:
             symbols = self._stored_symbols(limit=limit)
             logger.info(
-                "Binance collector disabled. Using %d symbols from stored market_candles.",
+                "Kraken collector disabled. Using %d symbols from stored market_candles.",
                 len(symbols),
             )
             return symbols
 
         info = self._get('/api/v3/exchangeInfo')
-        allowed_quotes = self._runtime_csv('binance_quote_assets')
-        excluded_bases = set(self._runtime_csv('binance_excluded_base_assets'))
-        status_name = self.runtime.get('market_data', self.runtime['binance'])['binance_symbol_status']
-        max_symbols = int(limit or self.runtime.get('market_data', self.runtime['binance'])['binance_max_symbols'])
+        allowed_quotes = self._runtime_csv('kraken_quote_assets')
+        excluded_bases = set(self._runtime_csv('kraken_excluded_base_assets'))
+        status_name = self.runtime.get('market_data', self.runtime['kraken'])['kraken_symbol_status']
+        max_symbols = int(limit or self.runtime.get('market_data', self.runtime['kraken'])['kraken_max_symbols'])
 
         symbols: list[str] = []
         for row in info.get('symbols', []):
@@ -199,10 +199,10 @@ class CollectorService:
         ]
 
     def _full_lookback(self, interval: str) -> int:
-        return int(self.runtime.get('market_data', self.runtime['binance'])[f'binance_lookback_{interval}'])
+        return int(self.runtime.get('market_data', self.runtime['kraken'])[f'kraken_lookback_{interval}'])
 
     def _incremental_min(self, interval: str) -> int:
-        return int(self.runtime.get('market_data', self.runtime['binance']).get(f'binance_incremental_min_{interval}', 2))
+        return int(self.runtime.get('market_data', self.runtime['kraken']).get(f'kraken_incremental_min_{interval}', 2))
 
     def _interval_due(self, interval: str, latest_close_time: int | None) -> bool:
         if interval not in DUE_BASED_INTERVALS:
@@ -216,7 +216,7 @@ class CollectorService:
         full_limit = self._full_lookback(interval)
         if interval in DUE_BASED_INTERVALS and not self._interval_due(interval, latest_close_time):
             return 0, None
-        if not self.runtime.get('market_data', self.runtime['binance']).get('binance_incremental_fetch_enabled', True) or latest_close_time is None:
+        if not self.runtime.get('market_data', self.runtime['kraken']).get('kraken_incremental_fetch_enabled', True) or latest_close_time is None:
             return full_limit, None
         interval_ms = INTERVAL_MS[interval]
         now_ms = int(time.time() * 1000)

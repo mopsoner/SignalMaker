@@ -46,10 +46,10 @@ if "def _oco_repair_max_chunks" not in sync:
     )
 
 old_block = '''    use_margin = _is_margin_position(position)
-    if binance is not None and rules is not None:
-        if _attach_existing_exit_orders(candidate_id, position, symbol, binance, margin_manager.margin, rules, state, use_margin=use_margin):
+    if kraken is not None and rules is not None:
+        if _attach_existing_exit_orders(candidate_id, position, symbol, kraken, margin_manager.margin, rules, state, use_margin=use_margin):
             return "attached_existing_orders"
-        available = _available_base_balance(binance, margin_manager.margin, rules, symbol, use_margin=use_margin)
+        available = _available_base_balance(kraken, margin_manager.margin, rules, symbol, use_margin=use_margin)
         qty_ok, repair_qty, qty_reason = _repair_quantity(position, available)
         if not qty_ok:
             payload = {"symbol": symbol, "mode": position.get("mode"), "reason": qty_reason, "expected_quantity": position.get("quantity"), "available_base": available, "levels": levels}
@@ -83,8 +83,8 @@ old_block = '''    use_margin = _is_margin_position(position)
 '''
 
 new_block = '''    use_margin = _is_margin_position(position)
-    if binance is not None and rules is not None:
-        if _attach_existing_exit_orders(candidate_id, position, symbol, binance, margin_manager.margin, rules, state, use_margin=use_margin):
+    if kraken is not None and rules is not None:
+        if _attach_existing_exit_orders(candidate_id, position, symbol, kraken, margin_manager.margin, rules, state, use_margin=use_margin):
             return "attached_existing_orders"
 
     repair_mode = "margin" if use_margin else "spot"
@@ -97,8 +97,8 @@ new_block = '''    use_margin = _is_margin_position(position)
     available = None
 
     for chunk_index in range(_oco_repair_max_chunks()):
-        if binance is not None and rules is not None:
-            available = _available_base_balance(binance, margin_manager.margin, rules, symbol, use_margin=use_margin)
+        if kraken is not None and rules is not None:
+            available = _available_base_balance(kraken, margin_manager.margin, rules, symbol, use_margin=use_margin)
         else:
             available = None
 
@@ -134,7 +134,7 @@ new_block = '''    use_margin = _is_margin_position(position)
                 break
             break
 
-        if binance is None or rules is None or available is None:
+        if kraken is None or rules is None or available is None:
             break
 
     if not chunks:

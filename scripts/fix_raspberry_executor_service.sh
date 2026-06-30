@@ -110,7 +110,7 @@ Settings persistence:
 If TUI still shows: Dry run global=true
 1) Open SignalMaker Admin
 2) Set Live trading enabled = true
-3) Set Use Binance testnet = false for real Binance
+3) Set Use Kraken testnet = false for real Kraken
 4) Save
 5) Run: sudo systemctl restart raspberry-executor
 

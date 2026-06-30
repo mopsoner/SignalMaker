@@ -2,7 +2,7 @@
 
 ## Scope completed
 
-This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ead0f3de25`) and reintroduces the Raspberry executor business flow in the current FastAPI/static-frontend architecture. The implementation keeps SignalMaker remote polling, local autonomous execution, Momentum candidate sync/execution visibility, and Binance/Kraken exchange selection while removing active IBKR/stocks/ETF code and pages.
+This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ead0f3de25`) and reintroduces the Raspberry executor business flow in the current FastAPI/static-frontend architecture. The implementation keeps SignalMaker remote polling, local autonomous execution, Momentum candidate sync/execution visibility, and Kraken/Kraken exchange selection while removing active IBKR/stocks/ETF code and pages.
 
 ## Historical reference used
 
@@ -14,7 +14,7 @@ This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ea
 
 - `raspberry_executor/signalmaker_client.py` remains the remote SignalMaker client for `/api/v1/trade-candidates`, Momentum ranking/sync endpoints, settings fetch, cursor filtering, and local candidate import.
 - `raspberry_executor/run_once.py` provides the requested one-shot executor command for `SIGNALMAKER_BASE_URL=<remote> python -m raspberry_executor.run_once`.
-- `raspberry_executor/main.py` now uses the exchange factory so the same candidate flow can execute on Binance or Kraken.
+- `raspberry_executor/main.py` now uses the exchange factory so the same candidate flow can execute on Kraken or Kraken.
 - `app/services/executor_service.py` executes local open candidates through an exchange adapter, creates entry/TP/optional stop local orders, persists positions/fills, and marks candidates executed.
 - `app/api/routes/trade_candidates.py` and `app/api/routes/executor.py` expose the local candidate list, executed marker, executor run-once, reconcile, and Momentum candidate sync endpoints.
 
@@ -46,7 +46,7 @@ This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ea
 - `momentum-candidates.html`: Momentum candidate sync plus buy/sell tracking fields.
 - `positions.html`: open/closed positions with entry, mark, TP, PnL.
 - `orders.html`: entry, TP, stop orders and fills.
-- `settings.html` / `admin.html`: runtime settings, SignalMaker URL, Binance/Kraken credentials, live/paper, Momentum settings.
+- `settings.html` / `admin.html`: runtime settings, SignalMaker URL, Kraken/Kraken credentials, live/paper, Momentum settings.
 - `logs.html`: workers and executor logs.
 
 ## New architecture kept

@@ -23,7 +23,7 @@ def _trade_count(candle: dict[str, Any]) -> int:
 def _trade_count_ok(candles: list[dict[str, Any]], index: int) -> bool:
     """Reject volume confirmation on candles with too few actual trades.
 
-    Binance quote volume can occasionally look usable on thin books while the
+    Kraken quote volume can occasionally look usable on thin books while the
     candle was built from only a few executions. We accept either an absolute
     minimum of trades or a relative spike versus the recent local average.
     """
@@ -40,7 +40,7 @@ def _trade_count_ok(candles: list[dict[str, Any]], index: int) -> bool:
     avg_trades = sum(trade_counts) / len(trade_counts) if trade_counts else 0.0
     if avg_trades <= 0:
         # Backward compatibility: old stored candles have no trade count yet.
-        # Do not block them forever; new Binance candles will populate this.
+        # Do not block them forever; new Kraken candles will populate this.
         return True
     return (trade_count / avg_trades) >= 1.2
 
@@ -48,7 +48,7 @@ def _trade_count_ok(candles: list[dict[str, Any]], index: int) -> bool:
 def volumes(candles: list[dict[str, Any]]) -> list[float]:
     """Return the execution-quality volume series used by confirmations.
 
-    Prefer Binance quote asset volume because it is normalized in the quote
+    Prefer Kraken quote asset volume because it is normalized in the quote
     currency, usually USDT, and is more comparable across altcoins than base
     asset volume. Apply the number_of_trades quality gate to the latest candle
     so a reclaim/MSS/BOS confirmation is not boosted by a very thin candle.

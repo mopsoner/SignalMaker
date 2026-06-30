@@ -38,7 +38,7 @@ def test_discover_kraken_margin_symbols_keeps_only_margin_tradeable_quotes(monke
 
 def test_discover_symbols_for_exchange_uses_kraken_margin_filter_for_cross(monkeypatch):
     monkeypatch.setattr(candle_auto_feed.requests, "get", lambda *args, **kwargs: FakeResponse(kraken_asset_pairs_payload()))
-    settings = SimpleNamespace(exchange="kraken", kraken_base_url="https://kraken.test", binance_base_url="https://binance.test", binance_api_key="")
+    settings = SimpleNamespace(exchange="kraken", kraken_base_url="https://kraken.test", kraken_api_key="")
 
     symbols, source = candle_auto_feed.discover_symbols_for_exchange(settings, ["USDC"], "cross")
 

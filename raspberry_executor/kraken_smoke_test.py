@@ -3,7 +3,7 @@ import sys
 
 import requests
 
-from raspberry_executor.binance_client import BinanceClient
+from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 
@@ -11,18 +11,18 @@ from raspberry_executor.env_store import ensure_env
 def main() -> int:
     ensure_env()
     settings = load_settings()
-    client = BinanceClient(
-        settings.binance_base_url,
-        settings.binance_api_key,
-        settings.binance_secret_key,
+    client = KrakenClient(
+        settings.kraken_base_url,
+        settings.kraken_api_key,
+        settings.kraken_secret_key,
         dry_run=True,
     )
 
     result = {
-        "base_url": settings.binance_base_url,
+        "base_url": settings.kraken_base_url,
         "dry_run": True,
-        "api_key_loaded": bool(settings.binance_api_key),
-        "secret_key_loaded": bool(settings.binance_secret_key),
+        "api_key_loaded": bool(settings.kraken_api_key),
+        "secret_key_loaded": bool(settings.kraken_secret_key),
         "checks": [],
     }
 

@@ -7,7 +7,7 @@ import requests
 
 
 class KrakenSymbolRules:
-    """Kraken Spot symbol metadata adapter matching BinanceSymbolRules methods."""
+    """Kraken Spot symbol metadata adapter matching KrakenSymbolRules methods."""
 
     def __init__(self, base_url: str, quote_assets: list[str] | None = None) -> None:
         self.base_url = (base_url or "https://api.kraken.com").rstrip("/")

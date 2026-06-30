@@ -29,23 +29,23 @@ def quote_asset_for_symbol(symbol: str, quote_assets: list[str]) -> str | None:
     return None
 
 
-def take_profit_window_still_valid(binance: Any, symbol: str, target_price: float) -> tuple[bool, float, str]:
-    current = binance.current_price(symbol)
+def take_profit_window_still_valid(kraken: Any, symbol: str, target_price: float) -> tuple[bool, float, str]:
+    current = kraken.current_price(symbol)
     if not (float(target_price) > current):
         return False, current, f"invalid_take_profit_window target={target_price} current={current}"
     return True, current, "ok"
 
 
-def sell_all_spot_balance(binance: Any, rules: Any, state: StateStore, candidate: dict, symbol: str) -> str:
+def sell_all_spot_balance(kraken: Any, rules: Any, state: StateStore, candidate: dict, symbol: str) -> str:
     candidate_id = candidate["candidate_id"]
     base = rules.base_asset(symbol)
-    free_qty = binance.free_balance(base)
+    free_qty = kraken.free_balance(base)
     if free_qty <= 0:
         return f"no_free_balance:{base}"
-    price = binance.current_price(symbol)
+    price = kraken.current_price(symbol)
     qty = rules.normalize_market_quantity(symbol, free_qty)
     rules.ensure_exit_notional(symbol, qty, price, label="spot_sell_on_short")
-    order = binance.place_market_entry(symbol, "short", qty)
+    order = kraken.place_market_entry(symbol, "short", qty)
     state.mark_executed(candidate_id)
     state.add_event(candidate_id, "spot_balance_sold_on_short", {
         "symbol": symbol,
@@ -96,7 +96,7 @@ def should_queue_long_error(error_text: str) -> bool:
     return "insufficient balance" in low or "account has insufficient balance" in low or "-2010" in low
 
 
-def process_candidate(settings, binance, rules, order_manager, state, guard, candidate: dict, *, from_queue: bool = False) -> str:
+def process_candidate(settings, kraken, rules, order_manager, state, guard, candidate: dict, *, from_queue: bool = False) -> str:
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
         return "missing_candidate_id"
@@ -110,12 +110,12 @@ def process_candidate(settings, binance, rules, order_manager, state, guard, can
     side = guard.normalize_side(str(candidate.get("side", "")))
 
     if side == "short":
-        result = sell_all_spot_balance(binance, rules, state, candidate, symbol)
+        result = sell_all_spot_balance(kraken, rules, state, candidate, symbol)
         if result == "sold" and from_queue:
             remove_pending(candidate_id)
         return result
 
-    valid, current, why = take_profit_window_still_valid(binance, symbol, float(candidate["target_price"]))
+    valid, current, why = take_profit_window_still_valid(kraken, symbol, float(candidate["target_price"]))
     if not valid:
         if from_queue:
             bump_pending(candidate_id, why)
@@ -123,8 +123,8 @@ def process_candidate(settings, binance, rules, order_manager, state, guard, can
 
     quote = quote_asset_for_symbol(symbol, settings.quote_assets)
     if quote:
-        free_quote = binance.free_balance(quote)
-        if not binance.dry_run and free_quote < float(settings.order_quote_amount):
+        free_quote = kraken.free_balance(quote)
+        if not kraken.dry_run and free_quote < float(settings.order_quote_amount):
             add_pending(candidate, f"quote_balance_wait:{quote}:{free_quote}")
             return f"queued_quote_balance_wait:{quote}"
 
@@ -143,11 +143,11 @@ def process_candidate(settings, binance, rules, order_manager, state, guard, can
         return "error"
 
 
-def process_pending(settings, binance, rules, order_manager, state, guard) -> dict:
+def process_pending(settings, kraken, rules, order_manager, state, guard) -> dict:
     stats = {"pending_checked": 0, "pending_opened": 0, "pending_sold": 0, "pending_waiting": 0, "pending_errors": 0}
     for item in list_pending(limit=50):
         stats["pending_checked"] += 1
-        result = process_candidate(settings, binance, rules, order_manager, state, guard, item["candidate"], from_queue=True)
+        result = process_candidate(settings, kraken, rules, order_manager, state, guard, item["candidate"], from_queue=True)
         if result == "opened":
             stats["pending_opened"] += 1
         elif result == "sold":
@@ -162,8 +162,8 @@ def process_pending(settings, binance, rules, order_manager, state, guard) -> di
 def main() -> None:
     settings = load_settings()
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance, rules = create_spot_exchange(settings)
-    order_manager = SpotOrderManager(binance, rules)
+    kraken, rules = create_spot_exchange(settings)
+    order_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     fetch_limit = candidate_fetch_limit()
@@ -174,7 +174,7 @@ def main() -> None:
             candidates = signalmaker.get_open_candidates(limit=fetch_limit)
             stats = {"fetched": len(candidates), "opened": 0, "sold": 0, "queued": 0, "errors": 0, "skipped": 0}
             for candidate in candidates:
-                result = process_candidate(settings, binance, rules, order_manager, state, guard, candidate)
+                result = process_candidate(settings, kraken, rules, order_manager, state, guard, candidate)
                 if result == "opened":
                     stats["opened"] += 1
                 elif result == "sold":
@@ -185,7 +185,7 @@ def main() -> None:
                     stats["errors"] += 1
                 else:
                     stats["skipped"] += 1
-            pending_stats = process_pending(settings, binance, rules, order_manager, state, guard)
+            pending_stats = process_pending(settings, kraken, rules, order_manager, state, guard)
             logger.info("executor summary=%s pending=%s", stats, pending_stats)
         except Exception as exc:
             logger.error("executor loop error=%s", str(exc))

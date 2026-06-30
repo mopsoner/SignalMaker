@@ -19,23 +19,23 @@ def ensure_live_order_id(result: dict, label: str = "entry") -> tuple[bool, str]
     return False, f"missing_live_{label}_order_id"
 
 
-def spot_total_balance(binance, asset: str) -> float:
+def spot_total_balance(kraken, asset: str) -> float:
     wanted = asset.upper()
-    for row in binance.account().get("balances") or []:
+    for row in kraken.account().get("balances") or []:
         if str(row.get("asset", "")).upper() == wanted:
             return _f(row.get("free")) + _f(row.get("locked"))
     return 0.0
 
 
-def confirm_spot_long(binance, rules, symbol: str, result: dict) -> tuple[bool, str]:
-    if binance.dry_run:
+def confirm_spot_long(kraken, rules, symbol: str, result: dict) -> tuple[bool, str]:
+    if kraken.dry_run:
         return True, "dry_run"
     ok, reason = ensure_live_order_id(result, "spot_entry")
     if not ok:
         return False, reason
     base = rules.base_asset(symbol)
     qty = _f(result.get("quantity"))
-    total = spot_total_balance(binance, base)
+    total = spot_total_balance(kraken, base)
     if qty > 0 and total >= min(qty * 0.25, qty):
         return True, "confirmed_spot_balance"
     if total > 0:

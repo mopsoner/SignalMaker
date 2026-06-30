@@ -5,8 +5,8 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
     def fake_runtime_settings(db=None):
         return {
             "general": {"admin_token": "token"},
-            "executor": {"execution_exchange": "binance", "quote_assets": "USDC"},
-            "binance": {"binance_api_key": "binance-key", "binance_secret_key": "binance-secret"},
+            "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
+            "kraken": {"kraken_api_key": "kraken-key", "kraken_secret_key": "kraken-secret"},
             "kraken": {
                 "kraken_base_url": "https://api.kraken.com",
                 "kraken_api_key": "kraken-key",
@@ -18,7 +18,7 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
 
     payload = runtime_settings.load_admin_settings()
 
-    assert payload["executor"] == {"execution_exchange": "binance", "quote_assets": "USDC"}
+    assert payload["executor"] == {"execution_exchange": "kraken", "quote_assets": "USDC"}
     assert payload["kraken"] == {
         "kraken_exchange_name": "kraken",
         "kraken_base_url": "https://api.kraken.com",
@@ -27,7 +27,7 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
     }
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
-    assert "BINANCE_API_KEY" not in payload["binance"]
+    assert "KRAKEN_API_KEY" not in payload["kraken"]
 
 
 def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
@@ -42,7 +42,7 @@ def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
             return [
                 FakeRow("kraken", "EXECUTION_EXCHANGE", "kraken"),
                 FakeRow("kraken", "KRAKEN_BASE_URL", "https://kraken.test"),
-                FakeRow("binance", "BINANCE_API_KEY", "binance-alias-key"),
+                FakeRow("kraken", "KRAKEN_API_KEY", "kraken-alias-key"),
                 FakeRow("admin/security", "ADMIN_TOKEN", "admin-alias-token"),
             ]
 
@@ -58,11 +58,11 @@ def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
 
     assert payload["executor"]["execution_exchange"] == "kraken"
     assert payload["kraken"]["kraken_base_url"] == "https://kraken.test"
-    assert payload["binance"]["binance_api_key"] == "binance-alias-key"
+    assert payload["kraken"]["kraken_api_key"] == "kraken-alias-key"
     assert payload["general"]["admin_token"] == "admin-alias-token"
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
-    assert "BINANCE_API_KEY" not in payload["binance"]
+    assert "KRAKEN_API_KEY" not in payload["kraken"]
 
 
 def test_normalize_admin_payload_uppercase_kraken_keys():
@@ -111,9 +111,9 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
         return {
             "general": {"app_name": "SignalMaker", "admin_token": "secret"},
             "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
-            "binance": {"binance_rest_base": "https://binance.test", "binance_quote_assets": "USDT"},
+            "kraken": {"kraken_rest_base": "https://kraken.test", "kraken_quote_assets": "USDT"},
             "kraken": {"kraken_base_url": "https://api.kraken.com", "kraken_api_key": "key", "kraken_secret_key": None},
-            "market_data": {"binance_max_symbols": 25},
+            "market_data": {"kraken_max_symbols": 25},
             "strategy": {"planner_min_score": 4},
         }
 
@@ -121,10 +121,10 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
 
     payload = runtime_settings.load_admin_settings()
 
-    assert payload["market_data"]["binance_max_symbols"] == 25
+    assert payload["market_data"]["kraken_max_symbols"] == 25
     assert payload["strategy"]["planner_min_score"] == 4
     assert "admin_token" not in payload["general"]
-    assert "binance_quote_assets" not in payload["binance"]
+    assert "kraken_quote_assets" not in payload["kraken"]
     assert payload["executor"]["quote_assets"] == "USDC"
     assert payload["kraken"]["kraken_api_key"] == "key"
     assert payload["kraken"]["kraken_secret_key"] == ""
