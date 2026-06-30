@@ -117,7 +117,7 @@ cd ~/Desktop/SignalMaker
 SIGNALMAKER_KIOSK_URL=http://127.0.0.1:5000/admin.html ./kiosk.sh
 ```
 
-`kiosk.sh` waits for `http://127.0.0.1:5000/healthz`, then opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
+`tui.sh` and `kiosk.sh` wait for `http://127.0.0.1:5000/healthz` before starting. They use the same startup wait defaults as `run.sh`: at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`). After the API is ready, `kiosk.sh` opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
 
 A systemd kiosk service is provided but is optional and should only be enabled on Raspberry installations with a graphical display, not on headless servers:
 

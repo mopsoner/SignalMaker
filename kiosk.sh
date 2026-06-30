@@ -25,19 +25,33 @@ EOF
   exit 1
 fi
 
-printf 'Waiting for SignalMaker API at %s' "$HEALTH_URL"
+TIMEOUT_SECONDS="${API_STARTUP_TIMEOUT:-300}"
+CHECK_INTERVAL_SECONDS="${API_STARTUP_CHECK_INTERVAL:-30}"
+if [ "$TIMEOUT_SECONDS" -lt 300 ]; then
+  TIMEOUT_SECONDS=300
+fi
+
+echo "Waiting for SignalMaker API at ${HEALTH_URL}"
+echo "Health check timeout: ${TIMEOUT_SECONDS}s; interval: ${CHECK_INTERVAL_SECONDS}s."
 ready=0
-for _ in $(seq 1 60); do
-  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
     ready=1
     break
   fi
-  printf '.'
-  sleep 1
+  remaining=$((deadline - SECONDS))
+  if [ "$remaining" -le 0 ]; then
+    break
+  fi
+  if [ "$remaining" -lt "$CHECK_INTERVAL_SECONDS" ]; then
+    sleep "$remaining"
+  else
+    sleep "$CHECK_INTERVAL_SECONDS"
+  fi
 done
-printf '\n'
 if [ "$ready" != "1" ]; then
-  echo "SignalMaker API did not become ready after 60 seconds: $HEALTH_URL" >&2
+  echo "SignalMaker API did not become ready at ${HEALTH_URL} within ${TIMEOUT_SECONDS}s; kiosk mode will not start." >&2
   exit 1
 fi
 
