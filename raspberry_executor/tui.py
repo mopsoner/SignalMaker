@@ -154,7 +154,7 @@ def main(stdscr) -> None:
             try: cached = (*fetch_screen(current), None)
             except Exception as exc: cached = (MENU[selected][0], [], None, [], str(exc))
             last = time.time()
-        stdscr.erase(); h,w = stdscr.getmaxyx(); add(stdscr,0,0," SignalMaker Raspberry TUI ".ljust(w-1), curses.A_REVERSE|curses.A_BOLD)
+        stdscr.erase(); h,w = stdscr.getmaxyx(); add(stdscr,0,0," SignalMaker Raspberry Executor TUI ".ljust(w-1), curses.A_REVERSE|curses.A_BOLD)
         for i,(label,kind) in enumerate(MENU): add(stdscr,i+2,2,("> " if i==selected else "  ")+label, curses.A_REVERSE if i==selected else 0)
         title, rows, cols, notes, err = cached or ("Loading", [], None, [], None)
         add(stdscr,1,28,title,curses.A_BOLD); y=3

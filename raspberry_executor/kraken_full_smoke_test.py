@@ -14,8 +14,9 @@ from typing import Any, Callable
 import requests
 
 from raspberry_executor.candle_auto_feed import discover_kraken_margin_symbols, discover_kraken_spot_symbols
-from raspberry_executor.candle_push_once import fetch_kraken_ohlc
+from raspberry_executor.candle_push_once import fetch_exchange_klines, fetch_kraken_ohlc
 from raspberry_executor.admin_settings_bridge import apply_admin_settings_to_environ
+from raspberry_executor.candle_backfill_4h import run_once as run_backfill_once
 from raspberry_executor.config import Settings, load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.kraken_client import KrakenClient
@@ -48,6 +49,9 @@ class SmokeResult:
     symbol: str
     quote_assets: list[str]
     credentials_loaded: bool
+    signalmaker_base_url: str = ""
+    device_mode: str = "Device"
+    execution_exchange: str = "kraken"
     credential_sources: dict[str, Any] = field(default_factory=dict)
     checks: list[dict[str, Any]] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
@@ -67,6 +71,9 @@ class SmokeResult:
             "symbol": self.symbol,
             "quote_assets": self.quote_assets,
             "credentials_loaded": self.credentials_loaded,
+            "signalmaker_base_url": self.signalmaker_base_url,
+            "device_mode": self.device_mode,
+            "execution_exchange": self.execution_exchange,
             "credential_sources": self.credential_sources,
             "ok": self.ok,
             "duration_seconds": round(time.time() - self.started_at, 3),
@@ -265,7 +272,7 @@ def _safe_sample(values: list[str], limit: int = 10) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Teste les appels Kraken publics, les adaptateurs SignalMaker, et les appels privés sans placer d'ordre réel par défaut.",
+        description="Teste le device Raspberry Executor Kraken: endpoints Kraken, feed candles vers SignalMaker distant, backfill device, candidats/momentum et méthodes d'ordre dry-run.",
     )
     parser.add_argument(
         "--symbol",
@@ -283,10 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Teste AddOrder avec validate=true sur Kraken. Aucun ordre n'est placé, mais Kraken valide la paire, le volume, le type et les permissions API.",
     )
     parser.add_argument("--order-quote", type=float, default=20.0, help="Montant notionnel utilisé pour calculer un volume de test validate=true.")
-    parser.add_argument("--skip-signalmaker", action="store_true", help="Ignore les appels SignalMaker: candles, momentum et trade candidates.")
-    parser.add_argument("--candle-intervals", default="15m,1h,4h", help="Intervalles de candles à récupérer chez Kraken puis envoyer à SignalMaker.")
+    parser.add_argument("--skip-signalmaker", action="store_true", help="Ignore les appels SignalMaker distant: latest candle, ingestion candles, backfill, momentum et trade candidates.")
+    parser.add_argument("--skip-backfill", action="store_true", help="Ignore le smoke backfill historique 4h Raspberry -> SignalMaker distant.")
+    parser.add_argument("--backfill-days", type=int, default=7, help="Fenêtre historique en jours pour le smoke backfill 4h (1 symbole, 1 chunk).")
+    parser.add_argument("--candle-intervals", default="15m,1h,4h", help="Intervalles de candles à récupérer chez Kraken puis envoyer à SignalMaker distant avec la logique latest_candle/start_time.")
     parser.add_argument("--candle-limit", type=int, default=120, help="Nombre de candles Kraken à récupérer par intervalle pour l'ingestion SignalMaker.")
-    parser.add_argument("--momentum-limit", type=int, default=25, help="Nombre de lignes momentum/candidates à vérifier côté SignalMaker.")
+    parser.add_argument("--momentum-limit", type=int, default=25, help="Nombre de lignes momentum/candidates à vérifier côté SignalMaker distant.")
     return parser
 
 
@@ -315,6 +324,9 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         symbol=symbol,
         quote_assets=quote_assets,
         credentials_loaded=client.is_configured(),
+        signalmaker_base_url=settings.signalmaker_base_url,
+        device_mode="Device",
+        execution_exchange="kraken",
         credential_sources=_credential_sources(settings, admin_bridge, admin_kraken_test, runtime),
     )
 
@@ -341,33 +353,59 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     if getattr(args, "skip_signalmaker", False):
-        result.add("signalmaker_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
+        result.add("signalmaker_device_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
+        result.add("signalmaker_device_backfill_4h", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_trade_candidates", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_market_data_momentum_ranking", False, skipped=True, reason="skip_signalmaker_requested")
     else:
         intervals = [item.strip() for item in str(args.candle_intervals).split(",") if item.strip()]
 
-        def signalmaker_candle_feed() -> dict[str, Any]:
+        def signalmaker_device_candle_feed() -> dict[str, Any]:
             endpoint = signalmaker.check_candle_ingest_endpoint()
             if not endpoint.get("ok"):
                 raise RuntimeError(f"candle_ingest_endpoint_unavailable:{endpoint}")
-            pushed: list[dict[str, Any]] = []
+            rows: list[dict[str, Any]] = []
             for interval in intervals:
                 before_summary = _find_candle_summary(signalmaker.candle_summary(symbol), symbol, interval)
                 before_count = int(before_summary.get("candle_count", 0)) if before_summary else 0
-                candles = fetch_kraken_ohlc(base_url, symbol, interval, args.candle_limit)
-                if not candles:
-                    raise RuntimeError(f"no_kraken_candles:{symbol}:{interval}")
-                ingest = signalmaker.post_candles(symbol, interval, candles, source=f"{settings.gateway_id}-kraken-full-smoke")
-                after_summary = _find_candle_summary(signalmaker.candle_summary(symbol), symbol, interval)
-                latest = signalmaker.latest_candle(symbol, interval)
-                after_count = int(after_summary.get("candle_count", 0)) if after_summary else 0
-                if ingest.get("status") != "ok" or after_summary is None or latest is None or after_count < before_count:
-                    raise RuntimeError(f"candle_ingest_not_visible:{symbol}:{interval}:ingest={ingest}:summary={after_summary}:latest={latest}")
-                pushed.append({"symbol": symbol, "interval": interval, "fetched": len(candles), "upserted": ingest.get("upserted"), "before_count": before_count, "after_count": after_count, "latest_open_time": latest.get("open_time")})
-            return {"endpoint": endpoint, "pushed": pushed}
+                latest_before = signalmaker.latest_candle(symbol, interval)
+                start_time = int(latest_before["close_time"]) + 1 if latest_before and latest_before.get("close_time") is not None else None
+                candles = fetch_exchange_klines("kraken", base_url, symbol, interval, args.candle_limit, start_time=start_time)
+                if latest_before is not None:
+                    candles = [candle for candle in candles if int(candle["open_time"]) > int(latest_before["open_time"])]
+                row: dict[str, Any] = {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "latest_close_time_before": latest_before.get("close_time") if latest_before else None,
+                    "start_time": start_time,
+                    "fetched_missing": len(candles),
+                    "before_count": before_count,
+                }
+                if candles:
+                    ingest = signalmaker.post_candles(symbol, interval, candles, source=f"{settings.gateway_id}-kraken-device-feed-smoke")
+                    after_summary = _find_candle_summary(signalmaker.candle_summary(symbol), symbol, interval)
+                    latest_after = signalmaker.latest_candle(symbol, interval)
+                    after_count = int(after_summary.get("candle_count", 0)) if after_summary else 0
+                    if ingest.get("status") != "ok" or after_summary is None or latest_after is None or after_count < before_count:
+                        raise RuntimeError(f"device_candle_ingest_not_visible:{symbol}:{interval}:ingest={ingest}:summary={after_summary}:latest={latest_after}")
+                    row.update({"action": "posted_missing_candles", "upserted": ingest.get("upserted"), "after_count": after_count, "latest_open_time_after": latest_after.get("open_time")})
+                else:
+                    row.update({"action": "already_up_to_date", "after_count": before_count})
+                rows.append(row)
+            return {"endpoint": endpoint, "flow": "latest_candle -> start_time -> fetch_exchange_klines(kraken) -> post_candles", "rows": rows}
 
-        _run_check(result, "signalmaker_candle_feed", signalmaker_candle_feed)
+        _run_check(result, "signalmaker_device_candle_feed", signalmaker_device_candle_feed)
+
+        if getattr(args, "skip_backfill", False):
+            result.add("signalmaker_device_backfill_4h", False, skipped=True, reason="skip_backfill_requested")
+        else:
+            def signalmaker_device_backfill_4h() -> dict[str, Any]:
+                summary = run_backfill_once(days=args.backfill_days, max_symbols=1, max_chunks_per_symbol=1, enabled_override=True)
+                if summary.get("status") not in {"completed", "blocked"}:
+                    raise RuntimeError(f"unexpected_backfill_status:{summary}")
+                return summary
+
+            _run_check(result, "signalmaker_device_backfill_4h", signalmaker_device_backfill_4h)
 
         def signalmaker_trade_candidates() -> dict[str, Any]:
             first = signalmaker.get_recent_candidates(symbol=symbol, limit=args.momentum_limit)
@@ -445,6 +483,9 @@ def print_human(result: SmokeResult) -> None:
     print("\n=== Kraken full smoke test ===")
     print(f"Base URL: {result.base_url}")
     print(f"Symbol: {result.symbol}")
+    print(f"Remote SignalMaker: {result.signalmaker_base_url}")
+    print(f"Local exchange: {result.execution_exchange}")
+    print(f"Mode: {result.device_mode}")
     print(f"Credentials loaded: {result.credentials_loaded}")
     print("Credential diagnostics:")
     print(json.dumps(result.credential_sources, indent=2, default=str))

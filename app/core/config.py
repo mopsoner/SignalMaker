@@ -29,7 +29,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    app_name: str = Field(default="SignalMaker", alias="APP_NAME")
+    app_name: str = Field(default="SignalMaker Raspberry Executor", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=5000, alias="APP_PORT")
