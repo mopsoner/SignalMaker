@@ -1,0 +1,19 @@
+[Unit]
+Description=SignalMaker Raspberry web kiosk
+After=network-online.target graphical.target signalmaker-api.service
+Wants=network-online.target graphical.target signalmaker-api.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Desktop/SignalMaker
+Environment=APP_PORT=5000
+Environment=SIGNALMAKER_KIOSK_URL=http://127.0.0.1:5000/index.html
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+ExecStart=/bin/bash -lc 'exec /home/pi/Desktop/SignalMaker/kiosk.sh'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

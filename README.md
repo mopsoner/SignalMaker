@@ -98,6 +98,51 @@ Open SignalMaker from another device on the same network using port `5000` only:
 Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
+
+### Raspberry terminal TUI and kiosk
+
+The terminal TUI talks directly to the local FastAPI service on port `5000` by default and does not require npm, Vite, esbuild, or a separate frontend process. Override the API URL only when debugging another host:
+
+```bash
+cd ~/Desktop/SignalMaker
+./tui.sh
+SIGNALMAKER_BASE_URL=http://127.0.0.1:5000 ./tui.sh
+```
+
+Manual full-screen web kiosk mode opens the same single-origin Raspberry website served by FastAPI:
+
+```bash
+cd ~/Desktop/SignalMaker
+./kiosk.sh
+SIGNALMAKER_KIOSK_URL=http://127.0.0.1:5000/admin.html ./kiosk.sh
+```
+
+`kiosk.sh` waits for `http://127.0.0.1:5000/healthz`, then opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
+
+A systemd kiosk service is provided but is optional and should only be enabled on Raspberry installations with a graphical display, not on headless servers:
+
+```bash
+sudo cp systemd/signalmaker-kiosk.service /etc/systemd/system/signalmaker-kiosk.service
+sudo systemctl daemon-reload
+sudo systemctl enable signalmaker-kiosk
+sudo systemctl start signalmaker-kiosk
+```
+
+Disable kiosk autostart with:
+
+```bash
+sudo systemctl disable signalmaker-kiosk
+sudo systemctl stop signalmaker-kiosk
+```
+
+Validate the local API used by both TUI and kiosk with:
+
+```bash
+curl -i http://127.0.0.1:5000/healthz
+curl -i http://127.0.0.1:5000/api/v1/services
+curl -i http://127.0.0.1:5000/api/v1/admin/settings
+```
+
 ### Kraken smoke test
 
 Run the Kraken validation script from the repository root when you want a readable report that you can paste back into an issue or chat:
