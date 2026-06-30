@@ -4,8 +4,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
 DEFAULT_MARGIN_SETTINGS = {
-    "EXECUTION_MODE": "cross",
-    "MARGIN_MODE_ENABLED": "true",
+    "EXECUTION_MODE": "spot",
+    "MARGIN_MODE_ENABLED": "false",
     "MARGIN_ACCOUNT_MODE": "cross",
     "MARGIN_ISOLATED": "false",
     "MARGIN_MAX_MULTIPLIER": "5",
@@ -108,7 +108,7 @@ def write_margin_settings(values: dict[str, str]) -> None:
 
 
 def execution_mode() -> str:
-    return read_margin_settings().get("EXECUTION_MODE", "cross")
+    return read_margin_settings().get("EXECUTION_MODE", "spot")
 
 
 def margin_enabled() -> bool:

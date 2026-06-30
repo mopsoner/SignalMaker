@@ -107,6 +107,9 @@ class KrakenClient:
     def account(self) -> dict:
         return self._signed("POST", "/0/private/Balance")
 
+    def open_positions(self) -> dict:
+        return self._signed("POST", "/0/private/OpenPositions", {"docalcs": True})
+
     def free_balance(self, asset: str) -> float:
         if self.dry_run:
             return 0.0
