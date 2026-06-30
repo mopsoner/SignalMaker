@@ -8,14 +8,6 @@ from app.services.position_service import PositionService
 router = APIRouter()
 
 
-@router.get("/summary")
-def positions_summary(
-    status: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> dict:
-    return PositionService(db).pnl_summary(status=status)
-
-
 @router.get("", response_model=list[PositionRead])
 def list_positions(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -23,18 +15,3 @@ def list_positions(
     db: Session = Depends(get_db),
 ) -> list[PositionRead]:
     return PositionService(db).list_positions(limit=limit, status=status)
-
-
-@router.delete("")
-def clear_positions(
-    status: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> dict:
-    deleted = PositionService(db).clear_positions(status=status)
-    return {"deleted": deleted, "status": status or "all"}
-
-
-@router.delete("/open")
-def clear_open_positions(db: Session = Depends(get_db)) -> dict:
-    deleted = PositionService(db).clear_positions(status="open")
-    return {"deleted": deleted, "status": "open"}

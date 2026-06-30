@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.trade_candidate import TradeCandidate
@@ -10,40 +10,66 @@ class TradeCandidateService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_candidates(self, limit: int = 100, status: str | None = None) -> list[TradeCandidate]:
+    def list_candidates(
+        self,
+        limit: int = 100,
+        status: str | None = None,
+        stage: str | None = None,
+        exclude_test_data: bool = False,
+    ) -> list[TradeCandidate]:
         stmt = select(TradeCandidate)
         if status:
             stmt = stmt.where(TradeCandidate.status == status)
-        stmt = stmt.order_by(TradeCandidate.created_at.desc(), TradeCandidate.score.desc()).limit(limit)
-        return list(self.db.scalars(stmt).all())
+        if stage:
+            stmt = stmt.where(TradeCandidate.stage == stage)
+        stmt = stmt.order_by(TradeCandidate.score.desc(), TradeCandidate.created_at.desc())
+        rows = list(self.db.scalars(stmt.limit(limit * 3 if exclude_test_data else limit)).all())
+        if exclude_test_data:
+            rows = [row for row in rows if not self._is_test_candidate(row)]
+        return rows[:limit]
 
-    def clear_candidates(self, status: str | None = None) -> int:
-        stmt = delete(TradeCandidate)
-        if status:
-            stmt = stmt.where(TradeCandidate.status == status)
-        result = self.db.execute(stmt)
-        self.db.commit()
-        return int(result.rowcount or 0)
+    def _is_test_candidate(self, row: TradeCandidate) -> bool:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        execution_target = row.execution_target if isinstance(row.execution_target, dict) else {}
+        sources = {str(payload.get("source") or "").lower(), str(execution_target.get("source") or "").lower()}
+        return (
+            bool(payload.get("dry_run") or execution_target.get("dry_run"))
+            or "smoke_test" in sources
+            or str(payload.get("test_run_id") or execution_target.get("test_run_id") or "") != ""
+        )
 
     def get_open_candidates(self, limit: int = 100) -> list[TradeCandidate]:
-        # Executor backlog mode: play older unexecuted candidates first instead
-        # of always preferring the newest pipeline refresh. This prevents valid
-        # open candidates from being starved when the executor limit is reached.
+        # Raspberry executor backlog mode: play older unexecuted candidates first.
+        # This prevents freshly-updated local candidates from starving previous high
+        # score candidates when balance or executor limit is temporarily tight.
         stmt = select(TradeCandidate).where(TradeCandidate.status == "open").order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
-    def upsert_open_candidate(self, *, symbol: str, side: str, stage: str, score: float, entry_price: float | None, stop_price: float | None, target_price: float | None, rr_ratio: float | None, execution_target: dict | None, liquidity_context: dict | None, notes: str | None, payload: dict | None) -> TradeCandidate:
-        candidate_id = f"{symbol.upper()}-open"
-        now = datetime.now(timezone.utc)
+    def upsert_open_candidate(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        stage: str,
+        score: float,
+        entry_price: float | None,
+        stop_price: float | None,
+        target_price: float | None,
+        rr_ratio: float | None,
+        execution_target: dict | None,
+        liquidity_context: dict | None,
+        notes: str | None,
+        payload: dict | None,
+        candidate_id: str | None = None,
+    ) -> TradeCandidate:
+        candidate_id = candidate_id or f"{symbol.upper()}-{stage}"
         row = self.db.get(TradeCandidate, candidate_id)
+        if row is not None and row.status == "executed":
+            return row
         if row is None:
-            row = TradeCandidate(candidate_id=candidate_id, symbol=symbol.upper(), created_at=now)
+            row = TradeCandidate(candidate_id=candidate_id, symbol=symbol.upper(), created_at=datetime.now(timezone.utc))
             self.db.add(row)
-        else:
-            # Existing open rows are refreshed by every pipeline pass. Keep the
-            # page focused on the latest live candidates instead of the first time
-            # a symbol ever became a candidate.
-            row.created_at = now
+        row.symbol = symbol.upper()
         row.side = side
         row.stage = stage
         row.status = "open"

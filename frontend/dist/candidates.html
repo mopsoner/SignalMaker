@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker - Candidats momentum</title>
+    <meta name="description" content="Candidats momentum SignalMaker en HTML léger">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Candidats momentum</h1>
+      <p>Page HTML statique légère pour consulter le classement momentum.</p>
+      <nav>
+        <a href="./index.html">Executor</a>
+        <a href="./candidates.html" aria-current="page">Trade Candidates</a>
+        <a href="./momentum-candidates.html">Momentum</a>
+        <a href="./positions.html">Positions</a>
+        <a href="./orders.html">Orders/Fills</a>
+        <a href="./settings.html">Settings</a>
+        <a href="./admin.html">Admin</a>
+        <a href="./logs.html">Logs</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Candidats momentum</h2>
+        <div id="candidates-content" class="muted">Chargement...</div>
+        <button data-action="refresh">Rafraîchir</button>
+      </section>
+    </main>
+
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

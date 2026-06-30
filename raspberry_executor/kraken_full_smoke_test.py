@@ -292,6 +292,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_smoke(args: argparse.Namespace) -> SmokeResult:
     ensure_env()
+    args.candle_intervals = getattr(args, "candle_intervals", "15m,1h,4h")
+    args.candle_limit = getattr(args, "candle_limit", 3)
+    args.momentum_limit = getattr(args, "momentum_limit", 25)
+    args.skip_private = getattr(args, "skip_private", False)
+    args.validate_order = getattr(args, "validate_order", False)
     file_settings = load_settings()
     runtime = _runtime_settings_payload()
     admin_bridge = apply_admin_settings_to_environ(file_settings.signalmaker_base_url)
@@ -335,7 +340,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     _run_check(result, "discover_margin_symbols", lambda: {"count": len(discover_kraken_margin_symbols(base_url, quote_assets, limit=25)), "sample": _safe_sample(discover_kraken_margin_symbols(base_url, quote_assets, limit=25))})
 
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    if args.skip_signalmaker:
+    if getattr(args, "skip_signalmaker", False):
         result.add("signalmaker_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_trade_candidates", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_market_data_momentum_ranking", False, skipped=True, reason="skip_signalmaker_requested")

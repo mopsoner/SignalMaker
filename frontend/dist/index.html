@@ -1,14 +1,47 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SignalMaker</title>
-    <meta name="description" content="SignalMaker live trading dashboard" />
-    <script type="module" crossorigin src="/assets/index-S4NYGWDT.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DqihsCvf.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker - Status</title>
+    <meta name="description" content="SignalMaker status léger HTML/JS">
+    <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div id="root"></div>
+    <header>
+      <h1>SignalMaker</h1>
+      <p>Interface légère pour Raspberry Pi ancien (pages HTML, CSS et JS sans build Node/Vite).</p>
+      <nav>
+        <a href="./index.html" aria-current="page">Executor</a>
+        <a href="./candidates.html">Trade Candidates</a>
+        <a href="./momentum-candidates.html">Momentum</a>
+        <a href="./positions.html">Positions</a>
+        <a href="./orders.html">Orders/Fills</a>
+        <a href="./settings.html">Settings</a>
+        <a href="./admin.html">Admin</a>
+        <a href="./logs.html">Logs</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Status API</h2>
+        <p id="health" class="muted">Chargement...</p>
+        <button data-action="refresh">Rafraîchir</button>
+      </section>
+
+      <section class="card">
+        <h2>Résumé</h2>
+        <p>Cette version garde le front volontairement simple : des fichiers HTML statiques servis directement au Raspberry.</p>
+        <ul>
+          <li>Pas de React.</li>
+          <li>Pas de Vite/esbuild.</li>
+          <li>Pas de build npm obligatoire sur le Raspberry.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
   </body>
 </html>

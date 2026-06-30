@@ -1,8 +1,10 @@
 import time
 
-from raspberry_executor.binance_client import BinanceClient
+from typing import Any
+
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
+from raspberry_executor.exchange_factory import create_spot_exchange
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
@@ -30,12 +32,12 @@ def _quantity_from_quote(price: float, quote_amount: float) -> float:
     return round(float(quote_amount) / float(price), 6)
 
 
-def report_final_events(binance: BinanceClient, state: StateStore) -> None:
+def report_final_events(exchange: Any, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         symbol = position["execution_symbol"]
         tp_order_id = position.get("tp_order_id")
         try:
-            tp_status = binance.get_order(symbol, tp_order_id) if tp_order_id else None
+            tp_status = exchange.get_order(symbol, tp_order_id) if tp_order_id else None
         except Exception as exc:
             logger.warning("order status failed candidate=%s error=%s", candidate_id, exc)
             continue
@@ -45,7 +47,7 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
             logger.info("local position closed candidate=%s reason=take_profit_filled", candidate_id)
 
 
-def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
+def execute_candidate(settings, exchange: Any, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
     candidate_id = candidate["candidate_id"]
     accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
     if not accepted:
@@ -54,18 +56,25 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
 
     execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
-    current_price = binance.current_price(execution_symbol)
+    current_price = exchange.current_price(execution_symbol)
     quantity = _quantity_from_quote(current_price, settings.order_quote_amount)
 
     try:
         logger.info("execute candidate=%s symbol=%s side=%s amount=%s qty=%s", candidate_id, execution_symbol, side, settings.order_quote_amount, quantity)
-        entry = binance.place_market_entry(execution_symbol, side, quantity)
-        entry_price = BinanceClient.average_fill_price(entry, fallback=current_price)
+        entry = exchange.place_market_entry(execution_symbol, side, quantity)
+        if hasattr(exchange, "average_fill_price"):
+            entry_price = exchange.average_fill_price(entry, fallback=current_price)
+        else:
+            fills = entry.get("fills") or []
+            entry_price = float(fills[0].get("price")) if fills else current_price
         if entry_price is None:
             raise RuntimeError("Unable to determine entry fill price")
         executed_qty = _executed_qty(entry, quantity)
 
-        tp = binance.place_exit_limit(execution_symbol, side, executed_qty, float(candidate["target_price"]))
+        tp = exchange.place_exit_limit(execution_symbol, side, executed_qty, float(candidate["target_price"]))
+        stop = None
+        if candidate.get("stop_price") is not None:
+            stop = exchange.place_stop_loss(execution_symbol, side, executed_qty, float(candidate["stop_price"]))
 
         state.mark_executed(candidate_id)
         state.add_open_position(candidate_id, {
@@ -83,6 +92,9 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
             "candidate": candidate,
             "entry_payload": entry,
             "tp_payload": tp or {},
+            "stop_order_id": _order_id(stop) if stop else None,
+            "stop_payload": stop or {},
+            "exchange": getattr(exchange, "exchange_name", getattr(settings, "exchange", "binance")),
         })
         logger.info("local position opened candidate=%s symbol=%s qty=%s", candidate_id, execution_symbol, executed_qty)
     except Exception as exc:
@@ -93,7 +105,7 @@ def execute_candidate(settings, binance: BinanceClient, state: StateStore, guard
 def main() -> None:
     settings = load_settings()
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
+    exchange, _rules = create_spot_exchange(settings)
     state = StateStore()
     guard = RiskGuard(settings.allowed_symbols, settings.max_candidate_age_seconds)
 
@@ -108,8 +120,8 @@ def main() -> None:
             candidates = signalmaker.get_open_candidates(limit=10)
             logger.info("candidates fetched count=%s", len(candidates))
             for candidate in candidates:
-                execute_candidate(settings, binance, state, guard, candidate)
-            report_final_events(binance, state)
+                execute_candidate(settings, exchange, state, guard, candidate)
+            report_final_events(exchange, state)
         except Exception:
             logger.exception("main loop error")
         time.sleep(settings.poll_seconds)

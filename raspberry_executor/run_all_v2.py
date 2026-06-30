@@ -36,7 +36,7 @@ def main() -> None:
         logger.info("settings bootstrap startup=%s", settings_summary)
     except Exception as exc:
         logger.error("settings bootstrap startup error=%s", str(exc))
-    load_settings()
+    settings = load_settings()
     host = os.getenv("WEB_HOST", "0.0.0.0")
     port = int(os.getenv("WEB_PORT", "8090"))
 
@@ -54,6 +54,7 @@ def main() -> None:
 
     threading.Thread(target=candle_backfill_4h_loop, daemon=True).start()
     logger.info("optional 4h backfill thread started")
+
 
     threading.Thread(target=momentum_decision_loop, daemon=True).start()
     logger.info("momentum decision thread started")
