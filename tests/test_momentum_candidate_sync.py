@@ -32,7 +32,7 @@ class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
         self.status_code = status_code
-        self.url = "https://central.test/api/v1/momentum/ranking"
+        self.url = "https://central.test/api/v1/momentum"
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -83,7 +83,7 @@ def test_sync_uses_existing_signalmaker_base_url_setting(db_session, monkeypatch
 
     MomentumCandidateSyncService(db_session).sync()
 
-    assert calls[0]["url"] == "https://central.local/api/v1/momentum/ranking"
+    assert calls[0]["url"] == "https://central.local/api/v1/momentum"
 
 
 def test_sync_momentum_candidates_success(db_session, monkeypatch):

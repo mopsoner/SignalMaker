@@ -195,7 +195,7 @@ class SignalMakerClient:
 
     def list_momentum(self, limit: int = 50) -> list[dict]:
         response = self.session.get(
-            self._url("/api/v1/momentum/ranking"),
+            self._url("/api/v1/momentum"),
             params={"limit": limit},
             timeout=30,
             headers={"accept": "application/json", "cache-control": "no-cache"},

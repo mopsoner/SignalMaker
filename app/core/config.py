@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     momentum_candidates_min_rr: float | None = Field(default=None, alias="MOMENTUM_CANDIDATES_MIN_RR")
     momentum_candidates_require_wyckoff_context: bool = Field(default=True, alias="MOMENTUM_CANDIDATES_REQUIRE_WYCKOFF_CONTEXT")
     momentum_candidates_http_timeout_sec: float = Field(default=20.0, alias="MOMENTUM_CANDIDATES_HTTP_TIMEOUT_SEC")
-    momentum_candidates_source_path: str = Field(default="/api/v1/momentum/ranking", alias="MOMENTUM_CANDIDATES_SOURCE_PATH")
+    momentum_candidates_source_path: str = Field(default="/api/v1/momentum", alias="MOMENTUM_CANDIDATES_SOURCE_PATH")
     momentum_candidates_target_pct: float = Field(default=3.0, alias="MOMENTUM_CANDIDATES_TARGET_PCT")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")

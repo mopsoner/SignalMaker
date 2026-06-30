@@ -106,7 +106,7 @@ class MomentumCandidateSyncService:
 
     def _url(self, momentum_config: dict[str, Any]) -> str:
         base_url = str(momentum_config.get("signalmaker_base_url") or settings.signalmaker_base_url)
-        path = str(momentum_config.get("momentum_candidates_source_path") or settings.momentum_candidates_source_path or "/api/v1/momentum/ranking")
+        path = str(momentum_config.get("momentum_candidates_source_path") or settings.momentum_candidates_source_path or "/api/v1/momentum")
         if not path.startswith("/"):
             path = "/" + path
         base = base_url.rstrip("/")

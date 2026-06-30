@@ -19,7 +19,7 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-momentum-decision")
 
 DEFAULT_DECISION_PATH = ""
-DEFAULT_CANDIDATES_PATH = "/api/v1/momentum/ranking"
+DEFAULT_CANDIDATES_PATH = "/api/v1/momentum"
 DECISION_RANKINGS_SOURCE = "momentum_rankings"
 DECISION_ENDPOINT_FALLBACK_SOURCE = "momentum_decision_endpoint_fallback"
 LEGACY_DECISION_PATH = "/api/v1/momentum-engine/decision"
@@ -70,9 +70,10 @@ def _decision_path() -> str:
 
 def _candidates_path() -> str:
     path = _env("MOMENTUM_CANDIDATES_PATH", DEFAULT_CANDIDATES_PATH) or DEFAULT_CANDIDATES_PATH
-    # Keep older Raspberry env files from pointing decision/ranking readers at
-    # the restored business Momentum endpoint.
-    if path.rstrip("/") == "/api/v1/momentum":
+    # Current SignalMaker main exposes the Momentum list directly at
+    # /api/v1/momentum. Keep old Raspberry env files that still name the removed
+    # /ranking child route working by transparently reading the existing route.
+    if path.rstrip("/") == "/api/v1/momentum/ranking":
         return DEFAULT_CANDIDATES_PATH
     return path
 
@@ -102,9 +103,9 @@ def _decision_candidates_fallback_enabled() -> bool:
 def fetch_decision() -> dict[str, Any]:
     """Fetch the actionable momentum decision for the Raspberry executor.
 
-    The current main SignalMaker API exposes diagnostic rankings at /api/v1/momentum/ranking. It
+    The current main SignalMaker API exposes the Momentum list at /api/v1/momentum. It
     does not expose the older experimental /api/v1/momentum-engine/decision
-    route, so the dedicated ranking endpoint is the default source. MOMENTUM_DECISION_PATH remains
+    route, so the existing Momentum endpoint is the default source. MOMENTUM_DECISION_PATH remains
     supported for deployments that explicitly provide a decision endpoint.
     """
     decision_path = _decision_path()
@@ -628,7 +629,7 @@ def _extract_candidate_rows(payload: Any) -> list[dict[str, Any]]:
         if not symbol or symbol in seen:
             continue
         seen.add(symbol)
-        rows.append({**row, "symbol": symbol, "source": row.get("source") or "momentum_rankings_endpoint"})
+        rows.append({**row, "symbol": symbol, "source": row.get("source") or "momentum_endpoint"})
     return rows
 
 
@@ -740,7 +741,7 @@ def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | Non
     """Return the ordered buy candidates embedded in the persisted main decision.
 
     Local fallback for older main deployments. The preferred source is now
-    /api/v1/momentum/ranking, fetched immediately before buying.
+    /api/v1/momentum, fetched immediately before buying.
     """
     exclude = {item.upper() for item in (exclude or set()) if item}
     contract = decision.get("executor_contract") if isinstance(decision.get("executor_contract"), dict) else {}
