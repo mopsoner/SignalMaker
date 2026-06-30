@@ -53,13 +53,50 @@ def signal_fingerprint(symbol: str, side: str, candidate: dict) -> str:
 
 def is_margin_unavailable(text: str) -> bool:
     low = str(text or "").lower()
-    return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account does not exist", "invalid symbol", "-1121", "-11001", "-3028"])
+    return any(x in low for x in ["not support", "not supported", "not exist", "does not exist", "margin account does not exist", "invalid symbol", "margin unavailable", "margin is unavailable", "-1121", "-11001", "-3028"])
+
+
+def is_leverage_unavailable(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in ["leverage", "borrow is unavailable", "borrowing is unavailable", "borrow unavailable", "max borrowable", "-3006", "-3015", "-3045"])
+
+
+def is_margin_token_collateral_limit(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in ["-3087", "platform max pledged collateral amount", "max transfer in quantity is 0", "reaches platform max pledged collateral", "token collateral limit", "collateral limit"])
 
 
 def is_insufficient_balance(text: str) -> bool:
     low = str(text or "").lower()
     return any(x in low for x in ["insufficient balance", "insufficient account balance", "balance was too low", "available balance was too low", "margin_insufficient_quote_balance", "margin_long_no_quote_available", "-2010", "-2019"])
 
+
+
+
+def _quote_asset(rules: Any, symbol: str) -> str | None:
+    try:
+        info = rules.symbol_info(symbol) if rules is not None else {}
+        return str(info.get("quoteAsset") or info.get("quote") or "").upper() or None
+    except Exception:
+        return None
+
+
+def _spot_quote_balance_available(exchange: Any, rules: Any, symbol: str, quote_amount: float) -> bool:
+    if getattr(exchange, "dry_run", False):
+        return True
+    quote_asset = _quote_asset(rules, symbol)
+    if not quote_asset or not hasattr(exchange, "free_balance"):
+        return False
+    try:
+        return float(exchange.free_balance(quote_asset)) >= float(quote_amount)
+    except Exception:
+        return False
+
+
+def _recoverable_margin_error(text: str, *, spot_quote_available: bool) -> bool:
+    if is_margin_unavailable(text) or is_leverage_unavailable(text) or is_margin_token_collateral_limit(text):
+        return True
+    return is_insufficient_balance(text) and spot_quote_available
 
 def _ensure_candidate_visible(candidate: dict) -> None:
     try:
@@ -178,9 +215,15 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
             return "opened"
         except Exception as exc:
             margin_error = str(exc)
-            state.add_event(normalized.candidate_id, "margin_fallback_to_spot", {"error": margin_error, "symbol": normalized.symbol, "candidate": candidate})
-            if not (is_margin_unavailable(margin_error) or is_insufficient_balance(margin_error) or margin_error):
-                logger.warning("margin rejected, falling back to spot candidate=%s error=%s", normalized.candidate_id, margin_error)
+            spot_quote_available = _spot_quote_balance_available(exchange, rules, normalized.symbol, float(settings.order_quote_amount))
+            recoverable = _recoverable_margin_error(margin_error, spot_quote_available=spot_quote_available)
+            state.add_event(normalized.candidate_id, "candidate_margin_attempt_failed", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "recoverable": recoverable, "spot_quote_available": spot_quote_available, "candidate": candidate})
+            if not recoverable:
+                state.add_event(normalized.candidate_id, "execution_error", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
+                logger.exception("classic margin execution failed with blocking error candidate=%s", normalized.candidate_id)
+                return "error"
+            state.add_event(normalized.candidate_id, "candidate_margin_fallback_spot", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "spot_quote_available": spot_quote_available, "candidate": candidate})
+            logger.warning("recoverable margin error, falling back to spot candidate=%s error=%s", normalized.candidate_id, margin_error)
 
     try:
         result = _open_spot_long(spot_manager, exchange, normalized.symbol, float(settings.order_quote_amount), normalized.target_price)
@@ -188,6 +231,9 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
         logger.info("classic candidate opened on spot candidate=%s symbol=%s qty=%s tp=%s margin_error=%s", normalized.candidate_id, normalized.symbol, result.get("quantity"), result.get("tp_order_id"), margin_error)
         return "opened_spot_fallback" if margin_error else "opened"
     except Exception as exc:
-        state.add_event(normalized.candidate_id, "execution_error", {"error": str(exc), "margin_error": margin_error, "candidate": candidate})
+        event_type = "candidate_spot_fallback_failed" if margin_error else "execution_error"
+        state.add_event(normalized.candidate_id, event_type, {"error": str(exc), "margin_error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
+        if margin_error:
+            state.add_event(normalized.candidate_id, "execution_error", {"error": str(exc), "margin_error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
         logger.exception("classic execution failed candidate=%s", normalized.candidate_id)
         return "error"
