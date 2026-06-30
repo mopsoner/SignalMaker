@@ -69,10 +69,10 @@ class MarginOrderManager:
 
     @staticmethod
     def _executed_qty(payload: dict, fallback: str | None = None) -> str:
+        raw = payload.get("executedQty")
         try:
-            value = float(payload.get("executedQty") or 0)
-            if value > 0:
-                return str(value)
+            if float(raw or 0) > 0:
+                return str(raw)
         except Exception:
             pass
         return str(fallback or "0")
@@ -125,6 +125,14 @@ class MarginOrderManager:
                 "entry_price": self._avg_price_from_order(payload, fallback_price),
                 "executed_qty": self._executed_qty(payload, submitted_payload.get("quantity")),
             }
+        if str(submitted_payload.get("status") or "").upper() == "FILLED" and float(submitted_payload.get("executedQty") or 0) > 0:
+            return {
+                "entry_confirmed": True,
+                "entry_confirm_status": "FILLED",
+                "entry_confirm_payload": submitted_payload,
+                "entry_price": self._avg_price_from_order(submitted_payload, fallback_price),
+                "executed_qty": self._executed_qty(submitted_payload, submitted_payload.get("quantity")),
+            }
 
         deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
         last_payload = submitted_payload
@@ -156,7 +164,14 @@ class MarginOrderManager:
         return self.confirm_margin_order(symbol=symbol, order_id=entry_order_id, submitted_payload=submitted_payload, fallback_price=fallback_price, expected_side="BUY")
 
     def quote_asset(self, symbol: str) -> str:
-        return str(self.rules.symbol_info(symbol).get("quoteAsset") or "").upper()
+        try:
+            return str(self.rules.symbol_info(symbol).get("quoteAsset") or "").upper()
+        except AttributeError:
+            upper = symbol.upper()
+            for quote in ("USDC", "USDT", "USD", "EUR", "BTC", "ETH"):
+                if upper.endswith(quote):
+                    return quote
+            return ""
 
     def _available_margin_quote(self, symbol: str, quote: str) -> float | None:
         if self.margin.dry_run:
@@ -197,6 +212,46 @@ class MarginOrderManager:
         return {"symbol": symbol, "quantity": exit_qty, "oco_order_list_id": oco.get("orderListId"), "tp_order_id": tp_order_id, "sl_order_id": sl_order_id, "oco_payload": oco}
 
 
+
+    def place_margin_market_entry(self, *, symbol: str, quote_amount: float, min_notional: float | None = None, leverage: float | str | None = None, clamp_to_available: bool = True) -> dict:
+        """Open a leveraged long margin entry with a BUY MARKET order.
+
+        Kraken Spot margin borrows implicitly from the AddOrder `leverage`
+        field, so this primitive intentionally does not call borrow/repay.
+        """
+        symbol = symbol.upper()
+        self.margin.ensure_isolated_account(symbol)
+        quote = self.quote_asset(symbol)
+        effective_leverage = str(leverage if leverage is not None else (self.margin.leverage() if hasattr(self.margin, "leverage") else margin_multiplier()))
+        requested_own_quote = float(quote_amount)
+        if clamp_to_available:
+            own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
+        else:
+            own_quote = max(0.0, requested_own_quote)
+            balance_guard = {"requested_quote_amount": requested_own_quote, "adjusted_quote_amount": own_quote, "quote_balance_guard": "not_checked", "quote_balance_source": "caller"}
+        if min_notional is not None and own_quote < float(min_notional):
+            raise RuntimeError(f"margin_entry_notional_below_minimum symbol={symbol} quote={quote} usable={own_quote} minimum={float(min_notional)} balance_guard={balance_guard}")
+        try:
+            leverage_float = max(1.0, float(effective_leverage))
+        except Exception:
+            leverage_float = max(1.0, float(margin_multiplier()))
+        leverage_notional = max(0.0, own_quote * max(0.0, leverage_float - 1.0))
+        total_quote = own_quote + leverage_notional
+        if total_quote <= 0:
+            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} balance_guard={balance_guard}")
+
+        current_price = self.kraken.current_price(symbol)
+        quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
+        entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
+        entry_order_id = self._order_id(entry)
+        confirm = self.confirm_margin_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
+        entry_price = float(confirm["entry_price"])
+        executed_qty = confirm["executed_qty"]
+        implicit_leverage_payload = {"status": "implicit_margin", "exchange": entry.get("exchange"), "symbol": symbol, "quote_asset": quote, "leverage": effective_leverage, "leverage_notional": leverage_notional}
+        return {"symbol": symbol, "side": "long", "mode": "cross_margin" if not self.margin.isolated else "margin", "margin_isolated": self.margin.isolated, "margin_multiplier": leverage_float, "leverage": effective_leverage, "quote_asset": quote, "own_quote_amount": own_quote, "requested_own_quote_amount": requested_own_quote, "quote_balance_guard": balance_guard, "leverage_notional": leverage_notional, "implicit_margin": True, "implicit_leverage_payload": implicit_leverage_payload, "total_quote_amount": total_quote, "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "transfer_payload": {}, "borrow_payload": implicit_leverage_payload, "borrow_quote_amount": leverage_notional, "borrow_error": None, "entry_payload": entry}
+
+    open_leveraged_market_entry = place_margin_market_entry
+
     def create_margin_take_profit_sell(self, *, symbol: str, quantity: float | str, target_price: float) -> dict:
         symbol = symbol.upper()
         current_price = self.kraken.current_price(symbol)
@@ -209,43 +264,9 @@ class MarginOrderManager:
         return {"symbol": symbol, "quantity": exit_qty, "tp_order_id": self._order_id(order), "tp_payload": order, "exit_strategy": "take_profit_only"}
 
     def open_long_with_margin_take_profit(self, *, symbol: str, quote_amount: float, target_price: float) -> dict:
-        symbol = symbol.upper()
-        self.margin.ensure_isolated_account(symbol)
-        quote = self.quote_asset(symbol)
-        multiplier = margin_multiplier()
-        requested_own_quote = float(quote_amount)
-        own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
-
-        wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
-        borrow_quote = 0.0
-        transfer_payload = None
-        borrow_payload = {}
-        borrow_error = None
-        if wanted_borrow_quote > 0:
-            try:
-                max_borrow = self.margin.max_borrowable(symbol, quote)
-                borrow_quote = min(wanted_borrow_quote, max_borrow) if max_borrow > 0 else wanted_borrow_quote
-                if borrow_quote > 0:
-                    borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
-            except Exception as exc:
-                borrow_quote = 0.0
-                borrow_error = str(exc)
-                borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
-
-        total_quote = own_quote + borrow_quote
-        if total_quote <= 0:
-            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
-
-        current_price = self.kraken.current_price(symbol)
-        quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
-        entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
-        entry_order_id = self._order_id(entry)
-        confirm = self.confirm_margin_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
-        entry_price = float(confirm["entry_price"])
-        executed_qty = confirm["executed_qty"]
-
-        result = {"symbol": symbol, "side": "long", "mode": "margin", "margin_isolated": self.margin.isolated, "margin_multiplier": multiplier, "quote_asset": quote, "own_quote_amount": own_quote, "requested_own_quote_amount": requested_own_quote, "quote_balance_guard": balance_guard, "wanted_borrow_quote_amount": wanted_borrow_quote, "borrow_quote_amount": borrow_quote, "borrow_error": borrow_error, "total_quote_amount": total_quote, "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "transfer_payload": transfer_payload or {}, "borrow_payload": borrow_payload or {}, "entry_payload": entry, "exit_strategy": "take_profit_only"}
-
+        result = self.place_margin_market_entry(symbol=symbol, quote_amount=quote_amount)
+        result["exit_strategy"] = "take_profit_only"
+        executed_qty = result["quantity"]
         try:
             tp_result = self.create_margin_take_profit_sell(symbol=symbol, quantity=executed_qty, target_price=target_price)
             result.update({"quantity": tp_result["quantity"], "oco_order_list_id": None, "tp_order_id": tp_result.get("tp_order_id"), "sl_order_id": None, "tp_payload": tp_result.get("tp_payload") or {}})
@@ -254,49 +275,8 @@ class MarginOrderManager:
         return result
 
     def open_long_with_margin_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
-        symbol = symbol.upper()
-        self.margin.ensure_isolated_account(symbol)
-        quote = self.quote_asset(symbol)
-        multiplier = margin_multiplier()
-        requested_own_quote = float(quote_amount)
-        balance_guard = {"requested_quote_amount": requested_own_quote, "quote_balance_guard": "not_applicable"}
-        if not self.margin.isolated or not margin_transfer_spot_balance():
-            own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
-        else:
-            own_quote = max(0.0, requested_own_quote)
-
-        wanted_borrow_quote = max(0.0, own_quote * max(0.0, multiplier - 1.0))
-        borrow_quote = 0.0
-        transfer_payload = None
-        borrow_payload = {}
-        borrow_error = None
-        if self.margin.isolated and margin_transfer_spot_balance() and own_quote > 0:
-            transfer_payload = self.margin.transfer_spot_to_margin(symbol, quote, amount_str(own_quote))
-        if wanted_borrow_quote > 0:
-            try:
-                max_borrow = self.margin.max_borrowable(symbol, quote)
-                borrow_quote = min(wanted_borrow_quote, max_borrow) if max_borrow > 0 else wanted_borrow_quote
-                if borrow_quote > 0:
-                    borrow_payload = self.margin.borrow(symbol, quote, amount_str(borrow_quote))
-            except Exception as exc:
-                borrow_quote = 0.0
-                borrow_error = str(exc)
-                borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
-
-        total_quote = own_quote + borrow_quote
-        if total_quote <= 0:
-            raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
-
-        current_price = self.kraken.current_price(symbol)
-        quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
-        entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
-        entry_order_id = self._order_id(entry)
-        confirm = self.confirm_margin_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
-        entry_price = float(confirm["entry_price"])
-        executed_qty = confirm["executed_qty"]
-
-        result = {"symbol": symbol, "side": "long", "mode": "margin", "margin_isolated": self.margin.isolated, "margin_multiplier": multiplier, "quote_asset": quote, "own_quote_amount": own_quote, "requested_own_quote_amount": requested_own_quote, "quote_balance_guard": balance_guard, "wanted_borrow_quote_amount": wanted_borrow_quote, "borrow_quote_amount": borrow_quote, "borrow_error": borrow_error, "total_quote_amount": total_quote, "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "transfer_payload": transfer_payload or {}, "borrow_payload": borrow_payload or {}, "entry_payload": entry}
-
+        result = self.place_margin_market_entry(symbol=symbol, quote_amount=quote_amount)
+        executed_qty = result["quantity"]
         try:
             oco_result = self.create_margin_oco_sell(symbol=symbol, quantity=executed_qty, target_price=target_price, stop_price=stop_price)
             result.update({"quantity": oco_result["quantity"], "oco_order_list_id": oco_result.get("oco_order_list_id"), "tp_order_id": oco_result.get("tp_order_id"), "sl_order_id": oco_result.get("sl_order_id"), "oco_payload": oco_result.get("oco_payload") or {}})
