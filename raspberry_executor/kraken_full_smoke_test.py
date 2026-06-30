@@ -290,6 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Teste AddOrder avec validate=true sur Kraken. Aucun ordre n'est placé, mais Kraken valide la paire, le volume, le type et les permissions API.",
     )
     parser.add_argument("--order-quote", type=float, default=20.0, help="Montant notionnel utilisé pour calculer un volume de test validate=true.")
+    parser.add_argument("--live-order-test", action="store_true", help="Place un petit ordre limite réel non agressif puis l'annule immédiatement. Requiert aussi KRAKEN_SMOKE_LIVE_ORDER=YES.")
+    parser.add_argument("--live-order-quote", type=float, default=10.0, help="Montant notionnel maximal pour le test live contrôlé.")
     parser.add_argument("--skip-signalmaker", action="store_true", help="Ignore les appels SignalMaker distant: latest candle, ingestion candles, backfill, momentum et trade candidates.")
     parser.add_argument("--skip-backfill", action="store_true", help="Ignore le smoke backfill historique 4h Raspberry -> SignalMaker distant.")
     parser.add_argument("--backfill-days", type=int, default=7, help="Fenêtre historique en jours pour le smoke backfill 4h (1 symbole, 1 chunk).")
@@ -306,6 +308,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     args.momentum_limit = getattr(args, "momentum_limit", 25)
     args.skip_private = getattr(args, "skip_private", False)
     args.validate_order = getattr(args, "validate_order", False)
+    args.live_order_test = getattr(args, "live_order_test", False)
+    args.live_order_quote = getattr(args, "live_order_quote", 10.0)
     file_settings = load_settings()
     runtime = _runtime_settings_payload()
     admin_bridge = apply_admin_settings_to_environ(file_settings.signalmaker_base_url)
@@ -451,7 +455,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         tp = client.place_exit_limit(symbol, "long", qty, rules.normalize_exit_price(symbol, price * 1.02))
         sl = client.place_stop_loss(symbol, "long", qty, rules.normalize_exit_price(symbol, price * 0.98))
         queried = client.get_order(symbol, entry["orderId"])
-        return {"quantity": qty, "entry": entry, "take_profit": tp, "stop_loss": sl, "queried_order": queried, "open_orders": client.open_orders(symbol)}
+        canceled = client.cancel_order(symbol, tp["orderId"]) if hasattr(client, "cancel_order") else {"orderId": tp["orderId"], "status": "CANCELED", "dry_run": True}
+        return {"quantity": qty, "entry": entry, "take_profit": tp, "stop_loss": sl, "queried_order": queried, "open_orders": client.open_orders(symbol), "canceled_order": canceled}
 
     _run_check(result, "spot_order_methods_dry_run", dry_run_orders)
 
@@ -459,28 +464,45 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         price = client.current_price(symbol)
         qty = rules.quantity_from_quote(symbol, args.order_quote, price, market=True)
         target = rules.normalize_exit_price(symbol, price * 1.02)
+        stop = rules.normalize_exit_price(symbol, price * 0.98)
+        quote_asset = rules.symbol_info(symbol).get("quoteAsset", "USD")
+        margin_x5 = KrakenMarginClient(client, isolated=False, dry_run=True, leverage=5)
+        margin_x3 = KrakenMarginClient(client, isolated=False, dry_run=True, leverage=3)
+        entry_x5 = margin_x5.margin_order(symbol, "BUY", qty, "MARKET")
+        tp_x5 = margin_x5.margin_order(symbol, "SELL", qty, "LIMIT", price=target)
+        sl_x5 = margin_x5.margin_order(symbol, "SELL", qty, "STOP_LOSS", price=stop)
+        reduce_only_close = margin_x5.margin_order(symbol, "SELL", qty, "MARKET")
+        fallback_spot = client.place_market_entry(symbol, "long", qty)
         return {
-            "ensure_account": margin.ensure_isolated_account(symbol),
-            "account": margin.isolated_account(symbol),
-            "borrow": margin.borrow(symbol, rules.symbol_info(symbol).get("quoteAsset", "USD"), str(args.order_quote)),
-            "repay": margin.repay(symbol, rules.symbol_info(symbol).get("quoteAsset", "USD"), str(args.order_quote)),
-            "transfer": margin.transfer_spot_to_margin(symbol, rules.symbol_info(symbol).get("quoteAsset", "USD"), str(args.order_quote)),
-            "entry": margin.margin_order(symbol, "BUY", qty, "MARKET"),
-            "take_profit": margin.margin_order(symbol, "SELL", qty, "LIMIT", price=target),
-            "open_orders": margin.open_margin_orders(symbol),
+            "ensure_account": margin_x5.ensure_isolated_account(symbol),
+            "account": margin_x5.isolated_account(symbol),
+            "borrow": margin_x5.borrow(symbol, quote_asset, str(args.order_quote)),
+            "repay": margin_x5.repay(symbol, quote_asset, str(args.order_quote)),
+            "transfer": margin_x5.transfer_spot_to_margin(symbol, quote_asset, str(args.order_quote)),
+            "margin_x5_entry": entry_x5,
+            "margin_x5_take_profit_reduce_only": tp_x5,
+            "margin_x5_stop_loss_reduce_only": sl_x5,
+            "margin_x5_reduce_only_close": reduce_only_close,
+            "margin_x3_entry": margin_x3.margin_order(symbol, "BUY", qty, "MARKET"),
+            "fallback_sequence": ["try_margin_x5", "try_margin_x3", "fallback_spot"],
+            "fallback_spot_entry": fallback_spot,
+            "queried_order": margin_x5.get_margin_order(symbol, entry_x5["orderId"]) if hasattr(margin_x5, "get_margin_order") else client.get_order(symbol, entry_x5["orderId"]),
+            "open_orders": margin_x5.open_margin_orders(symbol),
         }
 
-    _run_check(result, "margin_methods_dry_run", margin_methods)
+    _run_check(result, "margin_order_methods_dry_run", margin_methods)
 
     if args.skip_private:
         result.add("private_account", False, skipped=True, reason="skip_private_requested")
         result.add("private_open_orders", False, skipped=True, reason="skip_private_requested")
+        result.add("private_controlled_live_order", False, skipped=True, reason="skip_private_requested")
     elif not client.is_configured():
         missing_reason = "missing_kraken_api_credentials"
         if admin_kraken_test.get("api_key_loaded") and admin_kraken_test.get("secret_key_loaded"):
             missing_reason = "missing_local_kraken_api_credentials_admin_has_credentials"
         result.add("private_account", False, skipped=True, reason=missing_reason)
         result.add("private_open_orders", False, skipped=True, reason=missing_reason)
+        result.add("private_controlled_live_order", False, skipped=True, reason=missing_reason)
     else:
         _run_check(result, "private_account", lambda: {"balance_assets": sorted((client.account() or {}).keys())[:25]})
         live_read_client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=False)
@@ -491,12 +513,48 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
                 price = client.current_price(symbol)
                 qty = rules.quantity_from_quote(symbol, args.order_quote, price, market=True)
                 live_client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=False)
-                payload = {"pair": live_client._pair_key(symbol), "type": "buy", "ordertype": "market", "volume": qty, "validate": True}
-                return {"quantity": qty, "response": live_client._signed("POST", "/0/private/AddOrder", payload)}
+                pair = live_client._pair_key(symbol)
+                spot_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "validate": True}
+                margin_x5_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "leverage": "5", "validate": True}
+                margin_x3_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "leverage": "3", "validate": True}
+                tp_payload = {"pair": pair, "type": "sell", "ordertype": "limit", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 1.02), "reduce_only": True, "validate": True}
+                sl_payload = {"pair": pair, "type": "sell", "ordertype": "stop-loss", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 0.98), "reduce_only": True, "validate": True}
+                return {
+                    "quantity": qty,
+                    "spot_validate_only": live_client._signed("POST", "/0/private/AddOrder", spot_payload),
+                    "margin_x5_validate_only": live_client._signed("POST", "/0/private/AddOrder", margin_x5_payload),
+                    "margin_x3_validate_only": live_client._signed("POST", "/0/private/AddOrder", margin_x3_payload),
+                    "take_profit_validate_only": live_client._signed("POST", "/0/private/AddOrder", tp_payload),
+                    "stop_loss_validate_only": live_client._signed("POST", "/0/private/AddOrder", sl_payload),
+                }
 
             _run_check(result, "private_add_order_validate_only", validate_order)
         else:
             result.add("private_add_order_validate_only", False, skipped=True, reason="use --validate-order to enable Kraken validate=true check")
+
+        def controlled_live_order() -> dict[str, Any]:
+            import os
+
+            if not args.live_order_test:
+                return {"skipped": True, "reason": "use --live-order-test and KRAKEN_SMOKE_LIVE_ORDER=YES to enable"}
+            if os.environ.get("KRAKEN_SMOKE_LIVE_ORDER") != "YES":
+                return {"skipped": True, "reason": "missing_guard_env_KRAKEN_SMOKE_LIVE_ORDER_YES"}
+            quote = min(float(args.live_order_quote), float(args.order_quote), 10.0)
+            price = client.current_price(symbol)
+            limit_price = rules.normalize_exit_price(symbol, price * 0.5)
+            qty = rules.quantity_from_quote(symbol, quote, float(limit_price), market=False)
+            live_client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=False)
+            order = live_client._signed("POST", "/0/private/AddOrder", {"pair": live_client._pair_key(symbol), "type": "buy", "ordertype": "limit", "volume": qty, "price": limit_price, "userref": int(time.time()) % 2147483647})
+            txid = (order.get("txid") or [None])[0]
+            queried = live_client.get_order(symbol, txid) if txid else {}
+            canceled = live_client.cancel_order(symbol, txid) if txid else {"status": "no_txid"}
+            return {"max_quote": quote, "limit_price": limit_price, "quantity": qty, "order": order, "queried_order": queried, "canceled_order": canceled}
+
+        try:
+            live_details = controlled_live_order()
+            result.add("private_controlled_live_order", not live_details.get("skipped"), **live_details)
+        except Exception as exc:
+            result.add("private_controlled_live_order", False, **_error_details(exc))
 
     return result
 
@@ -514,8 +572,8 @@ def print_human(result: SmokeResult) -> None:
     print(f"Overall: {'PASS' if result.ok else 'FAIL'}\n")
     sections = {
         "DEVICE FEED": {"signalmaker_candle_feed", "signalmaker_device_backfill_4h"},
-        "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_methods_dry_run"},
-        "EXCHANGE": {"public_time", "asset_pair_lookup", "ticker_price", "ohlc_1h", "symbol_rules", "discover_spot_symbols", "discover_margin_symbols", "private_account", "private_open_orders", "private_add_order_validate_only"},
+        "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_order_methods_dry_run"},
+        "EXCHANGE": {"public_time", "asset_pair_lookup", "ticker_price", "ohlc_1h", "symbol_rules", "discover_spot_symbols", "discover_margin_symbols", "private_account", "private_open_orders", "private_add_order_validate_only", "private_controlled_live_order"},
         "OPTIONAL DIAGNOSTICS": {"signalmaker_market_data_momentum_ranking"},
     }
     printed: set[str] = set()

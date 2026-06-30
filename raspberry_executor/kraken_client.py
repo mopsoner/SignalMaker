@@ -175,3 +175,9 @@ class KrakenClient:
         rows = (self._signed("POST", "/0/private/OpenOrders", {"trades": True}) or {}).get("open") or {}
         pair = self._pair_key(symbol)
         return [{"orderId": oid, **row} for oid, row in rows.items() if str(row.get("descr", {}).get("pair") or "") in {pair, symbol.upper()}]
+
+    def cancel_order(self, symbol: str, order_id: str | int) -> dict:
+        if str(order_id).startswith("dry-") or self.dry_run:
+            return {"orderId": order_id, "status": "CANCELED", "symbol": symbol.upper(), "dry_run": True}
+        result = self._signed("POST", "/0/private/CancelOrder", {"txid": str(order_id)})
+        return {"orderId": order_id, "status": "CANCELED", "symbol": symbol.upper(), "result": result}
