@@ -32,7 +32,7 @@ class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
         self.status_code = status_code
-        self.url = "https://central.test/api/v1/momentum"
+        self.url = "https://central.test/api/v1/momentum/ranking"
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -83,7 +83,7 @@ def test_sync_uses_existing_signalmaker_base_url_setting(db_session, monkeypatch
 
     MomentumCandidateSyncService(db_session).sync()
 
-    assert calls[0]["url"] == "https://central.local/api/v1/momentum"
+    assert calls[0]["url"] == "https://central.local/api/v1/momentum/ranking"
 
 
 def test_sync_momentum_candidates_success(db_session, monkeypatch):
@@ -270,3 +270,41 @@ def test_api_failure_returns_clean_error_and_does_not_crash_executor(db_session,
 
     assert result["sync"]["errors"][0]["reason"] == "api_error"
     assert result["executed"][0]["candidate_id"] == "ETHUSDT-accumulation"
+
+
+def test_momentum_business_listing_excludes_smoke_and_dry_run_candidates(db_session):
+    service = TradeCandidateService(db_session)
+    service.upsert_open_candidate(
+        candidate_id="momentum-LIVE-open",
+        symbol="LIVEUSDC",
+        side="long",
+        stage="momentum",
+        score=20,
+        entry_price=1,
+        stop_price=None,
+        target_price=2,
+        rr_ratio=2,
+        execution_target={"source": "momentum_ranking"},
+        liquidity_context=None,
+        notes=None,
+        payload={"source": "momentum_candidates"},
+    )
+    service.upsert_open_candidate(
+        candidate_id="momentum-SMOKE-open",
+        symbol="SMOKEUSDC",
+        side="long",
+        stage="momentum",
+        score=99,
+        entry_price=1,
+        stop_price=None,
+        target_price=2,
+        rr_ratio=2,
+        execution_target={"source": "smoke_test"},
+        liquidity_context=None,
+        notes=None,
+        payload={"dry_run": True, "test_run_id": "kraken-smoke"},
+    )
+
+    rows = service.list_candidates(limit=10, stage="momentum", exclude_test_data=True)
+
+    assert [row.candidate_id for row in rows] == ["momentum-LIVE-open"]

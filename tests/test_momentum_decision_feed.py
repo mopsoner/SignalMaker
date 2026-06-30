@@ -572,7 +572,7 @@ def test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeyp
 
     decision = fetch_decision()
 
-    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum"]
+    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum/ranking"]
     assert decision["action"] == "BUY"
     assert decision["buy_symbol"] == "BANKUSDC"
     assert decision["source"] == "momentum_rankings"
@@ -611,7 +611,7 @@ def test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpo
 
     assert [call["url"] for call in calls] == [
         "https://central.test/api/v1/custom-decision",
-        "https://central.test/api/v1/momentum",
+        "https://central.test/api/v1/momentum/ranking",
     ]
     assert decision["source"] == "momentum_decision_endpoint_fallback"
     assert decision["buy_symbol"] == "BANKUSDC"

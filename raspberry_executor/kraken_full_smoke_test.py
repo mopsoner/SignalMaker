@@ -338,7 +338,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
     if args.skip_signalmaker:
         result.add("signalmaker_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_trade_candidates", False, skipped=True, reason="skip_signalmaker_requested")
-        result.add("signalmaker_momentum", False, skipped=True, reason="skip_signalmaker_requested")
+        result.add("signalmaker_market_data_momentum_ranking", False, skipped=True, reason="skip_signalmaker_requested")
     else:
         intervals = [item.strip() for item in str(args.candle_intervals).split(",") if item.strip()]
 
@@ -372,12 +372,12 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
         _run_check(result, "signalmaker_trade_candidates", signalmaker_trade_candidates)
 
-        def signalmaker_momentum() -> dict[str, Any]:
+        def signalmaker_market_data_momentum_ranking() -> dict[str, Any]:
             rankings = signalmaker.list_momentum(limit=args.momentum_limit)
             decision = build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
             return {"ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
 
-        _run_check(result, "signalmaker_momentum", signalmaker_momentum)
+        _run_check(result, "signalmaker_market_data_momentum_ranking", signalmaker_market_data_momentum_ranking)
 
     def dry_run_orders() -> dict[str, Any]:
         price = client.current_price(symbol)
