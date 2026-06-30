@@ -59,4 +59,4 @@ fi
 
 wait_for_api
 
-exec python -m raspberry_executor.tui
+exec python -m raspberry_executor.tui "$@"

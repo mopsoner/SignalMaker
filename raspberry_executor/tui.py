@@ -165,5 +165,25 @@ def main(stdscr) -> None:
         stdscr.refresh(); time.sleep(0.1)
 
 
-if __name__ == "__main__":
+def expert_main() -> None:
     curses.wrapper(main)
+
+
+def overview_main() -> None:
+    from raspberry_executor.tui_dashboard import main as dashboard_main
+
+    dashboard_main()
+
+
+def cli() -> None:
+    import sys
+
+    mode = os.getenv("SIGNALMAKER_TUI_MODE", "overview").strip().lower()
+    if "--expert" in sys.argv or mode in {"expert", "full", "legacy"}:
+        expert_main()
+        return
+    overview_main()
+
+
+if __name__ == "__main__":
+    cli()

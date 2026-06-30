@@ -119,7 +119,10 @@ The terminal TUI talks directly to the local FastAPI service on port `8080` by d
 cd ~/Desktop/SignalMaker
 ./tui.sh
 SIGNALMAKER_BASE_URL=http://127.0.0.1:8080 ./tui.sh
+SIGNALMAKER_TUI_MODE=expert ./tui.sh  # optional legacy multi-page expert TUI
 ```
+
+By default the terminal opens a single-screen overview with executor health, candle feed status, trade candidates, open positions/PnL, momentum decisions/actions, important errors, and the latest activity. Set `SIGNALMAKER_TUI_MODE=expert` or run `python -m raspberry_executor.tui --expert` to use the legacy multi-page expert TUI.
 
 Manual full-screen web kiosk mode opens the same single-origin Raspberry website served by FastAPI:
 
