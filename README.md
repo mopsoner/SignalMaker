@@ -106,13 +106,10 @@ Run the Kraken validation script from the repository root when you want a readab
 python raspberry_executor/kraken_full_smoke_test.py
 python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSDC
 python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSDT
-```
-
-Without `--symbol`, the script discovers a Kraken pair from your configured `QUOTE_ASSETS` such as `USDC` or `USDT` instead of hard-coding a base asset. By default, it tests public Kraken endpoints, SignalMaker symbol rules, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--json` for a compact JSON-only report.
 python raspberry_executor/kraken_full_smoke_test.py --symbol BTCUSD
 ```
 
-By default, the script tests public Kraken endpoints, SignalMaker symbol rules, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--json` for a compact JSON-only report.
+Without `--symbol`, the script discovers a Kraken pair from your configured `QUOTE_ASSETS` such as `USDC` or `USDT` instead of hard-coding a base asset. By default, it tests public Kraken endpoints, SignalMaker symbol rules, Kraken candle retrieval, SignalMaker candle ingestion/verification across `15m,1h,4h`, trade-candidate fetch/replay, momentum rankings, momentum candidate sync, dry-run spot order methods, and dry-run margin adapter methods. If `KRAKEN_API_KEY` and `KRAKEN_SECRET_KEY` are configured, it also reads private account/open-order endpoints. It never places a real order by default. Add `--validate-order` only when you want Kraken to validate a market order payload with `validate=true` without submitting it. Use `--candle-intervals`, `--candle-limit`, and `--momentum-limit` to tune the SignalMaker feed checks, or `--skip-signalmaker` to run only the Kraken/execution adapter checks. Use `--json` for a compact JSON-only report.
 
 Useful Raspberry debug commands:
 

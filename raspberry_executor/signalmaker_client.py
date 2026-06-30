@@ -192,6 +192,36 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker latest candle response: {type(data).__name__}")
         return data[0] if data else None
 
+
+    def list_momentum(self, limit: int = 50) -> list[dict]:
+        response = self.session.get(
+            self._url("/api/v1/momentum"),
+            params={"limit": limit},
+            timeout=30,
+            headers={"accept": "application/json", "cache-control": "no-cache"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected SignalMaker momentum response: {type(data).__name__}")
+        return data
+
+    def sync_momentum_candidates(self, limit: int = 25, min_momentum_score: float | None = None) -> dict:
+        params: dict[str, object] = {"limit": limit}
+        if min_momentum_score is not None:
+            params["min_momentum_score"] = min_momentum_score
+        response = self.session.post(
+            self._url("/api/v1/executor/sync-momentum-candidates"),
+            params=params,
+            timeout=60,
+            headers={"accept": "application/json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected SignalMaker momentum candidate sync response: {type(data).__name__}")
+        return data
+
     def heartbeat(self, *args, **kwargs) -> dict:
         return {"status": "skipped", "reason": "local_mode_no_replit_gateway"}
 
