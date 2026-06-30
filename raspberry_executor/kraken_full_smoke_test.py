@@ -286,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-signalmaker", action="store_true", help="Ignore les appels SignalMaker: candles, momentum et trade candidates.")
     parser.add_argument("--candle-intervals", default="15m,1h,4h", help="Intervalles de candles à récupérer chez Kraken puis envoyer à SignalMaker.")
     parser.add_argument("--candle-limit", type=int, default=120, help="Nombre de candles Kraken à récupérer par intervalle pour l'ingestion SignalMaker.")
-    parser.add_argument("--momentum-limit", type=int, default=200, help="Nombre de lignes momentum à lire avec GET /api/v1/momentum?limit=... côté SignalMaker.")
+    parser.add_argument("--momentum-limit", type=int, default=25, help="Nombre de lignes momentum/candidates à vérifier côté SignalMaker.")
     return parser
 
 
@@ -375,7 +375,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         def signalmaker_momentum() -> dict[str, Any]:
             rankings = signalmaker.list_momentum(limit=args.momentum_limit)
             decision = build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
-            return {"method": "GET", "path": "/api/v1/momentum", "limit": args.momentum_limit, "ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
+            sync = signalmaker.sync_momentum_candidates(limit=args.momentum_limit, min_momentum_score=None)
+            return {"ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason"), "sync": sync}
 
         _run_check(result, "signalmaker_momentum", signalmaker_momentum)
 

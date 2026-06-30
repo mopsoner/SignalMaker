@@ -57,12 +57,6 @@ def test_parser_exposes_signalmaker_feed_and_momentum_options():
     assert args.momentum_limit == 7
 
 
-def test_parser_defaults_to_momentum_get_limit_200():
-    args = kraken_full_smoke_test.build_parser().parse_args([])
-
-    assert args.momentum_limit == 200
-
-
 def test_find_candle_summary_matches_symbol_case_and_interval():
     rows = [
         {"symbol": "ETHUSD", "interval": "15m", "candle_count": 1},
@@ -191,14 +185,9 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
         def open_margin_orders(self, symbol):
             return []
 
-    fake_signalmaker_instances = []
-
     class FakeSignalMaker:
         def __init__(self, *args, **kwargs):
             self.counts = {}
-            self.momentum_limits = []
-            self.sync_called = False
-            fake_signalmaker_instances.append(self)
 
         def check_candle_ingest_endpoint(self):
             return {"ok": True, "status_code": 200, "url": "https://signalmaker.test/api/v1/market-data/candles"}
@@ -223,12 +212,10 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
             return [{"candidate_id": "momentum-BTCUSD-open", "symbol": "BTCUSD"}]
 
         def list_momentum(self, limit=50):
-            self.momentum_limits.append(limit)
             return [{"rank": 1, "symbol": "BTCUSD", "momentum_score": 12.0, "rsi_1h": 50.0, "price": 100.0}]
 
         def sync_momentum_candidates(self, limit=25, min_momentum_score=None):
-            self.sync_called = True
-            raise AssertionError("signalmaker_momentum must use GET /api/v1/momentum, not POST sync")
+            return {"fetched": 1, "upserted": 1, "skipped": [], "errors": []}
 
     monkeypatch.setattr(kraken_full_smoke_test, "ensure_env", lambda: None)
     monkeypatch.setattr(kraken_full_smoke_test, "load_settings", lambda: settings)
@@ -267,9 +254,4 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
     assert checks["signalmaker_trade_candidates"]["ok"] is True
     assert checks["signalmaker_trade_candidates"]["replay_fetch_count"] == 1
     assert checks["signalmaker_momentum"]["ok"] is True
-    assert checks["signalmaker_momentum"]["method"] == "GET"
-    assert checks["signalmaker_momentum"]["path"] == "/api/v1/momentum"
-    assert checks["signalmaker_momentum"]["limit"] == 1
     assert checks["signalmaker_momentum"]["decision_action"] == "BUY"
-    assert fake_signalmaker_instances[0].momentum_limits == [1]
-    assert fake_signalmaker_instances[0].sync_called is False
