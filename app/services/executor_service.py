@@ -8,6 +8,11 @@ from app.services.position_service import PositionService
 from app.services.risk_service import RiskService
 from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
 from app.services.trade_candidate_service import TradeCandidateService
+from raspberry_executor.kraken_margin_client import KrakenMarginClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
+from raspberry_executor.margin_order_manager import MarginOrderManager
+from raspberry_executor.margin_settings import margin_enabled, margin_multiplier
+from raspberry_executor.spot_order_manager import SpotOrderManager
 
 
 class ExecutorService:
@@ -54,15 +59,47 @@ class ExecutorService:
         if candidate.side != 'long' and not settings.live_spot_allow_shorts:
             raise RuntimeError('Live short execution is not supported in current spot mode')
 
-        stop_for_exchange = candidate.stop_price if hasattr(active, 'place_market_entry') else None
-        normalized = active.normalize_order(candidate.symbol, quantity=quantity, target_price=candidate.target_price, stop_price=stop_for_exchange)
-        if hasattr(active, 'place_market_entry'):
-            entry_resp = active.place_market_entry(candidate.symbol, candidate.side, normalized['quantity'])
-            avg_fill = active.average_fill_price(entry_resp, fallback=candidate.entry_price or normalized['mark_price']) or candidate.entry_price or normalized['mark_price']
-        else:
-            entry_resp = active.place_market_buy(candidate.symbol, normalized['quantity'])
-            avg_fill = active.average_fill_price(entry_resp) or candidate.entry_price or normalized['mark_price']
-        filled_qty = float(entry_resp.get('executedQty') or normalized['quantity'])
+        normalized = active.normalize_order(candidate.symbol, quantity=quantity, target_price=candidate.target_price, stop_price=None)
+        execution_mode = 'spot'
+        margin_error = None
+        if candidate.side == 'long' and margin_enabled() and hasattr(active, 'client'):
+            try:
+                rules = KrakenSymbolRules(settings.kraken_base_url, quote_assets=settings.kraken_quote_assets.split(','))
+                margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
+                margin_manager = MarginOrderManager(active.client, margin, rules)
+                margin_result = margin_manager.open_long_with_margin_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
+                if margin_result.get('tp_error'):
+                    raise RuntimeError(margin_result['tp_error'])
+                entry_resp = margin_result.get('entry_payload') or {}
+                tp_resp = margin_result.get('tp_payload') or {}
+                avg_fill = float(margin_result['entry_price'])
+                filled_qty = float(margin_result['quantity'])
+                execution_mode = 'cross_margin'
+            except Exception as exc:
+                margin_error = str(exc)
+        if execution_mode == 'spot':
+            try:
+                if hasattr(active, 'client'):
+                    rules = KrakenSymbolRules(settings.kraken_base_url, quote_assets=settings.kraken_quote_assets.split(','))
+                    spot_result = SpotOrderManager(active.client, rules).open_long_with_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
+                    entry_resp = spot_result.get('entry_payload') or {}
+                    tp_resp = spot_result.get('tp_payload') or {}
+                    avg_fill = float(spot_result['entry_price'])
+                    filled_qty = float(spot_result['quantity'])
+                elif hasattr(active, 'place_market_entry'):
+                    entry_resp = active.place_market_entry(candidate.symbol, candidate.side, normalized['quantity'])
+                    avg_fill = active.average_fill_price(entry_resp, fallback=candidate.entry_price or normalized['mark_price']) or candidate.entry_price or normalized['mark_price']
+                    filled_qty = float(entry_resp.get('executedQty') or normalized['quantity'])
+                    tp_resp = active.place_exit_limit(candidate.symbol, candidate.side, quantity=filled_qty, price=normalized['target_price'])
+                else:
+                    entry_resp = active.place_market_buy(candidate.symbol, normalized['quantity'])
+                    avg_fill = active.average_fill_price(entry_resp) or candidate.entry_price or normalized['mark_price']
+                    filled_qty = float(entry_resp.get('executedQty') or normalized['quantity'])
+                    tp_resp = active.place_limit_sell(candidate.symbol, quantity=filled_qty, price=normalized['target_price'])
+            except Exception as exc:
+                if margin_error:
+                    raise RuntimeError(f'margin failed ({margin_error}); spot fallback failed ({exc})') from exc
+                raise
 
         position = self.positions.create_position(
             symbol=candidate.symbol,
@@ -74,7 +111,7 @@ class ExecutorService:
             target_price=normalized.get('target_price'),
             meta={
                 'candidate_id': candidate.candidate_id,
-                'mode': 'live',
+                'mode': execution_mode,
                 'symbol': candidate.symbol,
                 'exchange': exchange_name,
                 'entry_exchange_order_id': entry_resp.get('orderId'),
@@ -90,14 +127,10 @@ class ExecutorService:
             requested_price=candidate.entry_price,
             filled_price=avg_fill,
             status=str(entry_resp.get('status', 'filled')).lower(),
-            meta={'mode': 'live', 'exchange': exchange_name, 'exchange_payload': entry_resp},
+            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': entry_resp, 'margin_error': margin_error},
         )
         fill = self.fills.create_fill(order_id=entry_order.order_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', quantity=filled_qty, price=avg_fill)
 
-        if hasattr(active, 'place_exit_limit'):
-            tp_resp = active.place_exit_limit(candidate.symbol, candidate.side, quantity=filled_qty, price=normalized['target_price'])
-        else:
-            tp_resp = active.place_limit_sell(candidate.symbol, quantity=filled_qty, price=normalized['target_price'])
         tp_local = self.orders.create_order(
             candidate_id=candidate.candidate_id,
             position_id=position.position_id,
@@ -108,7 +141,7 @@ class ExecutorService:
             requested_price=normalized['target_price'],
             filled_price=None,
             status=str(tp_resp.get('status', 'open')).lower(),
-            meta={'mode': 'live', 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': tp_resp.get('orderId')},
+            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': tp_resp.get('orderId')},
         )
         position.meta = {
             **(position.meta or {}),
@@ -141,7 +174,7 @@ class ExecutorService:
             'entry_order_id': entry_order.order_id,
             'fill_id': fill.fill_id,
             'tp_order_id': tp_local.order_id,
-            'mode': 'live',
+            'mode': execution_mode,
             'exchange': exchange_name,
             'exchange_entry_order_id': entry_resp.get('orderId'),
             'exchange_tp_order_id': tp_resp.get('orderId'),
