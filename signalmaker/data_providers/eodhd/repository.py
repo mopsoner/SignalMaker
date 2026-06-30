@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -132,15 +133,68 @@ class EODHDRepository:
 
     async def upsert_market_candles(self, asset_id, provider: str, provider_symbol: str, timeframe: str, candles: list) -> int:
         q = text("""
-        INSERT INTO market_candles (asset_id,provider,provider_symbol,timeframe,timestamp,open,high,low,close,adjusted_close,volume,updated_at)
-        VALUES (:asset_id,:provider,:provider_symbol,:timeframe,:timestamp,:open,:high,:low,:close,:adjusted_close,:volume,CURRENT_TIMESTAMP)
-        ON CONFLICT(asset_id, provider, timeframe, timestamp) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,adjusted_close=excluded.adjusted_close,volume=excluded.volume,updated_at=CURRENT_TIMESTAMP
+        INSERT INTO market_candles (candle_id,symbol,interval,open_time,close_time,asset_id,provider,provider_symbol,timeframe,timestamp,open,high,low,close,adjusted_close,volume,quote_volume,number_of_trades,taker_buy_base_volume,taker_buy_quote_volume,ingested_at,updated_at)
+        VALUES (:candle_id,:symbol,:interval,:open_time,:close_time,:asset_id,:provider,:provider_symbol,:timeframe,:timestamp,:open,:high,:low,:close,:adjusted_close,:volume,:quote_volume,:number_of_trades,:taker_buy_base_volume,:taker_buy_quote_volume,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+        ON CONFLICT(asset_id, provider, timeframe, timestamp) WHERE asset_id IS NOT NULL DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,adjusted_close=excluded.adjusted_close,volume=excluded.volume,updated_at=CURRENT_TIMESTAMP
         """)
         count = 0
         for c in candles:
-            self.db.execute(q, {"asset_id": asset_id, "provider": provider, "provider_symbol": provider_symbol, "timeframe": timeframe, "timestamp": c.timestamp, "open": c.open, "high": c.high, "low": c.low, "close": c.close, "adjusted_close": c.adjusted_close, "volume": c.volume})
+            timestamp = self._normalize_candle_timestamp(c)
+            open_time = self._timestamp_ms(timestamp)
+            close_time = self._close_time_ms(timestamp, timeframe)
+            self.db.execute(q, {
+                "candle_id": f"{provider_symbol.upper()}-{timeframe}-{open_time}",
+                "symbol": provider_symbol.upper(),
+                "interval": timeframe,
+                "open_time": open_time,
+                "close_time": close_time,
+                "asset_id": asset_id,
+                "provider": provider,
+                "provider_symbol": provider_symbol,
+                "timeframe": timeframe,
+                "timestamp": timestamp,
+                "open": float(c.open),
+                "high": float(c.high),
+                "low": float(c.low),
+                "close": float(c.close),
+                "adjusted_close": float(c.adjusted_close) if c.adjusted_close is not None else None,
+                "volume": float(c.volume) if c.volume is not None else None,
+                "quote_volume": 0.0,
+                "number_of_trades": 0,
+                "taker_buy_base_volume": 0.0,
+                "taker_buy_quote_volume": 0.0,
+            })
             count += 1
         return count
+
+    @staticmethod
+    def _normalize_candle_timestamp(candle) -> datetime:
+        timestamp = candle.timestamp
+        if timestamp is None and getattr(candle, "open_time", None) is not None:
+            open_time = int(candle.open_time)
+            seconds = open_time / 1000 if open_time > 10_000_000_000 else open_time
+            timestamp = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        if timestamp is None:
+            raise ValueError("Candle timestamp or open_time is required")
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+        return timestamp
+
+    @staticmethod
+    def _timestamp_ms(timestamp: datetime) -> int:
+        normalized = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+        return int(normalized.timestamp() * 1000)
+
+    @classmethod
+    def _close_time_ms(cls, timestamp: datetime, timeframe: str) -> int:
+        unit = (timeframe or "").strip().lower()
+        if unit.endswith("d"):
+            return cls._timestamp_ms(timestamp + timedelta(days=int(unit[:-1] or 1))) - 1
+        if unit.endswith("h"):
+            return cls._timestamp_ms(timestamp + timedelta(hours=int(unit[:-1] or 1))) - 1
+        if unit.endswith("m"):
+            return cls._timestamp_ms(timestamp + timedelta(minutes=int(unit[:-1] or 1))) - 1
+        return cls._timestamp_ms(timestamp)
 
     async def create_import_run(self, provider: str, run_type: str, status: str = "RUNNING", metadata: dict | None = None):
         return self.db.execute(text("INSERT INTO market_data_import_runs (provider,run_type,status,metadata) VALUES (:provider,:run_type,:status,:metadata) RETURNING id"), {"provider":provider,"run_type":run_type,"status":status,"metadata":json.dumps(metadata or {})}).scalar_one()
