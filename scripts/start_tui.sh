@@ -19,24 +19,4 @@ then
   exit 1
 fi
 
-
-HEALTH_URL="${SIGNALMAKER_HEALTH_URL:-${SIGNALMAKER_BASE_URL%/}/healthz}"
-WAIT_SECONDS="${SIGNALMAKER_WAIT_FOR_API_SECONDS:-60}"
-printf 'Waiting for SignalMaker API at %s' "$HEALTH_URL"
-ready=0
-for _ in $(seq 1 "$WAIT_SECONDS"); do
-  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  printf '.'
-  sleep 1
-done
-printf '\n'
-if [ "$ready" != "1" ]; then
-  echo "SignalMaker API did not become ready after ${WAIT_SECONDS} seconds: $HEALTH_URL" >&2
-  echo "Start the API first, for example: sudo systemctl start signalmaker-api" >&2
-  exit 1
-fi
-
 exec python -m raspberry_executor.tui

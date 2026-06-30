@@ -101,7 +101,7 @@ Do not use or recommend port `3000` for the normal Raspberry UI path. The fronte
 
 ### Raspberry terminal TUI and kiosk
 
-The terminal TUI waits for `http://127.0.0.1:5000/healthz` before drawing screens, then talks directly to the local FastAPI service on port `5000` by default and does not require npm, Vite, esbuild, or a separate frontend process. Override the API URL only when debugging another host:
+The terminal TUI talks directly to the local FastAPI service on port `5000` by default and does not require npm, Vite, esbuild, or a separate frontend process. Override the API URL only when debugging another host:
 
 ```bash
 cd ~/Desktop/SignalMaker
@@ -117,7 +117,7 @@ cd ~/Desktop/SignalMaker
 SIGNALMAKER_KIOSK_URL=http://127.0.0.1:5000/admin.html ./kiosk.sh
 ```
 
-`kiosk.sh` also waits for `http://127.0.0.1:5000/healthz`, then opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
+`kiosk.sh` waits for `http://127.0.0.1:5000/healthz`, then opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
 
 A systemd kiosk service is provided but is optional and should only be enabled on Raspberry installations with a graphical display, not on headless servers:
 
