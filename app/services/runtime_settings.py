@@ -253,10 +253,12 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
 
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
     "general": ("app_name", "app_env", "cors_origins", "create_tables_on_boot"),
-    "executor": ("execution_exchange", "quote_assets"),
+    "executor": tuple(DEFAULT_SETTINGS["executor"].keys()),
     "binance": ("binance_exchange_name", "binance_rest_base", "binance_api_key", "binance_secret_key"),
     "kraken": ("kraken_exchange_name", "kraken_base_url", "kraken_api_key", "kraken_secret_key"),
-    "notifications": ("telegram_chat_id", "telegram_secret", "discord_url"),
+    "market_data": tuple(DEFAULT_SETTINGS["market_data"].keys()),
+    "strategy": tuple(DEFAULT_SETTINGS["strategy"].keys()),
+    "notifications": tuple(DEFAULT_SETTINGS["notifications"].keys()),
     "bot": (
         "bot_pipeline_enabled",
         "bot_executor_enabled",
