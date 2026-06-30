@@ -11,12 +11,12 @@ def main() -> int:
     settings = load_settings()
     result = {
         "status": "pending",
-        "base_url": settings.binance_base_url,
+        "base_url": settings.kraken_base_url,
         "quote_assets": settings.quote_assets,
         "checks": [],
     }
     try:
-        symbols = discover_spot_symbols(settings.binance_base_url, settings.quote_assets, limit=0)
+        symbols = discover_spot_symbols(settings.kraken_base_url, settings.quote_assets, limit=0)
         result.update({
             "status": "ok",
             "total_spot_tradeable_symbol_count_for_quote": len(symbols),

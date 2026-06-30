@@ -13,17 +13,14 @@ def settings(exchange="kraken"):
         exchange=exchange,
         dry_run=True,
         quote_assets=["USDC"],
-        binance_base_url="https://binance.test",
-        binance_api_key="binance-key",
-        binance_secret_key="binance-secret",
         kraken_base_url="https://kraken.test",
         kraken_api_key="kraken-key",
         kraken_secret_key="kraken-secret",
     )
 
 
-def test_exchange_name_defaults_to_binance_for_backward_compatibility():
-    assert exchange_name(SimpleNamespace()) == "binance"
+def test_exchange_name_defaults_to_kraken_for_device_executor():
+    assert exchange_name(SimpleNamespace()) == "kraken"
 
 
 def test_create_spot_exchange_can_select_kraken_adapter():
@@ -67,19 +64,19 @@ def public_methods(cls):
     return {name for name, value in cls.__dict__.items() if callable(value) and not name.startswith("_")}
 
 
-def test_kraken_client_covers_binance_client_public_surface():
-    from raspberry_executor.binance_client import BinanceClient
+def test_kraken_client_covers_kraken_client_public_surface():
+    from raspberry_executor.kraken_client import KrakenClient
 
-    assert public_methods(BinanceClient) - public_methods(KrakenClient) == set()
-
-
-def test_kraken_symbol_rules_covers_binance_symbol_rules_public_surface():
-    from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
-
-    assert public_methods(BinanceSymbolRules) - public_methods(KrakenSymbolRules) == set()
+    assert public_methods(KrakenClient) - public_methods(KrakenClient) == set()
 
 
-def test_kraken_margin_client_covers_binance_margin_client_public_surface():
+def test_kraken_symbol_rules_covers_kraken_symbol_rules_public_surface():
+    from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
+
+    assert public_methods(KrakenSymbolRules) - public_methods(KrakenSymbolRules) == set()
+
+
+def test_kraken_margin_client_covers_kraken_margin_client_public_surface():
     from raspberry_executor.margin_client import MarginClient
 
     assert public_methods(MarginClient) - public_methods(KrakenMarginClient) == set()

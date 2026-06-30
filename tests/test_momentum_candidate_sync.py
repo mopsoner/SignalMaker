@@ -144,7 +144,7 @@ def test_sync_accepts_candidate_without_stop_loss(db_session, monkeypatch):
 
 
 def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monkeypatch):
-    class FakeBinance:
+    class FakeKraken:
         def __init__(self):
             self.oco_calls = []
             self.limit_sell_calls = []
@@ -190,15 +190,15 @@ def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monk
         payload={"source": "test"},
     )
     service = ExecutorService(db_session)
-    fake_binance = FakeBinance()
-    service.binance = fake_binance
+    fake_kraken = FakeKraken()
+    service.kraken = fake_kraken
 
     result = service.execute_open_candidates(limit=10, quantity=0.25, mode="live")
 
     assert result["executed"], result
     assert result["executed"][0]["exchange_tp_order_id"] == 202
-    assert fake_binance.limit_sell_calls == [{"symbol": "BTCUSDT", "quantity": 0.25, "price": 120.0}]
-    assert fake_binance.oco_calls == []
+    assert fake_kraken.limit_sell_calls == [{"symbol": "BTCUSDT", "quantity": 0.25, "price": 120.0}]
+    assert fake_kraken.oco_calls == []
     orders = db_session.query(Order).order_by(Order.created_at).all()
     assert [order.order_type for order in orders] == ["market", "take_profit"]
     assert all(order.order_type != "stop_loss" for order in orders)

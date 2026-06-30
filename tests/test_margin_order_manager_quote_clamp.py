@@ -6,7 +6,7 @@ import raspberry_executor.margin_order_manager as manager_module
 from raspberry_executor.margin_order_manager import MarginOrderManager
 
 
-class FakeBinance:
+class FakeKraken:
     dry_run = False
 
     def current_price(self, symbol: str) -> float:
@@ -73,9 +73,9 @@ class FakeRules:
 def test_take_profit_long_uses_available_margin_quote_without_spot_transfer(monkeypatch):
     monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
     monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
-    binance = FakeBinance()
+    kraken = FakeKraken()
     margin = FakeMargin(margin_free=15.0)
-    manager = MarginOrderManager(binance, margin, FakeRules())
+    manager = MarginOrderManager(kraken, margin, FakeRules())
 
     result = manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)
 
@@ -94,9 +94,9 @@ def test_take_profit_long_uses_available_margin_quote_without_spot_transfer(monk
 def test_take_profit_long_keeps_order_quote_when_margin_balance_is_enough(monkeypatch):
     monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
     monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
-    binance = FakeBinance()
+    kraken = FakeKraken()
     margin = FakeMargin(margin_free=150.0)
-    manager = MarginOrderManager(binance, margin, FakeRules())
+    manager = MarginOrderManager(kraken, margin, FakeRules())
 
     result = manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)
 
@@ -111,7 +111,7 @@ def test_take_profit_long_keeps_order_quote_when_margin_balance_is_enough(monkey
 def test_take_profit_long_raises_when_no_margin_quote_available(monkeypatch):
     monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
     monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
-    manager = MarginOrderManager(FakeBinance(), FakeMargin(margin_free=0.0), FakeRules())
+    manager = MarginOrderManager(FakeKraken(), FakeMargin(margin_free=0.0), FakeRules())
 
     with pytest.raises(RuntimeError, match="margin_insufficient_quote_balance"):
         manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)

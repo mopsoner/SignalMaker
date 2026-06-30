@@ -1,13 +1,13 @@
 import os
 import time
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 
 
 class SpotOrderManager:
-    def __init__(self, binance: BinanceClient, rules: BinanceSymbolRules) -> None:
-        self.binance = binance
+    def __init__(self, kraken: KrakenClient, rules: KrakenSymbolRules) -> None:
+        self.kraken = kraken
         self.rules = rules
 
     @staticmethod
@@ -28,7 +28,7 @@ class SpotOrderManager:
 
     @staticmethod
     def _avg_price_from_order(payload: dict, fallback: float) -> float:
-        avg = BinanceClient.average_fill_price(payload, fallback=None)
+        avg = KrakenClient.average_fill_price(payload, fallback=None)
         if avg is not None:
             return float(avg)
         try:
@@ -59,7 +59,7 @@ class SpotOrderManager:
             raise RuntimeError(f"invalid_oco_requested_quantity symbol={symbol} quantity={requested_quantity}")
 
         base_asset = self.rules.base_asset(symbol)
-        if self.binance.dry_run:
+        if self.kraken.dry_run:
             return {
                 "quantity": self.rules.normalize_exit_quantity(symbol, requested),
                 "requested_quantity": requested,
@@ -68,7 +68,7 @@ class SpotOrderManager:
                 "quantity_source": "dry_run_requested_quantity",
             }
 
-        free_qty = self.binance.free_balance(base_asset)
+        free_qty = self.kraken.free_balance(base_asset)
         if free_qty <= 0:
             raise RuntimeError(f"no_free_balance_for_oco symbol={symbol} base_asset={base_asset} free_qty={free_qty}")
 
@@ -78,14 +78,14 @@ class SpotOrderManager:
             "requested_quantity": requested,
             "free_base_qty": free_qty,
             "base_asset": base_asset,
-            "quantity_source": "binance_free_balance" if free_qty < requested else "requested_quantity_confirmed_available",
+            "quantity_source": "kraken_free_balance" if free_qty < requested else "requested_quantity_confirmed_available",
         }
 
     def confirm_spot_entry_order(self, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float) -> dict:
         symbol = symbol.upper()
         if not entry_order_id:
             raise RuntimeError(f"spot_entry_missing_order_id symbol={symbol} payload={submitted_payload}")
-        if self.binance.dry_run:
+        if self.kraken.dry_run:
             payload = {**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}
             return {
                 "entry_confirmed": True,
@@ -97,7 +97,7 @@ class SpotOrderManager:
         deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
         last_payload = submitted_payload
         while time.monotonic() <= deadline:
-            payload = self.binance.get_order(symbol, entry_order_id)
+            payload = self.kraken.get_order(symbol, entry_order_id)
             last_payload = payload
             status = str(payload.get("status") or "").upper()
             side = str(payload.get("side") or "").upper()
@@ -165,14 +165,14 @@ class SpotOrderManager:
         return tp_order_id, sl_order_id
 
     def _submit_oco_sell(self, symbol: str, quantity: str, target_price: str, stop_price: str, stop_limit_price: str) -> dict:
-        if self.binance.dry_run:
+        if self.kraken.dry_run:
             now = int(time.time())
             return {"orderListId": f"dry-oco-{now}", "contingencyType": "OCO", "symbol": symbol.upper(), "side": "SELL", "quantity": quantity, "aboveType": "LIMIT_MAKER", "abovePrice": target_price, "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": stop_price, "belowPrice": stop_limit_price, "belowTimeInForce": "GTC", "dry_run": True, "orders": [{"orderId": f"dry-tp-{now}", "type": "LIMIT_MAKER", "price": target_price}, {"orderId": f"dry-sl-{now}", "type": "STOP_LOSS_LIMIT", "stopPrice": stop_price, "price": stop_limit_price}]}
-        return self.binance._signed("POST", "/api/v3/orderList/oco", {"symbol": symbol.upper(), "side": "SELL", "quantity": quantity, "aboveType": "LIMIT_MAKER", "abovePrice": target_price, "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": stop_price, "belowPrice": stop_limit_price, "belowTimeInForce": "GTC", "newOrderRespType": "FULL"})
+        return self.kraken._signed("POST", "/api/v3/orderList/oco", {"symbol": symbol.upper(), "side": "SELL", "quantity": quantity, "aboveType": "LIMIT_MAKER", "abovePrice": target_price, "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": stop_price, "belowPrice": stop_limit_price, "belowTimeInForce": "GTC", "newOrderRespType": "FULL"})
 
     def create_exit_oco_for_open_long(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         if not (float(target_price) > current_price > float(stop_price)):
             raise RuntimeError(f"invalid_oco_price_order symbol={symbol} target={target_price} current={current_price} stop={stop_price}")
         if not self.rules.oco_allowed(symbol):
@@ -191,21 +191,21 @@ class SpotOrderManager:
 
     def create_exit_take_profit_for_open_long(self, *, symbol: str, quantity: float | str, target_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         if not (float(target_price) > current_price):
             raise RuntimeError(f"invalid_take_profit_price_order symbol={symbol} target={target_price} current={current_price}")
         qty_info = self._available_oco_exit_quantity(symbol, quantity)
         exit_qty = qty_info["quantity"]
         tp = self.rules.normalize_exit_price(symbol, target_price)
         self.rules.ensure_exit_notional(symbol, exit_qty, tp, label="take_profit_limit")
-        order = self.binance.place_exit_limit(symbol, "long", exit_qty, tp)
+        order = self.kraken.place_exit_limit(symbol, "long", exit_qty, tp)
         return {"symbol": symbol, "quantity": exit_qty, "tp_order_id": self._order_id(order), "tp_payload": order, "exit_strategy": "take_profit_only", "tp_quantity_source": qty_info.get("quantity_source"), "tp_requested_quantity": qty_info.get("requested_quantity"), "tp_free_base_qty": qty_info.get("free_base_qty"), "tp_base_asset": qty_info.get("base_asset")}
 
     def open_long_with_take_profit(self, *, symbol: str, quote_amount: float, target_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, quote_amount, current_price, market=True)
-        entry = self.binance.place_market_entry(symbol, "long", quantity)
+        entry = self.kraken.place_market_entry(symbol, "long", quantity)
         entry_order_id = self._order_id(entry)
         confirm = self.confirm_spot_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
         entry_price = float(confirm["entry_price"])
@@ -217,9 +217,9 @@ class SpotOrderManager:
 
     def open_long_with_oco(self, *, symbol: str, quote_amount: float, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, quote_amount, current_price, market=True)
-        entry = self.binance.place_market_entry(symbol, "long", quantity)
+        entry = self.kraken.place_market_entry(symbol, "long", quantity)
         entry_order_id = self._order_id(entry)
         confirm = self.confirm_spot_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
         entry_price = float(confirm["entry_price"])

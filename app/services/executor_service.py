@@ -19,14 +19,14 @@ class ExecutorService:
         self.candidates = TradeCandidateService(db)
         self.risk = RiskService(db)
         self.exchange = create_execution_adapter()
-        self.binance = self.exchange  # backward-compatible test/extension hook
+        self.kraken = self.exchange  # backward-compatible test/extension hook
 
     def _is_short_side(self, side: str | None) -> bool:
         return (side or '').lower() in {'short', 'sell', 'bear'}
 
     def _current_price_for_candidate(self, candidate, *, requested_mode: str) -> float:
         if requested_mode == 'live':
-            return self.binance.current_price(candidate.symbol)
+            return self.kraken.current_price(candidate.symbol)
         return float(candidate.entry_price)
 
     def _price_before_target(self, candidate, mark_price: float) -> bool:
@@ -47,8 +47,8 @@ class ExecutorService:
 
     def _execute_live_candidate(self, candidate, quantity: float) -> dict:
         self.risk.validate_live_candidate(symbol=candidate.symbol, side=candidate.side, entry_price=candidate.entry_price, stop_price=candidate.stop_price, target_price=candidate.target_price, quantity=quantity)
-        active = self.binance
-        exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'binance'))
+        active = self.kraken
+        exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'kraken'))
         if not active.is_configured():
             raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
         if candidate.side != 'long' and not settings.live_spot_allow_shorts:
@@ -194,7 +194,7 @@ class ExecutorService:
             checked += 1
             symbol = position.symbol
             try:
-                mark = self.binance.current_price(symbol)
+                mark = self.kraken.current_price(symbol)
                 position.mark_price = mark
                 if position.entry_price is not None and position.quantity is not None:
                     position.unrealized_pnl = (mark - float(position.entry_price)) * float(position.quantity)
@@ -203,7 +203,7 @@ class ExecutorService:
                 updated.append({'position_id': position.position_id, 'mark_price': mark})
 
                 tp_exchange_id = meta.get('tp_exchange_order_id')
-                tp_status = self.binance.get_order(symbol, tp_exchange_id) if tp_exchange_id else None
+                tp_status = self.kraken.get_order(symbol, tp_exchange_id) if tp_exchange_id else None
 
                 if tp_status and str(tp_status.get('status', '')).upper() == 'FILLED':
                     fill_price = float(tp_status.get('price') or position.target_price or mark)

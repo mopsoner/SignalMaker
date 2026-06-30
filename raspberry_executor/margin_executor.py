@@ -175,7 +175,7 @@ def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: di
     return "token_collateral_retry_scheduled"
 
 
-def process_candidate(settings, binance, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict, *, from_queue: bool = False) -> str:
+def process_candidate(settings, kraken, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict, *, from_queue: bool = False) -> str:
     ensure_candidate_visible(candidate)
     candidate_id = candidate.get("candidate_id")
     if not candidate_id:
@@ -278,7 +278,7 @@ def process_candidate(settings, binance, rules, manager: MarginOrderManager, spo
     return "opened"
 
 
-def process_pending(settings, binance, rules, manager, spot_manager, state, guard) -> dict:
+def process_pending(settings, kraken, rules, manager, spot_manager, state, guard) -> dict:
     stats = {"pending_checked": 0, "pending_retried": 0, "pending_waiting_cooldown": 0, "pending_opened": 0, "pending_errors": 0, "pending_dropped": 0}
     cooldown = token_limit_retry_seconds()
     max_attempts = token_limit_max_attempts()
@@ -301,7 +301,7 @@ def process_pending(settings, binance, rules, manager, spot_manager, state, guar
             stats["pending_waiting_cooldown"] += 1
             continue
         stats["pending_retried"] += 1
-        result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, item["candidate"], from_queue=True)
+        result = process_candidate(settings, kraken, rules, manager, spot_manager, state, guard, item["candidate"], from_queue=True)
         if result in {"opened", "opened_needs_tp_replay", "sold"}:
             stats["pending_opened"] += 1
         elif result == "error":
@@ -314,19 +314,19 @@ def main() -> None:
     if not margin_enabled():
         logger.warning("margin executor started while MARGIN_MODE_ENABLED is false")
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance, margin, rules = create_margin_exchange(settings, isolated=margin_isolated(), dry_run=margin_dry_run())
-    manager = MarginOrderManager(binance, margin, rules)
-    spot_manager = SpotOrderManager(binance, rules)
+    kraken, margin, rules = create_margin_exchange(settings, isolated=margin_isolated(), dry_run=margin_dry_run())
+    manager = MarginOrderManager(kraken, margin, rules)
+    spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", getattr(binance, "exchange_name", "binance"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
+    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", getattr(kraken, "exchange_name", "kraken"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
             stats = {"fetched": len(candidates), "opened": 0, "opened_needs_tp_replay": 0, "sold": 0, "errors": 0, "margin_unavailable": 0, "duplicate_signal": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0, "simulated_dry_run": 0}
             for candidate in candidates:
-                result = process_candidate(settings, binance, rules, manager, spot_manager, state, guard, candidate)
+                result = process_candidate(settings, kraken, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
                 elif result == "opened_needs_tp_replay": stats["opened_needs_tp_replay"] += 1
                 elif result == "sold": stats["sold"] += 1
@@ -338,7 +338,7 @@ def main() -> None:
                 elif result == "token_collateral_retry_scheduled": stats["token_collateral_retry_scheduled"] += 1
                 elif result == "simulated_dry_run": stats["simulated_dry_run"] += 1
                 else: stats["skipped"] += 1
-            pending_stats = process_pending(settings, binance, rules, manager, spot_manager, state, guard)
+            pending_stats = process_pending(settings, kraken, rules, manager, spot_manager, state, guard)
             logger.info("margin executor summary=%s pending=%s", stats, pending_stats)
         except Exception as exc:
             logger.error("margin executor loop error=%s", str(exc))

@@ -147,12 +147,12 @@ def momentum_dust_value() -> float:
         return 5.0
 
 
-def _track_momentum_position(candidate_id: str, position: dict, symbol: str, binance, rules, state, margin=None) -> bool:
+def _track_momentum_position(candidate_id: str, position: dict, symbol: str, kraken, rules, state, margin=None) -> bool:
     qty = _float(position.get("quantity"))
     entry = _float(position.get("entry_price"))
     side = str(position.get("side") or "long").lower()
     try:
-        mark = binance.current_price(symbol)
+        mark = kraken.current_price(symbol)
     except Exception as exc:
         state.update_open_position(candidate_id, {"position_tracker": "momentum", "mark_price_error": str(exc)})
         logger.warning("momentum mark lookup failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
@@ -160,7 +160,7 @@ def _track_momentum_position(candidate_id: str, position: dict, symbol: str, bin
 
     pnl = ((mark - entry) * qty) if side != "short" else ((entry - mark) * qty)
     updates = {"position_tracker": "momentum", "strategy": position.get("strategy") or "momentum_rotation", "mark_price": mark, "unrealized_pnl": pnl, "last_position_sync_ts": time.time()}
-    if not binance.dry_run:
+    if not kraken.dry_run:
         try:
             base = rules.base_asset(symbol)
             use_margin = _is_margin_position(position)
@@ -168,7 +168,7 @@ def _track_momentum_position(candidate_id: str, position: dict, symbol: str, bin
                 available_base = margin.margin_free_balance(symbol, base)
                 balance_source = "margin"
             else:
-                available_base = binance.free_balance(base)
+                available_base = kraken.free_balance(base)
                 balance_source = "spot"
             value = available_base * mark
             updates.update({"base_asset": base, "available_base_balance": available_base, "available_base_value": value, "balance_source": balance_source})
@@ -190,13 +190,13 @@ def _track_momentum_position(candidate_id: str, position: dict, symbol: str, bin
     return False
 
 
-def _order(binance, margin, symbol, order_id, *, use_margin: bool):
+def _order(kraken, margin, symbol, order_id, *, use_margin: bool):
     if not order_id:
         return None
     try:
         if use_margin:
             return margin.get_margin_order(symbol, order_id)
-        return binance.get_order(symbol, order_id)
+        return kraken.get_order(symbol, order_id)
     except Exception as exc:
         return {"orderId": order_id, "sync_error": str(exc)}
 
@@ -210,10 +210,10 @@ def _levels(position, symbol):
     return None
 
 
-def _fallback_levels(binance, symbol: str, position: dict) -> dict | None:
-    if not tp_fallback_enabled() or binance is None:
+def _fallback_levels(kraken, symbol: str, position: dict) -> dict | None:
+    if not tp_fallback_enabled() or kraken is None:
         return None
-    current = float(binance.current_price(symbol))
+    current = float(kraken.current_price(symbol))
     tp_pct = tp_fallback_pct()
     side = str(position.get("side") or "long").lower()
     if side == "short":
@@ -221,12 +221,12 @@ def _fallback_levels(binance, symbol: str, position: dict) -> dict | None:
     return {"target_price": current * (1.0 + tp_pct), "source": "fallback_current_price_tp", "current_price": current, "tp_pct": tp_pct}
 
 
-def _available_base_balance(binance, margin, rules, symbol: str, *, use_margin: bool) -> float | None:
+def _available_base_balance(kraken, margin, rules, symbol: str, *, use_margin: bool) -> float | None:
     base = rules.base_asset(symbol)
     try:
         if use_margin:
             return float(margin.margin_free_balance(symbol, base))
-        return float(binance.free_balance(base))
+        return float(kraken.free_balance(base))
     except Exception:
         return None
 
@@ -264,26 +264,26 @@ def _is_tp_order(order: dict) -> bool:
     return str(order.get("side") or "").upper() == "SELL" and order_type in {"LIMIT", "LIMIT_MAKER"}
 
 
-def _list_open_orders(binance, margin, symbol: str, *, use_margin: bool) -> list[dict]:
+def _list_open_orders(kraken, margin, symbol: str, *, use_margin: bool) -> list[dict]:
     try:
         if use_margin:
             return margin.open_margin_orders(symbol)
-        return binance.open_orders(symbol)
+        return kraken.open_orders(symbol)
     except Exception as exc:
         logger.warning("open orders lookup failed symbol=%s use_margin=%s error=%s", symbol, use_margin, str(exc))
         return []
 
 
-def _ghost_check(candidate_id: str, position: dict, symbol: str, binance, margin, rules, state, *, use_margin: bool) -> bool:
-    if not auto_close_ghost_positions() or binance.dry_run:
+def _ghost_check(candidate_id: str, position: dict, symbol: str, kraken, margin, rules, state, *, use_margin: bool) -> bool:
+    if not auto_close_ghost_positions() or kraken.dry_run:
         return False
     entry_id = position.get("entry_order_id")
-    entry_payload = _order(binance, margin, symbol, entry_id, use_margin=use_margin) if entry_id else None
+    entry_payload = _order(kraken, margin, symbol, entry_id, use_margin=use_margin) if entry_id else None
     entry_missing = (not entry_id) or _is_not_found_error(entry_payload)
     entry_status = _status(entry_payload)
     entry_live = bool(entry_status and entry_status not in {"CANCELED", "REJECTED", "EXPIRED"} and not _has_sync_error(entry_payload))
-    open_orders = _list_open_orders(binance, margin, symbol, use_margin=use_margin)
-    available_base = _available_base_balance(binance, margin, rules, symbol, use_margin=use_margin)
+    open_orders = _list_open_orders(kraken, margin, symbol, use_margin=use_margin)
+    available_base = _available_base_balance(kraken, margin, rules, symbol, use_margin=use_margin)
     has_base = available_base is not None and available_base > ghost_base_epsilon()
     if entry_missing and not entry_live and not open_orders and not has_base:
         payload = {"symbol": symbol, "mode": position.get("mode"), "reason": "no_entry_order_no_open_orders_no_base_balance", "entry_order_id": entry_id, "entry_lookup": entry_payload, "available_base": available_base, "open_orders_count": len(open_orders), "position": position}
@@ -293,11 +293,11 @@ def _ghost_check(candidate_id: str, position: dict, symbol: str, binance, margin
     return False
 
 
-def _attach_existing_take_profit(candidate_id, position, symbol, binance, margin, state, *, use_margin: bool) -> bool:
+def _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin, state, *, use_margin: bool) -> bool:
     expected_qty = _float(position.get("quantity"))
     if expected_qty <= 0:
         return False
-    open_orders = _list_open_orders(binance, margin, symbol, use_margin=use_margin)
+    open_orders = _list_open_orders(kraken, margin, symbol, use_margin=use_margin)
     if not open_orders:
         return False
     min_required = expected_qty * 0.02
@@ -377,7 +377,7 @@ def _place_take_profit(use_margin: bool, spot_manager, margin_manager, *, symbol
     return spot_manager.create_exit_take_profit_for_open_long(symbol=symbol, quantity=quantity, target_price=target_price)
 
 
-def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=None, rules=None):
+def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=None, rules=None):
     if _is_replay_blocked(position):
         return "blocked"
     side = str(position.get("side") or "long").lower()
@@ -386,7 +386,7 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
     levels = _levels(position, symbol)
     if not levels:
         try:
-            levels = _fallback_levels(binance, symbol, position)
+            levels = _fallback_levels(kraken, symbol, position)
         except Exception as exc:
             levels = None
             fallback_error = str(exc)
@@ -406,20 +406,20 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
         return "missing_quantity"
 
     use_margin = _is_margin_position(position)
-    if binance is not None:
-        if _attach_existing_take_profit(candidate_id, position, symbol, binance, margin_manager.margin, state, use_margin=use_margin):
+    if kraken is not None:
+        if _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin_manager.margin, state, use_margin=use_margin):
             return "attached_existing_tp"
 
     entry_payload = position.get("entry_payload") if isinstance(position.get("entry_payload"), dict) else {}
-    if binance is not None and position.get("entry_order_id"):
-        fetched = _order(binance, margin_manager.margin, symbol, position.get("entry_order_id"), use_margin=use_margin)
+    if kraken is not None and position.get("entry_order_id"):
+        fetched = _order(kraken, margin_manager.margin, symbol, position.get("entry_order_id"), use_margin=use_margin)
         if fetched and not _has_sync_error(fetched):
             entry_payload = fetched
     original_qty = _entry_executed_quantity(entry_payload, quantity)
 
     available = None
-    if binance is not None and rules is not None:
-        available = _available_base_balance(binance, margin_manager.margin, rules, symbol, use_margin=use_margin)
+    if kraken is not None and rules is not None:
+        available = _available_base_balance(kraken, margin_manager.margin, rules, symbol, use_margin=use_margin)
     qty_ok, base_qty, qty_reason = _repair_quantity({**position, "quantity": original_qty}, available)
     if not qty_ok:
         payload = {"symbol": symbol, "mode": position.get("mode"), "reason": qty_reason, "entry_order_id": position.get("entry_order_id"), "entry_payload": entry_payload, "available_base": available, "levels": levels}
@@ -472,8 +472,8 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
     return "failed"
 
 
-def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=None, rules=None):
-    return _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=binance, rules=rules)
+def _repair(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=None, rules=None):
+    return _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
 
 
 def _handle_filled_take_profit(candidate_id: str, position: dict, tp: dict, state) -> str:
@@ -498,8 +498,8 @@ def _handle_filled_take_profit(candidate_id: str, position: dict, tp: dict, stat
 
 def sync_open_positions():
     settings = load_settings()
-    binance, default_margin, rules = create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
-    spot_manager = SpotOrderManager(binance, rules)
+    kraken, default_margin, rules = create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
+    spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     checked = closed = missing_tp = replayed_tp = attached_existing = replay_skipped = replay_blocked = ghost_removed = momentum_tracked = partial_filled = 0
 
@@ -514,16 +514,16 @@ def sync_open_positions():
             margin = default_margin
         else:
             _, margin, _ = create_margin_exchange(settings, isolated=_is_isolated_position(position), dry_run=margin_dry_run())
-        margin_manager = MarginOrderManager(binance, margin, rules)
+        margin_manager = MarginOrderManager(kraken, margin, rules)
 
         if _is_momentum_position(candidate_id, position):
-            if _track_momentum_position(candidate_id, position, symbol, binance, rules, state, margin=margin):
+            if _track_momentum_position(candidate_id, position, symbol, kraken, rules, state, margin=margin):
                 closed += 1
             else:
                 momentum_tracked += 1
             continue
 
-        if _ghost_check(candidate_id, position, symbol, binance, margin, rules, state, use_margin=use_margin):
+        if _ghost_check(candidate_id, position, symbol, kraken, margin, rules, state, use_margin=use_margin):
             ghost_removed += 1
             continue
 
@@ -531,7 +531,7 @@ def sync_open_positions():
         if not tp_id:
             missing_tp += 1
             try:
-                replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, binance=binance, rules=rules)
+                replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
             except Exception as exc:
                 replay_skipped += 1
                 state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
@@ -547,8 +547,8 @@ def sync_open_positions():
                 replay_skipped += 1
             continue
 
-        tp = _order(binance, margin, symbol, tp_id, use_margin=use_margin)
-        state.update_open_position(candidate_id, {"binance_tp_status": tp, "order_monitor_mode": "margin" if use_margin else "spot"})
+        tp = _order(kraken, margin, symbol, tp_id, use_margin=use_margin)
+        state.update_open_position(candidate_id, {"kraken_tp_status": tp, "order_monitor_mode": "margin" if use_margin else "spot"})
         if _status(tp) == "FILLED":
             fill_result = _handle_filled_take_profit(candidate_id, position, tp, state)
             if fill_result == "closed":

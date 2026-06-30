@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 
-from raspberry_executor.binance_client import BinanceClient
+from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.config import load_settings
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_multiplier, shorts_enabled
 from raspberry_executor.signalmaker_client import SignalMakerClient
@@ -137,7 +137,7 @@ def position_strategy(candidate_id: str, row: dict) -> str:
 
 
 def enrich_positions_with_pnl(positions, settings):
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run or margin_dry_run())
+    kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run or margin_dry_run())
     enriched = []
     total_pnl = 0.0
     total_ok = True
@@ -151,7 +151,7 @@ def enrich_positions_with_pnl(positions, settings):
         entry = _float(pos.get("entry_price"))
         try:
             if symbol not in price_cache:
-                price_cache[symbol] = binance.current_price(symbol)
+                price_cache[symbol] = kraken.current_price(symbol)
             mark = price_cache[symbol]
             pnl = (mark - entry) * qty if side == "long" else (entry - mark) * qty
             pos["mark_price"] = mark

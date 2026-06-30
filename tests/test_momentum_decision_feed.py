@@ -22,7 +22,7 @@ class FakeRules:
         return f"{notional / price:.8f}"
 
 
-class FakeBinance:
+class FakeKraken:
     dry_run = False
 
     def __init__(self, *, quote_balances: list[float] | None = None, base_balance: float = 0.0) -> None:
@@ -62,9 +62,9 @@ def test_buy_waits_for_post_sell_quote_balance_before_no_cash_log(tmp_path, monk
     monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", "4")
     monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", "0.2")
     state = StateStore()
-    binance = FakeBinance(quote_balances=[0.0, 0.0, 12.0, 12.0])
+    kraken = FakeKraken(quote_balances=[0.0, 0.0, 12.0, 12.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
 
     assert result.startswith("bought:ALLUSDC"), result
     assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
@@ -77,9 +77,9 @@ def test_buy_symbol_keeps_confirmed_quote_when_next_account_read_is_stale(tmp_pa
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", "3")
     state = StateStore()
-    binance = FakeBinance(quote_balances=[0.0, 12.0, 0.0])
+    kraken = FakeKraken(quote_balances=[0.0, 12.0, 0.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
 
     assert result == "bought:ALLUSDC:qty=12.00000000:notional=12.0000"
     assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
@@ -90,12 +90,12 @@ def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     state = StateStore()
-    binance = FakeBinance(quote_balances=[35.0])
+    kraken = FakeKraken(quote_balances=[35.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
     assert result == "bought:ALLUSDC:qty=35.00000000:notional=35.0000"
-    assert binance.orders[0]["executedQty"] == "35.00000000"
+    assert kraken.orders[0]["executedQty"] == "35.00000000"
     assert state.open_positions()["momentum-ALLUSDC"]["notional_used"] == 35.0
 
 
@@ -105,12 +105,12 @@ def test_buy_symbol_can_keep_fixed_order_quote_when_full_quote_disabled(tmp_path
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     state = StateStore()
-    binance = FakeBinance(quote_balances=[35.0])
+    kraken = FakeKraken(quote_balances=[35.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
     assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
-    assert binance.orders[0]["executedQty"] == "10.00000000"
+    assert kraken.orders[0]["executedQty"] == "10.00000000"
 
 
 def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
@@ -125,8 +125,8 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
         dry_run = False
         isolated = False
 
-        def __init__(self, binance, *, isolated: bool, dry_run: bool) -> None:
-            self.binance = binance
+        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+            self.kraken = kraken
             self.isolated = isolated
             self.dry_run = dry_run
             self.orders = []
@@ -155,12 +155,12 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
 
     monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
     state = StateStore()
-    binance = FakeBinance(quote_balances=[35.0])
+    kraken = FakeKraken(quote_balances=[35.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
     assert result == "bought_cross_margin:ALLUSDC:qty=10.00000000:notional=10.0000"
-    assert binance.orders == []
+    assert kraken.orders == []
     assert instances[0].orders[0]["type"] == "MARKET"
     position = state.open_positions()["momentum-ALLUSDC"]
     assert position["mode"] == "cross_margin"
@@ -181,8 +181,8 @@ def test_cross_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_pa
         dry_run = False
         isolated = False
 
-        def __init__(self, binance, *, isolated: bool, dry_run: bool) -> None:
-            self.binance = binance
+        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+            self.kraken = kraken
             self.isolated = isolated
             self.dry_run = dry_run
             self.orders = []
@@ -211,9 +211,9 @@ def test_cross_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_pa
 
     monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
     state = StateStore()
-    binance = FakeBinance(quote_balances=[7.0])
+    kraken = FakeKraken(quote_balances=[7.0])
 
-    result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
     assert result == "bought_cross_margin:ALLUSDC:qty=7.00000000:notional=7.0000"
     assert instances[0].orders[0]["quantity"] == "7.00000000"
@@ -231,8 +231,8 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
         dry_run = False
         isolated = False
 
-        def __init__(self, binance, *, isolated: bool, dry_run: bool) -> None:
-            self.binance = binance
+        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+            self.kraken = kraken
             self.isolated = isolated
             self.dry_run = dry_run
             self.base_balance = 10.0
@@ -264,12 +264,12 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
     monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
     state = StateStore()
     state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
-    binance = FakeBinance(quote_balances=[0.0], base_balance=0.0)
+    kraken = FakeKraken(quote_balances=[0.0], base_balance=0.0)
 
-    result = sell_symbol(binance, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
+    result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
 
     assert result.startswith("sell_confirmed_cross_margin:BANKUSDC"), result
-    assert binance.orders == []
+    assert kraken.orders == []
     assert instances[0].orders[0]["side"] == "SELL"
     assert state.open_positions() == {}
     sold_event = state.events()[-1]
@@ -279,21 +279,21 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
 
 def test_rotate_sells_cross_margin_position_before_forced_cross_margin_buy(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
     state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
     calls = []
 
     monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
-    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[0.0], base_balance=0.0))
-    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[0.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
 
-    def fake_sell(binance, rules, store, symbol, decision, *, require_confirmed: bool = True):
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
         calls.append(("sell", symbol, bool(decision.get("force_cross_margin")), list(store.open_positions())))
         store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
         return "sell_confirmed_cross_margin:BANKUSDC:remaining_value=0.0000:quote=25.0000"
 
-    def fake_buy(settings_arg, binance, rules, store, decision, *, exclude=None):
+    def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
         calls.append(("buy", decision.get("buy_symbol"), bool(decision.get("force_cross_margin")), list(store.open_positions())))
         return "fallback_buy:ALLUSDC:bought_cross_margin:ALLUSDC:qty=25.00000000:notional=25.0000"
 
@@ -329,21 +329,21 @@ def test_build_decision_rotate_includes_sell_before_buy_order_sequence(tmp_path,
 
 def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
     state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.2})
     calls = []
 
     monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
-    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[0.0], base_balance=0.0))
-    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[0.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
 
-    def fake_sell(binance, rules, store, symbol, decision, *, require_confirmed: bool = True):
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
         calls.append(("sell", symbol, decision["action"], decision["order_sequence"], list(store.open_positions())))
         store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
         return "sell_confirmed:BANKUSDC:remaining_value=0.0000:quote=25.0000"
 
-    def fake_buy(settings_arg, binance, rules, store, decision, *, exclude=None):
+    def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
         calls.append(("buy", decision.get("buy_symbol"), decision["action"], decision["order_sequence"], list(store.open_positions())))
         return "fallback_buy:ALLUSDC:bought:ALLUSDC:qty=25.00000000:notional=25.0000"
 
@@ -406,9 +406,9 @@ def test_sell_records_single_realized_sell_event(tmp_path, monkeypatch):
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.time.sleep", lambda _: None)
     state = StateStore()
     state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.2})
-    binance = FakeBinance(quote_balances=[0.0], base_balance=10.0)
+    kraken = FakeKraken(quote_balances=[0.0], base_balance=10.0)
 
-    result = sell_symbol(binance, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
+    result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
 
     assert result.startswith("sell_confirmed:BANKUSDC"), result
     event_types = [event["event_type"] for event in state.events()]
@@ -422,15 +422,15 @@ def test_rotation_sell_then_buy_uses_quote_balance_after_sale(tmp_path, monkeypa
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     state = StateStore()
     state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.2})
-    binance = FakeBinance(quote_balances=[0.0], base_balance=10.0)
+    kraken = FakeKraken(quote_balances=[0.0], base_balance=10.0)
 
-    sell_result = sell_symbol(binance, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
-    buy_result = buy_symbol(settings(), binance, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
+    sell_result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
+    buy_result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
 
     assert sell_result.startswith("sell_confirmed:BANKUSDC"), sell_result
     assert buy_result == "bought:ALLUSDC:qty=25.00000000:notional=25.0000"
-    assert [order["symbol"] for order in binance.orders] == ["BANKUSDC", "ALLUSDC"]
-    assert binance.orders[1]["executedQty"] == "25.00000000"
+    assert [order["symbol"] for order in kraken.orders] == ["BANKUSDC", "ALLUSDC"]
+    assert kraken.orders[1]["executedQty"] == "25.00000000"
 
 
 def test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monkeypatch):
@@ -528,13 +528,13 @@ def test_buy_best_available_tries_second_buyable_after_first_failure(tmp_path, m
     ])
     state = StateStore()
 
-    class FirstBuyFailsBinance(FakeBinance):
+    class FirstBuyFailsKraken(FakeKraken):
         def place_market_entry(self, symbol: str, side: str, quantity: str) -> dict:
             if side == "long" and symbol == "BANKUSDC":
                 raise RuntimeError("first candidate rejected")
             return super().place_market_entry(symbol, side, quantity)
 
-    result = buy_best_available(settings(), FirstBuyFailsBinance(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
+    result = buy_best_available(settings(), FirstBuyFailsKraken(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
 
     assert result.startswith("fallback_buy:ALLUSDC:bought:ALLUSDC"), result
     event_types = [event["event_type"] for event in state.events()]
@@ -654,7 +654,7 @@ def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
 
-    result = buy_symbol(settings(), FakeBinance(quote_balances=[20.0]), FakeRules(), state, "BADUSDT", {"action": "BUY"})
+    result = buy_symbol(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, "BADUSDT", {"action": "BUY"})
 
     assert result == "unsupported_quote:BADUSDT:configured=USDC"
     assert [event["event_type"] for event in state.events()] == ["momentum_buy_skipped_unsupported_quote"]
@@ -688,7 +688,7 @@ def test_buy_best_available_does_not_buy_non_buyable_lowest_rsi(tmp_path, monkey
     ])
     state = StateStore()
 
-    result = buy_best_available(settings(), FakeBinance(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
+    result = buy_best_available(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
 
     assert result == "fallback_buy_exhausted:no_candidates"
     assert state.open_positions() == {}
@@ -707,10 +707,10 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setenv("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", "1")
-    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], binance_base_url="https://binance.test", binance_api_key="key", binance_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     balances = iter([0.0, 20.0])
-    monkeypatch.setattr(momentum_module, "BinanceClient", lambda *args, **kwargs: FakeBinance(quote_balances=[next(balances)]))
-    monkeypatch.setattr(momentum_module, "BinanceSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[next(balances)]))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
     monkeypatch.setattr(momentum_module, "fetch_momentum_candidates", lambda limit: [{"symbol": "ALLUSDC", "rank": 1, "momentum_score": 10, "rsi_1h": 50}])
 
     decision = {"action": "BUY", "should_trade": True, "buy_symbol": "ALLUSDC", "symbol": "ALLUSDC"}

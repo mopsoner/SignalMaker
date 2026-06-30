@@ -1,8 +1,8 @@
 import os
 import time
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_settings import margin_multiplier, margin_transfer_spot_balance
 
@@ -12,8 +12,8 @@ def amount_str(value: float) -> str:
 
 
 class MarginOrderManager:
-    def __init__(self, binance: BinanceClient, margin: MarginClient, rules: BinanceSymbolRules) -> None:
-        self.binance = binance
+    def __init__(self, kraken: KrakenClient, margin: MarginClient, rules: KrakenSymbolRules) -> None:
+        self.kraken = kraken
         self.margin = margin
         self.rules = rules
 
@@ -79,7 +79,7 @@ class MarginOrderManager:
 
     @staticmethod
     def _avg_price_from_order(payload: dict, fallback: float) -> float:
-        avg = BinanceClient.average_fill_price(payload, fallback=None)
+        avg = KrakenClient.average_fill_price(payload, fallback=None)
         if avg is not None:
             return float(avg)
         descr = payload.get("descr") if isinstance(payload.get("descr"), dict) else {}
@@ -183,7 +183,7 @@ class MarginOrderManager:
 
     def create_margin_oco_sell(self, *, symbol: str, quantity: float | str, target_price: float, stop_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         if not (float(target_price) > current_price > float(stop_price)):
             raise RuntimeError(f"invalid_margin_oco_price_order symbol={symbol} target={target_price} current={current_price} stop={stop_price}")
         exit_qty = self.rules.normalize_exit_quantity(symbol, quantity)
@@ -199,7 +199,7 @@ class MarginOrderManager:
 
     def create_margin_take_profit_sell(self, *, symbol: str, quantity: float | str, target_price: float) -> dict:
         symbol = symbol.upper()
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         if not (float(target_price) > current_price):
             raise RuntimeError(f"invalid_margin_take_profit_price_order symbol={symbol} target={target_price} current={current_price}")
         exit_qty = self.rules.normalize_exit_quantity(symbol, quantity)
@@ -236,7 +236,7 @@ class MarginOrderManager:
         if total_quote <= 0:
             raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
 
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
         entry_order_id = self._order_id(entry)
@@ -287,7 +287,7 @@ class MarginOrderManager:
         if total_quote <= 0:
             raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} borrow_error={borrow_error} balance_guard={balance_guard}")
 
-        current_price = self.binance.current_price(symbol)
+        current_price = self.kraken.current_price(symbol)
         quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
         entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
         entry_order_id = self._order_id(entry)
@@ -308,7 +308,7 @@ class MarginOrderManager:
         symbol = symbol.upper()
         self.margin.ensure_isolated_account(symbol)
         base = self.rules.base_asset(symbol)
-        price = self.binance.current_price(symbol)
+        price = self.kraken.current_price(symbol)
         qty = self.rules.quantity_from_quote(symbol, float(quote_amount) * max(1.0, margin_multiplier()), price, market=True)
         max_borrow = self.margin.max_borrowable(symbol, base)
         if max_borrow > 0:
@@ -335,7 +335,7 @@ class MarginOrderManager:
         free_qty = self.margin.margin_free_balance(symbol, base)
         if free_qty <= 0:
             return {"status": "skipped", "reason": f"no_margin_free_balance:{base}", "symbol": symbol, "base_asset": base}
-        price = self.binance.current_price(symbol)
+        price = self.kraken.current_price(symbol)
         qty = self.rules.normalize_market_quantity(symbol, free_qty)
         self.rules.ensure_exit_notional(symbol, qty, price, label="margin_sell_on_short")
         order = self.margin.margin_order(symbol, "SELL", qty, "MARKET")

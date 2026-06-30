@@ -94,7 +94,7 @@ def execute_candidate(settings, exchange: Any, state: StateStore, guard: RiskGua
             "tp_payload": tp or {},
             "stop_order_id": _order_id(stop) if stop else None,
             "stop_payload": stop or {},
-            "exchange": getattr(exchange, "exchange_name", getattr(settings, "exchange", "binance")),
+            "exchange": getattr(exchange, "exchange_name", getattr(settings, "exchange", "kraken")),
         })
         logger.info("local position opened candidate=%s symbol=%s qty=%s", candidate_id, execution_symbol, executed_qty)
     except Exception as exc:

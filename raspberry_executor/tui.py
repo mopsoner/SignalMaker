@@ -13,8 +13,8 @@ from typing import Any
 
 BASE_URL = os.getenv("SIGNALMAKER_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 REFRESH_SECONDS = int(os.getenv("SIGNALMAKER_TUI_REFRESH", "10") or "10")
-SECRET_KEYS = {"binance_api_key", "binance_secret_key", "kraken_api_key", "kraken_secret_key", "telegram_secret", "discord_url"}
-SECTIONS = ["general", "executor", "binance", "kraken", "market_data", "live", "bot", "momentum", "notifications"]
+SECRET_KEYS = {"kraken_api_key", "kraken_secret_key", "kraken_api_key", "kraken_secret_key", "telegram_secret", "discord_url"}
+SECTIONS = ["general", "executor", "kraken", "kraken", "market_data", "live", "bot", "momentum", "notifications"]
 
 MENU = [
     ("Status / Health", "status"), ("Services / Workers", "services"), ("Assets", "assets"),

@@ -4,20 +4,20 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SignalMaker Raspberry Executor - Logs / Ops</title>
-    <meta name="description" content="Workers, services, logs, smoke tests et diagnostics Kraken/Binance.">
+    <meta name="description" content="Workers, services, logs, smoke tests et diagnostics Kraken/Kraken.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <h1>Logs / Ops</h1>
-      <p>Workers, services, logs, smoke tests et diagnostics Kraken/Binance.</p>
+      <p>Workers, services, logs, smoke tests et diagnostics Kraken/Kraken.</p>
       <nav data-main-nav></nav>
     </header>
     <main>
       <section class="card"><h2>API</h2><p id="health" class="muted">Chargement...</p><button data-action="run-executor">Run executor une fois</button><p id="executor-run-result" class="muted"></p></section>
       <section class="card"><h2>Workers contrôlables</h2><div id="ops-action-result" class="muted"></div><div id="workers-content" class="muted">Chargement...</div></section>
       <section class="card"><h2>Services API</h2><div id="services-content" class="muted">Chargement...</div></section>
-      <section class="card"><h2>Diagnostics</h2><button data-action="test-binance">Tester Binance</button> <button data-action="test-kraken">Tester Kraken</button> <button data-action="test-notifications">Tester notifications</button> <button class="danger" data-action="reset-database">Reset database runtime</button><p id="admin-action-result" class="muted"></p></section>
+      <section class="card"><h2>Diagnostics</h2><button data-action="test-kraken">Tester Kraken</button> <button data-action="test-kraken">Tester Kraken</button> <button data-action="test-notifications">Tester notifications</button> <button class="danger" data-action="reset-database">Reset database runtime</button><p id="admin-action-result" class="muted"></p></section>
       <section class="card"><h2>Derniers fills</h2><div id="fills-content" class="muted">Chargement...</div></section>
       <section class="card"><h2>Logs executor</h2><div id="logs-content" class="muted">Chargement...</div></section>
     </main>

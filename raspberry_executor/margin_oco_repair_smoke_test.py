@@ -4,8 +4,8 @@ import tempfile
 from pathlib import Path
 
 from raspberry_executor import sqlite_db
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.margin_client import MarginClient
@@ -64,8 +64,8 @@ def main() -> int:
         original_db_path = sqlite_db.DB_PATH
         sqlite_db.DB_PATH = Path(tmp) / "raspberry_executor_smoke.db"
         try:
-            client = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=True)
-            rules = BinanceSymbolRules(settings.binance_base_url)
+            client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
+            rules = KrakenSymbolRules(settings.kraken_base_url)
             spot_manager = SpotOrderManager(client, rules)
             margin = MarginClient(client, isolated=False, dry_run=True)
             margin_manager = MarginOrderManager(client, margin, rules)

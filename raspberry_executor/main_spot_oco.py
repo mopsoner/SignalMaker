@@ -1,8 +1,8 @@
 import os
 import time
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.risk_guard import RiskGuard
@@ -36,22 +36,22 @@ def oco_repair_max_legs() -> int:
         return 10
 
 
-def sell_spot_balance_for_short(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, candidate: dict, execution_symbol: str) -> None:
+def sell_spot_balance_for_short(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, candidate: dict, execution_symbol: str) -> None:
     candidate_id = candidate["candidate_id"]
     try:
         base_asset = rules.base_asset(execution_symbol)
-        free_qty = binance.free_balance(base_asset)
+        free_qty = kraken.free_balance(base_asset)
         if free_qty <= 0:
             reason = f"no_free_balance:{base_asset}"
             logger.info("skip candidate=%s reason=%s", candidate_id, reason)
             state.add_event(candidate_id, "candidate_skipped", {"reason": reason, "candidate": candidate})
             state.mark_executed(candidate_id)
             return
-        price = binance.current_price(execution_symbol)
+        price = kraken.current_price(execution_symbol)
         qty = rules.normalize_market_quantity(execution_symbol, free_qty)
         rules.ensure_exit_notional(execution_symbol, qty, price, label="spot_sell_on_short")
         logger.info("sell spot balance on short candidate=%s symbol=%s base=%s qty=%s", candidate_id, execution_symbol, base_asset, qty)
-        order = binance.place_market_entry(execution_symbol, "short", qty)
+        order = kraken.place_market_entry(execution_symbol, "short", qty)
         state.mark_executed(candidate_id)
         state.add_event(candidate_id, "spot_balance_sold_on_short", {
             "symbol": execution_symbol,
@@ -69,7 +69,7 @@ def sell_spot_balance_for_short(binance: BinanceClient, rules: BinanceSymbolRule
 
 
 def validate_oco_repair_quantity(
-    rules: BinanceSymbolRules,
+    rules: KrakenSymbolRules,
     *,
     symbol: str,
     raw_qty: float,
@@ -87,7 +87,7 @@ def validate_oco_repair_quantity(
 
 
 def choose_oco_repair_quantity(
-    rules: BinanceSymbolRules,
+    rules: KrakenSymbolRules,
     *,
     symbol: str,
     base_asset: str,
@@ -141,7 +141,7 @@ def choose_oco_repair_quantity(
         raise DustRemaining(symbol=symbol, base_asset=base_asset, free_qty=free_qty, last_error=exc) from exc
 
 
-def repair_missing_oco(binance: BinanceClient, rules: BinanceSymbolRules, order_manager: SpotOrderManager, state: StateStore) -> None:
+def repair_missing_oco(kraken: KrakenClient, rules: KrakenSymbolRules, order_manager: SpotOrderManager, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         side = str(position.get("side") or "").lower()
         if side != "long":
@@ -171,7 +171,7 @@ def repair_missing_oco(binance: BinanceClient, rules: BinanceSymbolRules, order_
         max_legs = oco_repair_max_legs()
 
         for leg_index in range(len(repaired_legs) + 1, max_legs + 1):
-            free_qty = binance.free_balance(base_asset)
+            free_qty = kraken.free_balance(base_asset)
             try:
                 quantity_choice = choose_oco_repair_quantity(
                     rules,
@@ -282,7 +282,7 @@ def repair_missing_oco(binance: BinanceClient, rules: BinanceSymbolRules, order_
             state.add_event(candidate_id, "oco_repair_max_legs_reached", {"symbol": symbol, "max_legs": max_legs, "repaired_legs": repaired_legs})
 
 
-def report_final_events(binance: BinanceClient, state: StateStore) -> None:
+def report_final_events(kraken: KrakenClient, state: StateStore) -> None:
     for candidate_id, position in list(state.open_positions().items()):
         symbol = position["execution_symbol"]
         tp_order_id = position.get("tp_order_id")
@@ -290,8 +290,8 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
         if not tp_order_id or not sl_order_id:
             continue
         try:
-            tp_status = binance.get_order(symbol, tp_order_id) if tp_order_id else None
-            sl_status = binance.get_order(symbol, sl_order_id) if sl_order_id else None
+            tp_status = kraken.get_order(symbol, tp_order_id) if tp_order_id else None
+            sl_status = kraken.get_order(symbol, sl_order_id) if sl_order_id else None
         except Exception as exc:
             logger.warning("order status failed candidate=%s error=%s", candidate_id, str(exc))
             continue
@@ -304,7 +304,7 @@ def report_final_events(binance: BinanceClient, state: StateStore) -> None:
             logger.info("local position closed candidate=%s reason=stop_loss_filled", candidate_id)
 
 
-def execute_candidate(settings, binance: BinanceClient, rules: BinanceSymbolRules, order_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
+def execute_candidate(settings, kraken: KrakenClient, rules: KrakenSymbolRules, order_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict) -> None:
     candidate_id = candidate["candidate_id"]
     accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
     if not accepted:
@@ -315,7 +315,7 @@ def execute_candidate(settings, binance: BinanceClient, rules: BinanceSymbolRule
     execution_symbol = guard.execution_symbol(candidate)
     side = guard.normalize_side(str(candidate["side"]))
     if side == "short":
-        sell_spot_balance_for_short(binance, rules, state, candidate, execution_symbol)
+        sell_spot_balance_for_short(kraken, rules, state, candidate, execution_symbol)
         return
 
     try:
@@ -355,9 +355,9 @@ def execute_candidate(settings, binance: BinanceClient, rules: BinanceSymbolRule
 def main() -> None:
     settings = load_settings()
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
-    rules = BinanceSymbolRules(settings.binance_base_url)
-    order_manager = SpotOrderManager(binance, rules)
+    kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
+    rules = KrakenSymbolRules(settings.kraken_base_url)
+    order_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     fetch_limit = candidate_fetch_limit()
@@ -375,9 +375,9 @@ def main() -> None:
             candidates = signalmaker.get_open_candidates(limit=fetch_limit)
             logger.info("candidates fetched count=%s ids=%s", len(candidates), [c.get("candidate_id") for c in candidates])
             for candidate in candidates:
-                execute_candidate(settings, binance, rules, order_manager, state, guard, candidate)
-            repair_missing_oco(binance, rules, order_manager, state)
-            report_final_events(binance, state)
+                execute_candidate(settings, kraken, rules, order_manager, state, guard, candidate)
+            repair_missing_oco(kraken, rules, order_manager, state)
+            report_final_events(kraken, state)
         except Exception as exc:
             logger.error("main loop error=%s", str(exc))
         time.sleep(settings.poll_seconds)

@@ -12,7 +12,7 @@ from raspberry_executor.state import StateStore
 def _header_status_html() -> str:
     values = read_env()
     remote = escape(values.get("SIGNALMAKER_BASE_URL", "not configured"))
-    exchange = escape(values.get("EXECUTION_EXCHANGE", values.get("EXCHANGE", "kraken/binance")))
+    exchange = escape(values.get("EXECUTION_EXCHANGE", values.get("EXCHANGE", "kraken/kraken")))
     candle = "enabled" if values.get("CANDLE_FEED_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"} else "disabled"
     executor = "dry-run" if values.get("DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"} else "live"
     return f'<div class="box"><b>Remote SignalMaker URL:</b> {remote} &nbsp; <b>Local exchange:</b> {exchange} &nbsp; <b>Mode:</b> device executor &nbsp; <b>Candle feed status:</b> {candle} &nbsp; <b>Executor status:</b> {executor}</div>'
@@ -164,10 +164,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 ("MAX_CANDIDATE_AGE_SECONDS", "Max candidate age seconds", "number"),
                 ("MOMENTUM_BUYABLE_RSI_1H_MIN", "Momentum buyable RSI 1H min", "number"),
                 ("MOMENTUM_BUYABLE_RSI_1H_MAX", "Momentum buyable RSI 1H max", "number"),
-                ("EXECUTION_EXCHANGE", "Local exchange (binance or kraken)", "text"),
-                ("BINANCE_BASE_URL", "Binance base URL", "text"),
-                ("BINANCE_API_KEY", "Binance API key", "password"),
-                ("BINANCE_SECRET_KEY", "Binance secret key", "password"),
+                ("EXECUTION_EXCHANGE", "Local exchange (kraken or kraken)", "text"),
+                ("KRAKEN_BASE_URL", "Kraken base URL", "text"),
+                ("KRAKEN_API_KEY", "Kraken API key", "password"),
+                ("KRAKEN_SECRET_KEY", "Kraken secret key", "password"),
                 ("KRAKEN_BASE_URL", "Kraken base URL", "text"),
                 ("KRAKEN_API_KEY", "Kraken API key", "password"),
                 ("KRAKEN_SECRET_KEY", "Kraken secret key", "password"),

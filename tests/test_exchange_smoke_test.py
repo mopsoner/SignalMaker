@@ -8,6 +8,6 @@ def test_probe_symbol_uses_kraken_quote_asset():
     assert exchange_smoke_test._probe_symbol(settings, "kraken") == "BTCUSDC"
 
 
-def test_probe_symbol_defaults_binance_to_btcusdt():
+def test_probe_symbol_defaults_kraken_to_btcusdt():
     settings = SimpleNamespace(quote_assets=["USDT"])
-    assert exchange_smoke_test._probe_symbol(settings, "binance") == "BTCUSDT"
+    assert exchange_smoke_test._probe_symbol(settings, "kraken") == "BTCUSDT"

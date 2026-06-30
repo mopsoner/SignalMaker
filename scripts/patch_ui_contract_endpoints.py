@@ -50,7 +50,7 @@ text = text.replace(
     "Settings are saved to .env and SQLite. Restart after changing trading settings.",
 )
 text = text.replace(
-    "Reset local tracking only: positions, executed candidates, events and pending queue. Binance assets and orders are not modified.",
+    "Reset local tracking only: positions, executed candidates, events and pending queue. Kraken assets and orders are not modified.",
     "Reset local runtime data only: positions, executed candidates, events, pending queue, local candidates and feed history. Settings are preserved.",
 )
 text = text.replace(

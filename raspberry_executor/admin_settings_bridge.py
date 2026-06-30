@@ -79,7 +79,7 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
 
     live = payload.get("live") or {}
     executor = payload.get("executor") or {}
-    binance = payload.get("binance") or {}
+    kraken = payload.get("kraken") or {}
     kraken = payload.get("kraken") or {}
     market_data = payload.get("market_data") or {}
 
@@ -94,7 +94,7 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
     if live.get("live_max_notional_per_trade") not in (None, ""):
         os.environ["ORDER_QUOTE_AMOUNT"] = str(live.get("live_max_notional_per_trade"))
 
-    quote_assets = executor.get("quote_assets") or executor.get("QUOTE_ASSETS") or market_data.get("binance_quote_assets") or binance.get("binance_quote_assets")
+    quote_assets = executor.get("quote_assets") or executor.get("QUOTE_ASSETS") or market_data.get("kraken_quote_assets") or kraken.get("kraken_quote_assets")
     if quote_assets:
         os.environ["QUOTE_ASSETS"] = str(quote_assets)
 
@@ -110,10 +110,10 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
     if _secret_present(kraken_secret_key):
         os.environ["KRAKEN_SECRET_KEY"] = str(kraken_secret_key)
 
-    if _bool(live.get("binance_use_testnet"), default=False) and live.get("binance_testnet_rest_base"):
-        os.environ["BINANCE_BASE_URL"] = str(live.get("binance_testnet_rest_base")).rstrip("/")
-    elif binance.get("binance_rest_base"):
-        os.environ["BINANCE_BASE_URL"] = str(binance.get("binance_rest_base")).rstrip("/")
+    if _bool(live.get("kraken_use_testnet"), default=False) and live.get("kraken_testnet_rest_base"):
+        os.environ["KRAKEN_BASE_URL"] = str(live.get("kraken_testnet_rest_base")).rstrip("/")
+    elif kraken.get("kraken_rest_base"):
+        os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_rest_base")).rstrip("/")
 
     os.environ.setdefault("EXECUTION_MODE", "cross")
     os.environ.setdefault("MARGIN_MODE_ENABLED", "true")
@@ -127,7 +127,7 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         "quote_assets": os.environ.get("QUOTE_ASSETS"),
         "order_quote_amount": os.environ.get("ORDER_QUOTE_AMOUNT"),
         "shorts_enabled": os.environ.get("SHORTS_ENABLED"),
-        "binance_base_url": os.environ.get("BINANCE_BASE_URL"),
+        "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
         "execution_exchange": os.environ.get("EXECUTION_EXCHANGE"),
         "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
         "kraken_api_key_in_admin_payload": bool(kraken_api_key),

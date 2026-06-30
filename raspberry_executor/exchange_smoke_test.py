@@ -26,13 +26,13 @@ def main() -> int:
     settings = load_settings()
     exchange = exchange_name(settings)
     client, _rules = create_spot_exchange(settings)
-    base_url = settings.kraken_base_url if exchange in {"kraken", "kraken_pro"} else settings.binance_base_url
+    base_url = settings.kraken_base_url if exchange in {"kraken", "kraken_pro"} else settings.kraken_base_url
     result = {
         "exchange": exchange,
         "base_url": base_url,
         "dry_run": True,
-        "api_key_loaded": bool(settings.kraken_api_key if exchange in {"kraken", "kraken_pro"} else settings.binance_api_key),
-        "secret_key_loaded": bool(settings.kraken_secret_key if exchange in {"kraken", "kraken_pro"} else settings.binance_secret_key),
+        "api_key_loaded": bool(settings.kraken_api_key if exchange in {"kraken", "kraken_pro"} else settings.kraken_api_key),
+        "secret_key_loaded": bool(settings.kraken_secret_key if exchange in {"kraken", "kraken_pro"} else settings.kraken_secret_key),
         "quote_assets": settings.quote_assets,
         "checks": [],
     }

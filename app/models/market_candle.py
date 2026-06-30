@@ -27,7 +27,7 @@ class MarketCandle(Base):
     number_of_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     taker_buy_base_volume: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     taker_buy_quote_volume: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="BINANCE")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="KRAKEN")
     asset_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
     provider_symbol: Mapped[str | None] = mapped_column(String(64), nullable=True)
     asset_type: Mapped[str | None] = mapped_column(String(32), nullable=True)

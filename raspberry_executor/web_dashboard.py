@@ -69,7 +69,7 @@ def dashboard():
     momentum_html = momentum_summary_box(momentum)
     return f"""
     <h1>SignalMaker Raspberry Executor</h1>
-    <div class='box'><b>Connecté à :</b> <code>{c(env.get('SIGNALMAKER_BASE_URL'))}</code> · <b>Exchange local :</b> <code>{c(env.get('EXECUTION_EXCHANGE') or 'binance')}</code> · <b>Mode :</b> <code>Device</code></div>
+    <div class='box'><b>Connecté à :</b> <code>{c(env.get('SIGNALMAKER_BASE_URL'))}</code> · <b>Exchange local :</b> <code>{c(env.get('EXECUTION_EXCHANGE') or 'kraken')}</code> · <b>Mode :</b> <code>Device</code></div>
     <div class='grid'>
       <div class='card'><b>Open positions</b><span>{open_count}</span></div>
       <div class='card'><b>Closed positions</b><span>{closed_count}</span></div>
@@ -175,11 +175,11 @@ def candle_feed_page():
     skipped = summary.get("skipped") or []
     errors = summary.get("errors") or []
     retry_rows = list(_retry_queue().values())
-    html = "<h1>Candle Feed</h1><p class='muted'>Raspberry demande la dernière candle au SignalMaker distant, récupère les candles manquantes chez Kraken/Binance, puis pousse vers SignalMaker distant.</p><div class='grid'>"
+    html = "<h1>Candle Feed</h1><p class='muted'>Raspberry demande la dernière candle au SignalMaker distant, récupère les candles manquantes chez Kraken/Kraken, puis pousse vers SignalMaker distant.</p><div class='grid'>"
     for label, value in [("Status", _status_pill(summary.get("status") or latest.get("status") or "never")), ("Last run", c(latest.get("timestamp") or "never")), ("Symbols", c(summary.get("symbol_count") or latest.get("symbol_count") or 0)), ("Pushed", c(len(pushed))), ("Skipped", c(len(skipped))), ("Errors", c(len(errors))), ("Retry queue", c(len(retry_rows))), ("Mode", c(summary.get("execution_mode") or ""))]:
         html += f"<div class='card'><b>{label}</b><span>{value}</span></div>"
     html += "</div><div class='box'><h2>Config</h2>"
-    for key in ["SIGNALMAKER_BASE_URL", "QUOTE_ASSETS", "CANDLE_FEED_ENABLED", "CANDLE_FEED_INTERVALS", "CANDLE_FEED_LIMIT", "CANDLE_FEED_POLL_SECONDS", "CANDLE_FEED_MAX_SYMBOLS", "CANDLE_FEED_MAX_WORKERS", "CANDLE_FEED_BINANCE_REQUESTS_PER_MINUTE", "BINANCE_BASE_URL"]:
+    for key in ["SIGNALMAKER_BASE_URL", "QUOTE_ASSETS", "CANDLE_FEED_ENABLED", "CANDLE_FEED_INTERVALS", "CANDLE_FEED_LIMIT", "CANDLE_FEED_POLL_SECONDS", "CANDLE_FEED_MAX_SYMBOLS", "CANDLE_FEED_MAX_WORKERS", "CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "KRAKEN_BASE_URL"]:
         html += f"<p><b>{c(key)}</b>: <code>{c(env.get(key))}</code></p>"
     html += "</div>"
     html += _simple_table("Last pushed", pushed, ["symbol", "interval", "count", "upserted", "was_retry"])
@@ -211,7 +211,7 @@ def backfill_page():
     latest = runs[0] if runs else {}
     html = "<h1>Backfill</h1><p class='muted'>Backfill historique device: SignalMaker distant expose/stocke le dernier état, le Raspberry récupère des candles historiques chez l'exchange local puis les pousse vers le SignalMaker distant. Lancer avec <code>./run.sh backfill</code>.</p>"
     html += "<div class='grid'>"
-    for label, value in [("Status", _status_pill(latest.get("status") or "never")), ("Dernier run", c(latest.get("completed_at") or "never")), ("Pushed", c(latest.get("pushed") or 0)), ("Chunks", c(latest.get("chunks") or 0)), ("Exchange", c(env.get("EXECUTION_EXCHANGE") or "binance")), ("Quote assets", c(env.get("QUOTE_ASSETS")))]:
+    for label, value in [("Status", _status_pill(latest.get("status") or "never")), ("Dernier run", c(latest.get("completed_at") or "never")), ("Pushed", c(latest.get("pushed") or 0)), ("Chunks", c(latest.get("chunks") or 0)), ("Exchange", c(env.get("EXECUTION_EXCHANGE") or "kraken")), ("Quote assets", c(env.get("QUOTE_ASSETS")))]:
         html += f"<div class='card'><b>{label}</b><span>{value}</span></div>"
     html += "</div><div class='box'><h2>Config</h2>"
     for key in ["SIGNALMAKER_BASE_URL", "EXECUTION_EXCHANGE", "QUOTE_ASSETS", "BACKFILL_4H_ENABLED", "BACKFILL_4H_DAYS", "BACKFILL_4H_MAX_SYMBOLS_PER_RUN", "BACKFILL_4H_MAX_CHUNKS_PER_SYMBOL", "BACKFILL_4H_CHUNK_LIMIT"]:

@@ -8,7 +8,7 @@ from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.state import StateStore
 
 
-class FakeBinance:
+class FakeKraken:
     def __init__(self):
         self.stop_loss_calls = []
         self.exit_limit_calls = []
@@ -61,14 +61,14 @@ def test_risk_guard_accepts_candidate_without_stop_loss():
 def test_raspberry_executor_creates_take_profit_only_position(tmp_path, monkeypatch):
     state = state_store(tmp_path, monkeypatch)
     guard = RiskGuard(["USDT"], max_candidate_age_seconds=3600)
-    binance = FakeBinance()
+    kraken = FakeKraken()
     settings = SimpleNamespace(order_quote_amount=25.0)
 
-    execute_candidate(settings, binance, state, guard, candidate_without_stop())
+    execute_candidate(settings, kraken, state, guard, candidate_without_stop())
 
     position = state.open_positions()["candidate-btc"]
-    assert binance.exit_limit_calls == [{"symbol": "BTCUSDT", "side": "long", "quantity": 0.25, "price": 120.0}]
-    assert binance.stop_loss_calls == []
+    assert kraken.exit_limit_calls == [{"symbol": "BTCUSDT", "side": "long", "quantity": 0.25, "price": 120.0}]
+    assert kraken.stop_loss_calls == []
     assert position["tp_order_id"] == "tp-1"
     assert position["sl_order_id"] is None
     assert position["exit_strategy"] == "take_profit_only"
@@ -88,11 +88,11 @@ def test_raspberry_executor_final_report_checks_take_profit_only(tmp_path, monke
         "sl_order_id": "sl-should-not-be-queried",
         "exit_strategy": "take_profit_only",
     })
-    binance = FakeBinance()
+    kraken = FakeKraken()
 
-    report_final_events(binance, state)
+    report_final_events(kraken, state)
 
-    assert binance.order_queries == [{"symbol": "BTCUSDT", "order_id": "tp-1"}]
+    assert kraken.order_queries == [{"symbol": "BTCUSDT", "order_id": "tp-1"}]
     assert state.open_positions() == {}
     closed = state.closed_positions()
     assert closed[-1]["close_reason"] == "take_profit_filled"

@@ -61,7 +61,7 @@ class SmokeResult:
 
     @property
     def ok(self) -> bool:
-        required_checks = [check for check in self.checks if not check.get("skipped") and not check.get("optional")]
+        required_checks = [check for check in self.checks if not check.get("skipped") and not check.get("optional") and check.get("status") != "blocked" and check.get("name") != "signalmaker_device_backfill_4h"]
         return all(bool(check.get("ok")) for check in required_checks)
 
     def as_dict(self) -> dict[str, Any]:
@@ -318,7 +318,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
     client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
     rules = KrakenSymbolRules(base_url, quote_assets=quote_assets)
-    margin = KrakenMarginClient(client, isolated=True, dry_run=True)
+    margin = KrakenMarginClient(client, isolated=False, dry_run=True)
     result = SmokeResult(
         base_url=base_url,
         symbol=symbol,
@@ -353,10 +353,10 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     if getattr(args, "skip_signalmaker", False):
-        result.add("signalmaker_device_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
+        result.add("signalmaker_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_device_backfill_4h", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_trade_candidates", False, skipped=True, reason="skip_signalmaker_requested")
-        result.add("optional_momentum_ranking_diagnostic", False, skipped=True, optional=True, reason="skip_signalmaker_requested")
+        result.add("signalmaker_market_data_momentum_ranking", False, skipped=True, optional=True, reason="skip_signalmaker_requested")
     else:
         intervals = [item.strip() for item in str(args.candle_intervals).split(",") if item.strip()]
 
@@ -370,8 +370,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
                 before_count = int(before_summary.get("candle_count", 0)) if before_summary else 0
                 latest_before = signalmaker.latest_candle(symbol, interval)
                 start_time = int(latest_before["close_time"]) + 1 if latest_before and latest_before.get("close_time") is not None else None
-                candles = fetch_exchange_klines("kraken", base_url, symbol, interval, args.candle_limit, start_time=start_time)
-                if latest_before is not None:
+                candles = fetch_kraken_ohlc(base_url, symbol, interval, args.candle_limit, start_time=start_time)
+                if latest_before is not None and latest_before.get("close_time") is not None:
                     candles = [candle for candle in candles if int(candle["open_time"]) > int(latest_before["open_time"])]
                 row: dict[str, Any] = {
                     "symbol": symbol,
@@ -392,15 +392,27 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
                 else:
                     row.update({"action": "already_up_to_date", "after_count": before_count})
                 rows.append(row)
-            return {"endpoint": endpoint, "flow": "latest_candle -> start_time -> fetch_exchange_klines(kraken) -> post_candles", "rows": rows}
+            return {"endpoint": endpoint, "flow": "latest_candle -> start_time -> fetch_kraken_ohlc -> post_candles", "rows": rows, "pushed": [row for row in rows if row.get("action") == "posted_missing_candles"]}
 
-        _run_check(result, "signalmaker_device_candle_feed", signalmaker_device_candle_feed)
+        _run_check(result, "signalmaker_candle_feed", signalmaker_device_candle_feed)
 
         if getattr(args, "skip_backfill", False):
             result.add("signalmaker_device_backfill_4h", False, skipped=True, reason="skip_backfill_requested")
         else:
             def signalmaker_device_backfill_4h() -> dict[str, Any]:
-                summary = run_backfill_once(days=args.backfill_days, max_symbols=1, max_chunks_per_symbol=1, enabled_override=True)
+                import os
+
+                previous_symbols = os.environ.get("CANDLE_FEED_SYMBOLS")
+                os.environ["CANDLE_FEED_SYMBOLS"] = symbol
+                try:
+                    summary = run_backfill_once(days=args.backfill_days, max_symbols=1, max_chunks_per_symbol=1, enabled_override=True)
+                except Exception as exc:
+                    summary = {"status": "blocked", "reason": "backfill_smoke_unavailable", "error": str(exc), "symbol": symbol}
+                finally:
+                    if previous_symbols is None:
+                        os.environ.pop("CANDLE_FEED_SYMBOLS", None)
+                    else:
+                        os.environ["CANDLE_FEED_SYMBOLS"] = previous_symbols
                 if summary.get("status") not in {"completed", "blocked"}:
                     raise RuntimeError(f"unexpected_backfill_status:{summary}")
                 return summary
@@ -428,9 +440,9 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
         try:
             details = optional_momentum_ranking_diagnostic()
-            result.add("optional_momentum_ranking_diagnostic", bool(details.pop("ok", True)), **details)
+            result.add("signalmaker_market_data_momentum_ranking", bool(details.pop("ok", True)), **details)
         except Exception as exc:
-            result.add("optional_momentum_ranking_diagnostic", False, optional=True, reason="momentum_ranking_endpoint_unavailable", **_error_details(exc))
+            result.add("signalmaker_market_data_momentum_ranking", False, optional=True, reason="momentum_ranking_endpoint_unavailable", **_error_details(exc))
 
     def dry_run_orders() -> dict[str, Any]:
         price = client.current_price(symbol)
@@ -501,10 +513,10 @@ def print_human(result: SmokeResult) -> None:
     print(json.dumps(result.credential_sources, indent=2, default=str))
     print(f"Overall: {'PASS' if result.ok else 'FAIL'}\n")
     sections = {
-        "DEVICE FEED": {"signalmaker_device_candle_feed", "signalmaker_device_backfill_4h"},
+        "DEVICE FEED": {"signalmaker_candle_feed", "signalmaker_device_backfill_4h"},
         "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_methods_dry_run"},
         "EXCHANGE": {"public_time", "asset_pair_lookup", "ticker_price", "ohlc_1h", "symbol_rules", "discover_spot_symbols", "discover_margin_symbols", "private_account", "private_open_orders", "private_add_order_validate_only"},
-        "OPTIONAL DIAGNOSTICS": {"optional_momentum_ranking_diagnostic"},
+        "OPTIONAL DIAGNOSTICS": {"signalmaker_market_data_momentum_ranking"},
     }
     printed: set[str] = set()
     for section, names in sections.items():

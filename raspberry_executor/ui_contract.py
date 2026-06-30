@@ -155,7 +155,7 @@ def position_row(candidate_id: str, row: dict[str, Any]) -> dict[str, str]:
         "pnl": _string(row.get("unrealized_pnl") if row.get("unrealized_pnl") is not None else row.get("pnl")),
         "target": _string(row.get("target_price")),
         "tp": _string(row.get("tp_order_id")),
-        "tp_status": order_status(row.get("binance_tp_status")),
+        "tp_status": order_status(row.get("kraken_tp_status")),
         "result": _string(row.get("close_reason") or row.get("exit_strategy") or "take_profit_only"),
         "reason": _string(row.get("close_reason")),
     }
@@ -174,7 +174,7 @@ def positions_view(limit: int = 50, sync: bool = True) -> dict[str, Any]:
     closed_items = [(item.get("candidate_id", ""), item) for item in reversed(state.closed_positions()[-limit:])]
     closed_rows = [position_row(candidate_id, row) for candidate_id, row in closed_items]
     return {
-        "title": "Binance Synced Positions",
+        "title": "Kraken Synced Positions",
         "labels": POSITION_LABELS,
         "keys": POSITION_KEYS,
         "open_rows": open_rows,

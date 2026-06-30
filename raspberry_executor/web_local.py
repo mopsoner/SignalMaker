@@ -11,7 +11,7 @@ from raspberry_executor.state import StateStore
 def header_status_html():
     vals = read_env()
     remote = escape(vals.get('SIGNALMAKER_BASE_URL', 'not configured'))
-    exchange = escape(vals.get('EXECUTION_EXCHANGE', vals.get('EXCHANGE', 'kraken/binance')))
+    exchange = escape(vals.get('EXECUTION_EXCHANGE', vals.get('EXCHANGE', 'kraken/kraken')))
     candle = 'enabled' if vals.get('CANDLE_FEED_ENABLED', 'true').strip().lower() not in {'0', 'false', 'no', 'off'} else 'disabled'
     executor = 'dry-run' if vals.get('DRY_RUN', 'true').strip().lower() in {'1', 'true', 'yes', 'on'} else 'live'
     return f"<div class='box'><b>Remote SignalMaker URL:</b> {remote} &nbsp; <b>Local exchange:</b> {exchange} &nbsp; <b>Mode:</b> device executor &nbsp; <b>Candle feed status:</b> {candle} &nbsp; <b>Executor status:</b> {executor}</div>"

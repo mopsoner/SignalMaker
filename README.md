@@ -1,6 +1,6 @@
 # SignalMaker Raspberry Executor
 
-This branch runs the Raspberry Executor device connected to a remote SignalMaker. Historical device mode pulls missing candles from the local exchange (Kraken/Binance), pushes them to the remote SignalMaker, reads trade candidates/momentum decisions from that remote service, and executes orders locally.
+This branch runs the Raspberry Executor device connected to a remote SignalMaker. Historical device mode pulls missing candles from the local exchange (Kraken/Kraken), pushes them to the remote SignalMaker, reads trade candidates/momentum decisions from that remote service, and executes orders locally.
 
 Run modes:
 
@@ -29,7 +29,7 @@ Run modes:
   - `fills`
   - `market_candles`
 - Service separation:
-  - collector service using Binance public REST
+  - collector service using Kraken public REST
   - signal engine wired to legacy v231 logic
   - planner service generating trade candidates
   - executor service for paper trading

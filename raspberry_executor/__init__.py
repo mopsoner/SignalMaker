@@ -3,7 +3,7 @@
 The Raspberry process still boots from a local .env for connection basics, but
 runtime switches are mirrored from the existing SignalMaker Admin fields when
 reachable. This keeps Admin as the source of truth for live/dry-run, quote
-assets, sizing, shorts, and Binance base URL without adding duplicate settings.
+assets, sizing, shorts, and Kraken base URL without adding duplicate settings.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _bootstrap_runtime_from_admin() -> None:
         return
 
     live = payload.get("live") or {}
-    binance = payload.get("binance") or {}
+    kraken = payload.get("kraken") or {}
     kraken = payload.get("kraken") or {}
 
     if "live_trading_enabled" in live:
@@ -71,8 +71,8 @@ def _bootstrap_runtime_from_admin() -> None:
     if live.get("live_max_notional_per_trade") not in (None, ""):
         os.environ["ORDER_QUOTE_AMOUNT"] = str(live.get("live_max_notional_per_trade"))
 
-    if binance.get("binance_quote_assets"):
-        os.environ["QUOTE_ASSETS"] = str(binance.get("binance_quote_assets"))
+    if kraken.get("kraken_quote_assets"):
+        os.environ["QUOTE_ASSETS"] = str(kraken.get("kraken_quote_assets"))
 
     if kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE"):
         os.environ["EXECUTION_EXCHANGE"] = str(kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE")).strip().lower()
@@ -83,10 +83,10 @@ def _bootstrap_runtime_from_admin() -> None:
     if kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"):
         os.environ["KRAKEN_SECRET_KEY"] = str(kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY"))
 
-    if _bool(live.get("binance_use_testnet"), default=False) and live.get("binance_testnet_rest_base"):
-        os.environ["BINANCE_BASE_URL"] = str(live.get("binance_testnet_rest_base")).rstrip("/")
-    elif binance.get("binance_rest_base"):
-        os.environ["BINANCE_BASE_URL"] = str(binance.get("binance_rest_base")).rstrip("/")
+    if _bool(live.get("kraken_use_testnet"), default=False) and live.get("kraken_testnet_rest_base"):
+        os.environ["KRAKEN_BASE_URL"] = str(live.get("kraken_testnet_rest_base")).rstrip("/")
+    elif kraken.get("kraken_rest_base"):
+        os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_rest_base")).rstrip("/")
 
     os.environ.setdefault("EXECUTION_MODE", "cross")
     os.environ.setdefault("MARGIN_MODE_ENABLED", "true")

@@ -5,7 +5,7 @@ from raspberry_executor.position_sync_v2 import _handle_filled_take_profit, _rep
 from raspberry_executor.state import StateStore
 
 
-class FakeBinance:
+class FakeKraken:
     dry_run = False
 
     def __init__(self):
@@ -113,7 +113,7 @@ def test_tp_replay_halves_quantity_after_full_size_failure(tmp_path, monkeypatch
     })
     spot = FakeSpotManager()
 
-    result = _replay_take_profit(candidate_id, state.open_positions()[candidate_id], "BTCUSDT", spot, FakeMarginManager(), state, binance=FakeBinance(), rules=FakeRules())
+    result = _replay_take_profit(candidate_id, state.open_positions()[candidate_id], "BTCUSDT", spot, FakeMarginManager(), state, kraken=FakeKraken(), rules=FakeRules())
 
     assert result == "replayed"
     assert [call["quantity"] for call in spot.calls] == [1.0, 0.5]
@@ -168,11 +168,11 @@ def test_track_momentum_uses_margin_balance_for_cross_margin_position(tmp_path, 
         "momentum_decision": {"buy_symbol": "TIAUSDC"},
     }
     state.add_open_position(candidate_id, position)
-    binance = FakeBinance()
-    binance.current_price = lambda symbol: 0.4
-    binance.free_balance = lambda asset: 0.0
+    kraken = FakeKraken()
+    kraken.current_price = lambda symbol: 0.4
+    kraken.free_balance = lambda asset: 0.0
 
-    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", binance, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 250.0}))
+    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", kraken, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 250.0}))
 
     assert closed is False
     tracked = state.open_positions()[candidate_id]
@@ -197,11 +197,11 @@ def test_track_momentum_defers_recent_missing_balance(tmp_path, monkeypatch):
         "momentum_decision": {"buy_symbol": "TIAUSDC"},
     }
     state.add_open_position(candidate_id, position)
-    binance = FakeBinance()
-    binance.current_price = lambda symbol: 0.4
-    binance.free_balance = lambda asset: 0.0
+    kraken = FakeKraken()
+    kraken.current_price = lambda symbol: 0.4
+    kraken.free_balance = lambda asset: 0.0
 
-    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", binance, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 0.0}))
+    closed = _track_momentum_position(candidate_id, state.open_positions()[candidate_id], "TIAUSDC", kraken, FakeRules(), state, margin=FakeMargin({("TIAUSDC", "TIA"): 0.0}))
 
     assert closed is False
     tracked = state.open_positions()[candidate_id]

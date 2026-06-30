@@ -5,8 +5,8 @@ from typing import Any
 
 import requests
 
-from raspberry_executor.binance_client import BinanceClient
-from raspberry_executor.binance_symbol_rules import BinanceSymbolRules
+from raspberry_executor.kraken_client import KrakenClient
+from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.exchange_factory import create_margin_exchange, create_spot_exchange
 from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import read_env
@@ -18,7 +18,9 @@ from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-momentum-decision")
 
-DEFAULT_DECISION_PATH = ""
+DEFAULT_DECISION_PATH = "/api/v1/momentum"
+DEFAULT_DECISION_METHOD = "GET"
+DEFAULT_DECISION_LIMIT = 25
 DEFAULT_CANDIDATES_PATH = "/api/v1/momentum"
 DECISION_RANKINGS_SOURCE = "momentum_rankings"
 DECISION_ENDPOINT_FALLBACK_SOURCE = "momentum_decision_endpoint_fallback"
@@ -65,7 +67,18 @@ def _url(base_url: str, path: str) -> str:
 
 
 def _decision_path() -> str:
-    return (_env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH).strip()
+    path = (_env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH).strip()
+    if path.rstrip("/") == "/api/v1/momentum/ranking":
+        return DEFAULT_DECISION_PATH
+    return path
+
+
+def _decision_method() -> str:
+    return (_env("MOMENTUM_DECISION_METHOD", DEFAULT_DECISION_METHOD) or DEFAULT_DECISION_METHOD).strip().upper()
+
+
+def _decision_limit() -> int:
+    return _int_env("MOMENTUM_DECISION_LIMIT", DEFAULT_DECISION_LIMIT)
 
 
 def _candidates_path() -> str:
@@ -109,15 +122,24 @@ def fetch_decision() -> dict[str, Any]:
     supported for deployments that explicitly provide a decision endpoint.
     """
     decision_path = _decision_path()
+    decision_method = _decision_method()
     if not decision_path or decision_path == LEGACY_DECISION_PATH:
         return build_decision_from_candidates(
-            fetch_momentum_candidates(limit=_int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 50)),
+            fetch_momentum_candidates(limit=_decision_limit()),
             source=DECISION_RANKINGS_SOURCE,
         )
+    if decision_path.rstrip("/") == DEFAULT_DECISION_PATH and decision_method == "GET":
+        return build_decision_from_candidates(
+            fetch_momentum_candidates(limit=_decision_limit()),
+            source=DECISION_RANKINGS_SOURCE,
+        )
+    if decision_method != "GET":
+        raise RuntimeError(f"unsupported_momentum_decision_method:{decision_method}")
 
     settings = load_settings()
     response = requests.get(
         _url(settings.signalmaker_base_url, decision_path),
+        params={"limit": _decision_limit()},
         timeout=30,
         headers={"accept": "application/json", "cache-control": "no-cache"},
     )
@@ -129,7 +151,7 @@ def fetch_decision() -> dict[str, Any]:
             _candidates_path(),
         )
         return build_decision_from_candidates(
-            fetch_momentum_candidates(limit=_int_env("MOMENTUM_DECISION_FALLBACK_LIMIT", 50)),
+            fetch_momentum_candidates(limit=_decision_limit()),
             source=DECISION_ENDPOINT_FALLBACK_SOURCE,
         )
     data = _read_json_response(response)
@@ -262,64 +284,64 @@ def _quote_asset(symbol: str, quote_assets: list[str]) -> str | None:
     return None
 
 
-def _already_have(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, min_value: float) -> tuple[bool, str]:
+def _already_have(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, min_value: float) -> tuple[bool, str]:
     symbol = symbol.upper()
     if state.has_open_position_for(symbol, "long"):
         return True, "local_position_open"
-    if binance.dry_run:
+    if kraken.dry_run:
         return False, "dry_run_no_wallet_check"
     base = rules.base_asset(symbol)
-    qty = binance.free_balance(base)
-    price = binance.current_price(symbol)
+    qty = kraken.free_balance(base)
+    price = kraken.current_price(symbol)
     value = qty * price
     if value >= min_value:
         return True, f"wallet_has_{base}:value={value:.4f}"
     return False, f"wallet_value_below_threshold:{base}:value={value:.4f}"
 
 
-def _wait_for_quote_increase(binance: BinanceClient, quote: str, before_quote: float, *, attempts: int, sleep_sec: float) -> float:
-    if binance.dry_run:
+def _wait_for_quote_increase(kraken: KrakenClient, quote: str, before_quote: float, *, attempts: int, sleep_sec: float) -> float:
+    if kraken.dry_run:
         return before_quote
     last = before_quote
     for _ in range(max(1, attempts)):
         time.sleep(max(0.1, sleep_sec))
-        last = binance.free_balance(quote)
+        last = kraken.free_balance(quote)
         if last > before_quote:
             return last
     return last
 
 
-def _wait_for_quote_notional(binance: BinanceClient, quote: str, minimum: float, *, attempts: int, sleep_sec: float) -> float:
+def _wait_for_quote_notional(kraken: KrakenClient, quote: str, minimum: float, *, attempts: int, sleep_sec: float) -> float:
     """Wait for the quote balance to be spendable after a just-filled sell.
 
-    Binance spot balances can lag for a few account reads immediately after a
+    Kraken spot balances can lag for a few account reads immediately after a
     market sell. A rotation buy should not create a misleading no-cash event
     until the post-sell quote balance has had the same confirmation window used
     by the sell leg.
     """
-    if binance.dry_run:
+    if kraken.dry_run:
         return minimum
     last = 0.0
     for _ in range(max(1, attempts)):
-        last = binance.free_balance(quote)
+        last = kraken.free_balance(quote)
         if last >= minimum:
             return last
         time.sleep(max(0.1, sleep_sec))
     return last
 
 
-def _wallet_value(binance: BinanceClient, rules: BinanceSymbolRules, symbol: str) -> tuple[str, float, float, float]:
+def _wallet_value(kraken: KrakenClient, rules: KrakenSymbolRules, symbol: str) -> tuple[str, float, float, float]:
     base = rules.base_asset(symbol)
-    qty = binance.free_balance(base)
-    price = binance.current_price(symbol)
+    qty = kraken.free_balance(base)
+    price = kraken.current_price(symbol)
     return base, qty, price, qty * price
 
 
-def _safe_quote_notional(settings, binance: BinanceClient, quote: str, desired: float, *, use_full_available: bool = False, observed_free_quote: float | None = None) -> tuple[float, float]:
+def _safe_quote_notional(settings, kraken: KrakenClient, quote: str, desired: float, *, use_full_available: bool = False, observed_free_quote: float | None = None) -> tuple[float, float]:
     desired = max(0.0, float(desired or 0.0))
-    if binance.dry_run:
+    if kraken.dry_run:
         return desired, desired
-    free_quote = binance.free_balance(quote)
+    free_quote = kraken.free_balance(quote)
     if observed_free_quote is not None:
         free_quote = max(free_quote, float(observed_free_quote))
     reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
@@ -354,10 +376,10 @@ def _is_cross_margin_position(position: dict[str, Any] | None) -> bool:
 def _cross_margin_stack(settings):
     if hasattr(settings, "exchange"):
         return create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
-    binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
-    rules = BinanceSymbolRules(settings.binance_base_url)
-    margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
-    return binance, margin, rules
+    kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    rules = KrakenSymbolRules(settings.kraken_base_url)
+    margin = MarginClient(kraken, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    return kraken, margin, rules
 
 
 def _safe_margin_quote_notional(margin: MarginClient, symbol: str, quote: str, desired: float, *, use_full_available: bool = False) -> tuple[float, float]:
@@ -375,8 +397,8 @@ def _safe_margin_quote_notional(margin: MarginClient, symbol: str, quote: str, d
 
 def _buy_symbol_cross_margin(
     settings,
-    binance: BinanceClient,
-    rules: BinanceSymbolRules,
+    kraken: KrakenClient,
+    rules: KrakenSymbolRules,
     state: StateStore,
     symbol: str,
     decision: dict[str, Any],
@@ -386,9 +408,9 @@ def _buy_symbol_cross_margin(
 ) -> str:
     cid = _candidate_id(symbol)
     if hasattr(settings, "exchange"):
-        binance, margin, rules = _cross_margin_stack(settings)
+        kraken, margin, rules = _cross_margin_stack(settings)
     else:
-        margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+        margin = MarginClient(kraken, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     margin.ensure_isolated_account(symbol)
 
     desired_notional = float(settings.order_quote_amount)
@@ -415,10 +437,10 @@ def _buy_symbol_cross_margin(
             borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
 
     total_quote = own_quote + borrow_quote
-    price = binance.current_price(symbol)
+    price = kraken.current_price(symbol)
     qty = rules.quantity_from_quote(symbol, total_quote, price, market=True)
     order = margin.margin_order(symbol, "BUY", qty, "MARKET")
-    fill_price = binance.average_fill_price(order, fallback=price) or price
+    fill_price = kraken.average_fill_price(order, fallback=price) or price
     acquired = float(order.get("executedQty") or qty) if margin.dry_run else margin.margin_free_balance(symbol, rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {
@@ -448,24 +470,24 @@ def _buy_symbol_cross_margin(
     return f"bought_cross_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
 
 
-def _margin_wallet_value(margin: MarginClient, rules: BinanceSymbolRules, binance: BinanceClient, symbol: str) -> tuple[str, float, float, float]:
+def _margin_wallet_value(margin: MarginClient, rules: KrakenSymbolRules, kraken: KrakenClient, symbol: str) -> tuple[str, float, float, float]:
     base = rules.base_asset(symbol)
     qty = margin.margin_free_balance(symbol, base)
-    price = binance.current_price(symbol)
+    price = kraken.current_price(symbol)
     return base, qty, price, qty * price
 
 
-def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
+def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
     settings = load_settings()
     quote = _quote_asset(symbol, settings.quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
     if hasattr(settings, "exchange"):
-        binance, margin, rules = _cross_margin_stack(settings)
+        kraken, margin, rules = _cross_margin_stack(settings)
     else:
-        margin = MarginClient(binance, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+        margin = MarginClient(kraken, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     margin.ensure_isolated_account(symbol)
-    base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+    base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
     chunk_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_SELL_CHUNK_RATIO", 0.995)))
@@ -477,7 +499,7 @@ def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules,
 
     for attempt in range(1, max_attempts + 1):
         before_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else 0.0
-        base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+        base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
         if qty <= 0 or value < dust_value:
             state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision, "mode": "cross_margin"})
             return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
@@ -492,7 +514,7 @@ def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules,
 
         try:
             order = margin.margin_order(symbol, "SELL", sell_qty, "MARKET")
-            after_base, after_qty, after_price, after_value = _margin_wallet_value(margin, rules, binance, symbol)
+            after_base, after_qty, after_price, after_value = _margin_wallet_value(margin, rules, kraken, symbol)
             after_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else before_quote
             detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order, "mode": "cross_margin"}
             details.append(detail)
@@ -509,7 +531,7 @@ def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules,
                     raise RuntimeError(f"sell_not_confirmed_cross_margin:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
                 return f"sell_failed_cross_margin:{symbol}:{exc}"
 
-    base, qty, price, value = _margin_wallet_value(margin, rules, binance, symbol)
+    base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     if value < dust_value:
         state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "cross_margin"})
         return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
@@ -520,7 +542,7 @@ def _sell_symbol_cross_margin(binance: BinanceClient, rules: BinanceSymbolRules,
     return message
 
 
-def _market_sell_quantity(rules: BinanceSymbolRules, symbol: str, qty: float, price: float) -> str | None:
+def _market_sell_quantity(rules: KrakenSymbolRules, symbol: str, qty: float, price: float) -> str | None:
     try:
         normalized = rules.normalize_market_quantity(symbol, qty)
         rules.ensure_exit_notional(symbol, normalized, price, label="momentum_sell")
@@ -770,15 +792,15 @@ def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | Non
     return out
 
 
-def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
+def sell_symbol(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
     """Sell with wallet confirmation and chunk retries before any rotation buy."""
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
     position = state.open_positions().get(cid)
     if _is_cross_margin_position(position):
-        return _sell_symbol_cross_margin(binance, rules, state, symbol, decision, require_confirmed=require_confirmed)
+        return _sell_symbol_cross_margin(kraken, rules, state, symbol, decision, require_confirmed=require_confirmed)
     quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
-    base, qty, price, value = _wallet_value(binance, rules, symbol)
+    base, qty, price, value = _wallet_value(kraken, rules, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
     chunk_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_SELL_CHUNK_RATIO", 0.995)))
@@ -791,8 +813,8 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
         return f"sell_confirmed:no_balance:{base}:value={value:.4f}"
 
     for attempt in range(1, max_attempts + 1):
-        before_quote = binance.free_balance(quote) if not binance.dry_run else 0.0
-        base, qty, price, value = _wallet_value(binance, rules, symbol)
+        before_quote = kraken.free_balance(quote) if not kraken.dry_run else 0.0
+        base, qty, price, value = _wallet_value(kraken, rules, symbol)
         if qty <= 0 or value < dust_value:
             state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision})
             return f"sell_confirmed:{symbol}:remaining_value={value:.4f}"
@@ -806,13 +828,13 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
             return message
 
         try:
-            order = binance.place_market_entry(symbol, "short", sell_qty)
-            after_quote = _wait_for_quote_increase(binance, quote, before_quote, attempts=wait_attempts, sleep_sec=wait_sleep) if not binance.dry_run else before_quote
-            after_base, after_qty, after_price, after_value = _wallet_value(binance, rules, symbol)
+            order = kraken.place_market_entry(symbol, "short", sell_qty)
+            after_quote = _wait_for_quote_increase(kraken, quote, before_quote, attempts=wait_attempts, sleep_sec=wait_sleep) if not kraken.dry_run else before_quote
+            after_base, after_qty, after_price, after_value = _wallet_value(kraken, rules, symbol)
             detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order}
             details.append(detail)
             state.add_event(cid, "momentum_sell_attempt", {"decision": decision, **detail})
-            if binance.dry_run or after_value < dust_value:
+            if kraken.dry_run or after_value < dust_value:
                 state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details}, record_event=False)
                 state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote})
                 return f"sell_confirmed:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
@@ -825,7 +847,7 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
                 return f"sell_failed:{symbol}:{exc}"
             time.sleep(wait_sleep)
 
-    base, qty, price, value = _wallet_value(binance, rules, symbol)
+    base, qty, price, value = _wallet_value(kraken, rules, symbol)
     if value < dust_value:
         state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision})
         return f"sell_confirmed:{symbol}:remaining_value={value:.4f}"
@@ -836,7 +858,7 @@ def sell_symbol(binance: BinanceClient, rules: BinanceSymbolRules, state: StateS
     return message
 
 
-def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, use_available_quote: bool = True) -> str:
+def buy_symbol(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, use_available_quote: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
     quote = _quote_asset(symbol, settings.quote_assets)
@@ -845,27 +867,30 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
         state.add_event(cid, "momentum_buy_skipped_unsupported_quote", {"symbol": symbol, "configured_quote_assets": settings.quote_assets, "decision": decision})
         return f"unsupported_quote:{symbol}:configured={configured_quotes}"
     min_value = max(5.0, float(settings.order_quote_amount) * 0.5)
-    already, reason = _already_have(binance, rules, state, symbol, min_value)
+    already, reason = _already_have(kraken, rules, state, symbol, min_value)
     if already:
         state.add_event(cid, "momentum_buy_skipped_already_have", {"symbol": symbol, "reason": reason, "decision": decision})
         return f"already_have:{reason}"
-    if bool(decision.get("force_cross_margin")) or _explicit_cross_margin_requested():
-        return _buy_symbol_cross_margin(settings, binance, rules, state, symbol, decision, quote, use_available_quote=use_available_quote)
+    explicit_cross_margin = _env("MOMENTUM_DECISION_USE_CROSS_MARGIN") is not None and _explicit_cross_margin_requested()
+    settings_cross_margin = hasattr(settings, "exchange") and _explicit_cross_margin_requested()
+    kraken_cross_margin = str(getattr(settings, "exchange", "") or "").lower() in {"kraken", "kraken_pro"}
+    if bool(decision.get("force_cross_margin")) or explicit_cross_margin or settings_cross_margin or kraken_cross_margin:
+        return _buy_symbol_cross_margin(settings, kraken, rules, state, symbol, decision, quote, use_available_quote=use_available_quote)
 
     desired_notional = float(settings.order_quote_amount)
     use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true"), default=True)
-    notional, free_quote = _safe_quote_notional(settings, binance, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
+    notional, free_quote = _safe_quote_notional(settings, kraken, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
-    if use_available_quote and notional < min_buy_notional and not binance.dry_run:
+    if use_available_quote and notional < min_buy_notional and not kraken.dry_run:
         wait_attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
         wait_sleep = max(0.2, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
         reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
         safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
         required_free_quote = reserve + (min_buy_notional / safety_ratio)
-        confirmed_free_quote = _wait_for_quote_notional(binance, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
+        confirmed_free_quote = _wait_for_quote_notional(kraken, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
         notional, free_quote = _safe_quote_notional(
             settings,
-            binance,
+            kraken,
             quote,
             desired_notional,
             use_full_available=use_full_available_quote,
@@ -875,11 +900,11 @@ def buy_symbol(settings, binance: BinanceClient, rules: BinanceSymbolRules, stat
         state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
         return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"
 
-    price = binance.current_price(symbol)
+    price = kraken.current_price(symbol)
     qty = rules.quantity_from_quote(symbol, notional, price, market=True)
-    order = binance.place_market_entry(symbol, "long", qty)
-    fill_price = binance.average_fill_price(order, fallback=price) or price
-    acquired = float(qty) if binance.dry_run else binance.free_balance(rules.base_asset(symbol))
+    order = kraken.place_market_entry(symbol, "long", qty)
+    fill_price = kraken.average_fill_price(order, fallback=price) or price
+    acquired = float(qty) if kraken.dry_run else kraken.free_balance(rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {
         "candidate_id": cid,
@@ -912,7 +937,7 @@ def _buy_result_balance_wait(result: str) -> bool:
     return text.startswith("margin_quote_balance_wait:")
 
 
-def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
+def buy_best_available(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
     if not _bool(_env("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
         symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
         row = {"symbol": symbol, **(decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {})}
@@ -920,7 +945,7 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
         if not buyable:
             state.add_event(_candidate_id(symbol), "momentum_buy_candidate_not_buyable", {"symbol": symbol, "rank": _candidate_rank(row), "rsi_1h": _candidate_rsi_1h(row), "reason": reason, "decision": decision})
             return f"not_buyable:{symbol}:{reason}"
-        return buy_symbol(settings, binance, rules, state, symbol, decision, use_available_quote=True)
+        return buy_symbol(settings, kraken, rules, state, symbol, decision, use_available_quote=True)
 
     attempts: list[dict[str, Any]] = []
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
@@ -956,7 +981,7 @@ def buy_best_available(settings, binance: BinanceClient, rules: BinanceSymbolRul
         symbol = _candidate_symbol(row)
         trial_decision = {**decision, "buy_symbol": symbol, "symbol": symbol, "fallback_target_asset": row}
         try:
-            result = buy_symbol(settings, binance, rules, state, symbol, trial_decision, use_available_quote=True)
+            result = buy_symbol(settings, kraken, rules, state, symbol, trial_decision, use_available_quote=True)
             attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source")})
             if _buy_result_ok(result):
                 state.add_event("momentum-decision", "momentum_fallback_buy_selected", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
@@ -1071,10 +1096,10 @@ def execute_decision(decision: dict[str, Any]) -> str:
         return "execution_disabled"
     settings = load_settings()
     if hasattr(settings, "exchange"):
-        binance, rules = create_spot_exchange(settings)
+        kraken, rules = create_spot_exchange(settings)
     else:
-        binance = BinanceClient(settings.binance_base_url, settings.binance_api_key, settings.binance_secret_key, dry_run=settings.dry_run)
-        rules = BinanceSymbolRules(settings.binance_base_url)
+        kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
+        rules = KrakenSymbolRules(settings.kraken_base_url)
     state = StateStore()
     action = str(decision.get("action") or "WAIT").upper()
     should_trade = bool(decision.get("should_trade"))
@@ -1101,8 +1126,8 @@ def execute_decision(decision: dict[str, Any]) -> str:
                 **({"force_cross_margin": True} if force_cross_margin else {}),
             }
             state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
-            sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
-            buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
+            sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+            buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
             return f"rotate:{sell_result}:{buy_result}"
         cadence = _momentum_buy_cadence_status(state)
         decision.setdefault("due_now", cadence["due_now"])
@@ -1111,19 +1136,19 @@ def execute_decision(decision: dict[str, Any]) -> str:
             state.add_event("momentum-decision", "momentum_decision_cadence_wait", {"cadence": cadence, "decision": decision})
             return f"wait:momentum_cadence:next_check_at={cadence['next_check_at']}"
         _mark_momentum_buy_cadence_checked(state, decision, cadence)
-        return buy_best_available(settings, binance, rules, state, decision, exclude={sell})
+        return buy_best_available(settings, kraken, rules, state, decision, exclude={sell})
     if action == "SELL":
         if not _decision_targets_held_symbol(decision, held_symbol):
             return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-        return sell_symbol(binance, rules, state, held_symbol, decision, require_confirmed=True)
+        return sell_symbol(kraken, rules, state, held_symbol, decision, require_confirmed=True)
     if action == "ROTATE":
         if not _decision_targets_held_symbol(decision, held_symbol):
             return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
         force_cross_margin = _is_cross_margin_position(held_position)
         rotation_decision = {**decision, "force_cross_margin": True} if force_cross_margin else decision
         state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": rotation_decision.get("buy_symbol"), "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
-        sell_result = sell_symbol(binance, rules, state, held_symbol, rotation_decision, require_confirmed=True)
-        buy_result = buy_best_available(settings, binance, rules, state, rotation_decision, exclude={held_symbol})
+        sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+        buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
         return f"rotate:{sell_result}:{buy_result}"
     return f"unsupported_action:{action}"
 
