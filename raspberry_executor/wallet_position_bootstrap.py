@@ -67,8 +67,15 @@ def _add_position(state, existing, *, symbol, side, mode, quantity, price, sourc
 def _bootstrap_spot(client, state, existing, quote_assets, min_notional):
     created = seen = skipped = 0
     account = client.account()
-    for bal in account.get("balances") or []:
-        asset = str(bal.get("asset") or "").upper()
+    if isinstance(account, dict) and "balances" in account:
+        balances = account.get("balances") or []
+    else:
+        balances = [
+            {"asset": asset, "free": amount, "locked": 0}
+            for asset, amount in (account or {}).items()
+        ]
+    for bal in balances:
+        asset = client._asset_name(str(bal.get("asset") or "")).upper()
         if not asset or asset in quote_assets:
             continue
         free = _float(bal.get("free"))
@@ -175,9 +182,26 @@ def bootstrap_wallet_positions(min_notional: float = 1.0):
     quote_assets = [q.upper() for q in settings.quote_assets]
     existing = _existing_symbols(state)
     mode = execution_mode()
+    exchange = (settings.exchange or "kraken").lower()
 
     if not client.is_configured():
         return {"status": "missing_api_credentials", "mode": mode, "created": 0, "seen": 0, "skipped": 0}
+
+    if exchange == "kraken" and mode in {"cross", "isolated"}:
+        summary = {
+            "status": "skipped",
+            "mode": mode,
+            "reason": "kraken_margin_wallet_bootstrap_not_supported",
+            "created": 0,
+            "seen": 0,
+            "skipped": 0,
+        }
+        logger.info(
+            "wallet bootstrap skipped mode=%s reason=%s",
+            mode,
+            summary["reason"],
+        )
+        return summary
 
     try:
         if mode == "spot":
