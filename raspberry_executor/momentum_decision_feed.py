@@ -12,7 +12,7 @@ from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
-from raspberry_executor.margin_order_manager import amount_str
+from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_multiplier
 from raspberry_executor.state import StateStore
 
@@ -411,71 +411,44 @@ def _buy_symbol_cross_margin(
     margin_kwargs = {"isolated": False, "dry_run": getattr(settings, "dry_run", False) or margin_dry_run()}
     if leverage is not None:
         margin_kwargs["leverage"] = leverage
+    effective_leverage = leverage
     try:
         margin = MarginClient(kraken, **margin_kwargs)
-    except TypeError as exc:
-        if "leverage" not in margin_kwargs:
-            raise
+    except TypeError:
         margin_kwargs.pop("leverage", None)
         margin = MarginClient(kraken, **margin_kwargs)
-    margin.ensure_isolated_account(symbol)
+        effective_leverage = margin_multiplier()
 
     desired_notional = float(settings.order_quote_amount)
     use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "false"), default=False)
-    own_quote, free_quote = _safe_margin_quote_notional(margin, symbol, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
+    if use_full_available_quote:
+        quote_amount, _free_quote = _safe_margin_quote_notional(margin, symbol, quote, desired_notional, use_full_available=True)
+    else:
+        quote_amount = desired_notional
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
-    if own_quote < min_buy_notional:
-        state.add_event(cid, "momentum_buy_skipped_margin_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": own_quote, "min_buy_notional": min_buy_notional, "decision": decision, "mode": "cross_margin"})
-        return f"margin_quote_balance_wait:{quote}:free={free_quote:.4f}:usable={own_quote:.4f}"
+    manager = MarginOrderManager(kraken, margin, rules)
+    try:
+        entry = manager.place_margin_market_entry(symbol=symbol, quote_amount=quote_amount, min_notional=min_buy_notional, leverage=effective_leverage, clamp_to_available=use_available_quote)
+    except RuntimeError as exc:
+        if "margin_entry_notional_below_minimum" in str(exc) or "margin_insufficient_quote_balance" in str(exc):
+            free_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else desired_notional
+            state.add_event(cid, "momentum_buy_skipped_margin_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": 0.0, "min_buy_notional": min_buy_notional, "decision": decision, "mode": "cross_margin"})
+            return f"margin_quote_balance_wait:{quote}:free={float(free_quote):.4f}:usable=0.0000"
+        raise
 
-    effective_multiplier = float(leverage if leverage is not None else margin_multiplier())
-    wanted_borrow_quote = max(0.0, own_quote * max(0.0, effective_multiplier - 1.0))
-    borrow_quote = 0.0
-    borrow_payload: dict[str, Any] = {}
-    borrow_error = None
-    if wanted_borrow_quote > 0:
-        try:
-            max_borrow = margin.max_borrowable(symbol, quote)
-            borrow_quote = min(wanted_borrow_quote, max_borrow) if max_borrow > 0 else wanted_borrow_quote
-            if borrow_quote > 0:
-                borrow_payload = margin.borrow(symbol, quote, amount_str(borrow_quote))
-        except Exception as exc:
-            borrow_quote = 0.0
-            borrow_error = str(exc)
-            borrow_payload = {"status": "borrow_failed_continued", "error": borrow_error, "wanted_borrow_quote": wanted_borrow_quote}
-
-    total_quote = own_quote + borrow_quote
-    price = kraken.current_price(symbol)
-    qty = rules.quantity_from_quote(symbol, total_quote, price, market=True)
-    order = margin.margin_order(symbol, "BUY", qty, "MARKET")
-    fill_price = kraken.average_fill_price(order, fallback=price) or price
-    acquired = float(order.get("executedQty") or qty) if margin.dry_run else margin.margin_free_balance(symbol, rules.base_asset(symbol))
+    order = entry["entry_payload"]
+    total_quote = float(entry["total_quote_amount"])
+    fill_price = float(entry["entry_price"])
+    qty = str(entry["quantity"])
+    acquired = float(qty) if margin.dry_run else margin.margin_free_balance(symbol, rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {
-        "candidate_id": cid,
-        "signal_symbol": symbol,
-        "execution_symbol": symbol,
-        "side": "long",
-        "strategy": "momentum_rotation",
-        "mode": "cross_margin",
-        "margin_isolated": False,
-        "quantity": str(order.get("executedQty") or qty),
-        "entry_price": float(fill_price),
-        "stop_price": None,
-        "target_price": None,
-        "entry_order_id": order.get("orderId"),
-        "momentum_decision": decision,
-        "entry_payload": order,
-        "borrow_payload": borrow_payload,
-        "borrow_error": borrow_error,
-        "notional_used": total_quote,
-        "own_quote_amount": own_quote,
-        "borrow_quote_amount": borrow_quote,
-        "quote_asset": quote,
-        "leverage": leverage if leverage is not None else margin.leverage(),
-        "confirmed_base_balance": acquired,
+        "candidate_id": cid, "signal_symbol": symbol, "execution_symbol": symbol, "side": "long", "strategy": "momentum_rotation", "mode": "cross_margin", "margin_isolated": False,
+        "quantity": qty, "entry_price": fill_price, "stop_price": None, "target_price": None, "entry_order_id": entry.get("entry_order_id"), "momentum_decision": decision, "entry_payload": order,
+        "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "implicit_margin": True, "leverage_notional": entry.get("leverage_notional"),
+        "borrow_payload": entry.get("implicit_leverage_payload") or {}, "borrow_error": None, "notional_used": total_quote, "own_quote_amount": entry.get("own_quote_amount"), "borrow_quote_amount": entry.get("leverage_notional"), "quote_asset": quote, "leverage": entry.get("leverage"), "confirmed_base_balance": acquired,
     })
-    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": str(order.get("executedQty") or qty), "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "borrow_payload": borrow_payload, "borrow_error": borrow_error, "decision": decision, "mode": "cross_margin", "leverage": leverage if leverage is not None else margin.leverage()})
+    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "decision": decision, "mode": "cross_margin", "leverage": entry.get("leverage")})
     return f"bought_cross_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
 
 
