@@ -55,13 +55,13 @@ def _start_ms_for_days(days: int) -> int:
     return _utc_ms(datetime.now(timezone.utc) - timedelta(days=max(1, int(days))))
 
 
-def _latest_main_close_time(client: SignalMakerClient, symbol: str) -> int | None:
+def _latest_main_close_time(client: SignalMakerClient, symbol: str, interval: str = INTERVAL) -> int | None:
     try:
-        latest = client.latest_candle(symbol, INTERVAL)
+        latest = client.latest_candle(symbol, interval)
         if latest and latest.get("close_time") is not None:
             return int(latest["close_time"])
     except Exception as exc:
-        logger.warning("main latest candle lookup failed symbol=%s error=%s", symbol, str(exc))
+        logger.warning("remote latest candle lookup failed symbol=%s interval=%s error=%s", symbol, interval, str(exc))
     return None
 
 
@@ -79,6 +79,7 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
         return {"symbol": symbol, "status": "skipped", "reason": "already_has_required_4h_history", "latest_main_close_time": latest_main}
 
     pushed = 0
+    upserted = 0
     chunks = 0
     errors: list[dict[str, Any]] = []
     while cursor < now_ms - FOUR_HOURS_MS and chunks < max_chunks:
@@ -92,6 +93,7 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
                 break
             response = client.post_candles(symbol, INTERVAL, candles, source=f"{settings.gateway_id}-backfill-4h-365d")
             pushed += len(candles)
+            upserted += int(response.get("upserted") or 0)
             chunks += 1
             last_close = max(int(candle["close_time"]) for candle in candles)
             cursor = last_close + 1
@@ -106,7 +108,7 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
             symbol_state.update({"status": "error", "next_start_time": cursor, "last_error": str(exc), "last_error_at": datetime.now(timezone.utc).isoformat()})
             _save_state(state)
             break
-    return {"symbol": symbol, "status": "done" if not errors else "error", "pushed": pushed, "chunks": chunks, "next_start_time": cursor, "errors": errors}
+    return {"symbol": symbol, "interval": INTERVAL, "status": "done" if not errors else "error", "fetched_missing": pushed, "posted": pushed, "upserted": upserted, "pushed": pushed, "chunks": chunks, "next_start_time": cursor, "errors": errors}
 
 
 def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks_per_symbol: int | None = None, enabled_override: bool = False) -> dict[str, Any]:
@@ -115,7 +117,7 @@ def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks
     settings = load_settings()
     enabled = enabled_override or _bool(env.get("BACKFILL_4H_ENABLED") or os.getenv("BACKFILL_4H_ENABLED"), default=False)
     if not enabled:
-        return {"status": "disabled", "reason": "BACKFILL_4H_ENABLED=false"}
+        return {"ok": False, "status": "disabled", "reason": "BACKFILL_4H_ENABLED=false"}
     days = int(days or env.get("BACKFILL_4H_DAYS", DEFAULT_DAYS) or DEFAULT_DAYS)
     chunk_limit = max(1, min(1000, int(env.get("BACKFILL_4H_CHUNK_LIMIT", 1000) or 1000)))
     max_chunks = max(1, int(max_chunks_per_symbol or env.get("BACKFILL_4H_MAX_CHUNKS_PER_SYMBOL", 3) or 3))
@@ -124,17 +126,25 @@ def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
     endpoint_check = client.check_candle_ingest_endpoint()
     if not endpoint_check.get("ok"):
-        return {"status": "blocked", "endpoint_check": endpoint_check}
+        return {"ok": False, "status": "blocked", "endpoint_check": endpoint_check}
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     if run_symbol_limit > 0:
         symbols = symbols[:run_symbol_limit]
     exchange = getattr(settings, "exchange", "binance")
     exchange_base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url
-    requests_per_minute, doc_limit, weight_ratio = effective_binance_requests_per_minute(exchange_base_url, env)
+    if str(exchange).lower() in {"kraken", "kraken_pro"}:
+        requests_per_minute = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
+        doc_limit = requests_per_minute
+        weight_ratio = 1.0
+    else:
+        requests_per_minute, doc_limit, weight_ratio = effective_binance_requests_per_minute(exchange_base_url, env)
     limiter = RateLimiter(requests_per_minute)
     state = _load_state()
     results = [backfill_symbol(settings, client, limiter, state, symbol, days=days, chunk_limit=chunk_limit, max_chunks=max_chunks, post_sleep=post_sleep) for symbol in symbols]
-    summary = {"status": "completed", "interval": INTERVAL, "days": days, "symbols_requested": len(symbols), "quote_assets": quote_assets, "execution_mode": mode, "exchange_requests_per_minute": requests_per_minute, "binance_doc_weight_limit_1m": doc_limit, "exchange": exchange, "weight_ratio": weight_ratio, "pushed": sum(int(item.get("pushed") or 0) for item in results), "chunks": sum(int(item.get("chunks") or 0) for item in results), "errors": [item for item in results if item.get("errors")], "results": results, "completed_at": datetime.now(timezone.utc).isoformat()}
+    total_posted = sum(int(item.get("posted") or item.get("pushed") or 0) for item in results)
+    total_upserted = sum(int(item.get("upserted") or 0) for item in results)
+    errors = [item for item in results if item.get("errors")]
+    summary = {"ok": not errors, "status": "completed" if not errors else "partial", "symbol": symbols[0] if len(symbols) == 1 else None, "interval": INTERVAL, "fetched_missing": total_posted, "posted": total_posted, "upserted": total_upserted, "days": days, "symbols_requested": len(symbols), "quote_assets": quote_assets, "execution_mode": mode, "exchange_requests_per_minute": requests_per_minute, "binance_doc_weight_limit_1m": doc_limit, "exchange": exchange, "weight_ratio": weight_ratio, "pushed": total_posted, "chunks": sum(int(item.get("chunks") or 0) for item in results), "errors": errors, "results": results, "completed_at": datetime.now(timezone.utc).isoformat()}
     state.setdefault("runs", []).append({k: v for k, v in summary.items() if k != "results"})
     state["runs"] = state["runs"][-20:]
     _save_state(state)
@@ -163,8 +173,15 @@ def main() -> int:
     parser.add_argument("--max-symbols", type=int, default=None)
     parser.add_argument("--max-chunks-per-symbol", type=int, default=None)
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("symbol", nargs="?", help="Optional symbol for one-shot device backfill, e.g. BTCUSDC")
+    parser.add_argument("interval", nargs="?", default=INTERVAL, help="Backfill interval; this device backfill currently posts 4h candles")
     args = parser.parse_args()
-    print(json.dumps(run_once(days=args.days, max_symbols=args.max_symbols, max_chunks_per_symbol=args.max_chunks_per_symbol, enabled_override=args.run), indent=2, sort_keys=True))
+    if args.interval != INTERVAL:
+        raise SystemExit("candle_backfill_4h supports interval 4h only")
+    if args.symbol:
+        import os
+        os.environ["CANDLE_FEED_SYMBOLS"] = args.symbol.upper()
+    print(json.dumps(run_once(days=args.days, max_symbols=1 if args.symbol else args.max_symbols, max_chunks_per_symbol=args.max_chunks_per_symbol, enabled_override=args.run), indent=2, sort_keys=True))
     return 0
 
 
