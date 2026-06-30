@@ -160,7 +160,7 @@ def main(stdscr):
         now = time.time()
         if now - last_fetch >= REFRESH_SECONDS or not rows:
             try:
-                rows = fetch_json(f"/api/v1/momentum?limit={LIMIT}")
+                rows = fetch_json(f"/api/v1/momentum/ranking?limit={LIMIT}")
                 error = None
                 last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 last_fetch = now

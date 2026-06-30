@@ -10,14 +10,33 @@ class TradeCandidateService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_candidates(self, limit: int = 100, status: str | None = None, stage: str | None = None) -> list[TradeCandidate]:
+    def list_candidates(
+        self,
+        limit: int = 100,
+        status: str | None = None,
+        stage: str | None = None,
+        exclude_test_data: bool = False,
+    ) -> list[TradeCandidate]:
         stmt = select(TradeCandidate)
         if status:
             stmt = stmt.where(TradeCandidate.status == status)
         if stage:
             stmt = stmt.where(TradeCandidate.stage == stage)
-        stmt = stmt.order_by(TradeCandidate.score.desc(), TradeCandidate.created_at.desc()).limit(limit)
-        return list(self.db.scalars(stmt).all())
+        stmt = stmt.order_by(TradeCandidate.score.desc(), TradeCandidate.created_at.desc())
+        rows = list(self.db.scalars(stmt.limit(limit * 3 if exclude_test_data else limit)).all())
+        if exclude_test_data:
+            rows = [row for row in rows if not self._is_test_candidate(row)]
+        return rows[:limit]
+
+    def _is_test_candidate(self, row: TradeCandidate) -> bool:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        execution_target = row.execution_target if isinstance(row.execution_target, dict) else {}
+        sources = {str(payload.get("source") or "").lower(), str(execution_target.get("source") or "").lower()}
+        return (
+            bool(payload.get("dry_run") or execution_target.get("dry_run"))
+            or "smoke_test" in sources
+            or str(payload.get("test_run_id") or execution_target.get("test_run_id") or "") != ""
+        )
 
     def get_open_candidates(self, limit: int = 100) -> list[TradeCandidate]:
         # Raspberry executor backlog mode: play older unexecuted candidates first.
