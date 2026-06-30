@@ -49,7 +49,7 @@ Build or refresh the static files with:
 bash scripts/build_frontend.sh
 ```
 
-No separate frontend process is needed on Raspberry: the backend serves `frontend/dist`, so `http://IP_DU_RASPBERRY:5000` shows the same lightweight UI next to the API.
+No separate frontend process is needed on Raspberry: the backend serves `frontend/dist`, so `http://IP_DU_RASPBERRY:8080` shows the same lightweight UI next to the API.
 
 For development only, a standalone static server can still be started explicitly:
 ```bash
@@ -77,7 +77,7 @@ bash run.sh init-db
 bash run.sh all
 ```
 
-`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${APP_PORT:-5000}/healthz`, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
+`bash run.sh all` launches the backend first, waits for `http://127.0.0.1:${EXECUTOR_API_PORT:-${APP_PORT:-8080}}/healthz`, then starts the pipeline worker, executor worker, and scheduler worker. The frontend is served by the API. The health wait is at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`).
 
 ## Raspberry Pi install
 Run the full Raspberry Pi setup from a fresh checkout with one command:
@@ -101,24 +101,24 @@ After installation, the main Raspberry service is `signalmaker-api`. It serves b
 sudo systemctl start signalmaker-api
 ```
 
-Open SignalMaker Raspberry Executor from another device on the same network using port `5000` only:
+Open SignalMaker Raspberry Executor from another device on the same network using port `8080` only:
 
-- Status: `http://IP_DU_RASPBERRY:5000/index.html`
-- Admin: `http://IP_DU_RASPBERRY:5000/admin.html`
-- Dashboard: `http://IP_DU_RASPBERRY:5000/dashboard.html`
+- Status: `http://IP_DU_RASPBERRY:8080/index.html`
+- Admin: `http://IP_DU_RASPBERRY:8080/admin.html`
+- Dashboard: `http://IP_DU_RASPBERRY:8080/dashboard.html`
 
-Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
-Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `5000`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:5000/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
+Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
+Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
 
 ### Raspberry terminal TUI and kiosk
 
-The terminal TUI talks directly to the local FastAPI service on port `5000` by default and does not require npm, Vite, esbuild, or a separate frontend process. Override the API URL only when debugging another host:
+The terminal TUI talks directly to the local FastAPI service on port `8080` by default and does not require npm, Vite, esbuild, or a separate frontend process. Override the API URL only when debugging another host:
 
 ```bash
 cd ~/Desktop/SignalMaker
 ./tui.sh
-SIGNALMAKER_BASE_URL=http://127.0.0.1:5000 ./tui.sh
+SIGNALMAKER_BASE_URL=http://127.0.0.1:8080 ./tui.sh
 ```
 
 Manual full-screen web kiosk mode opens the same single-origin Raspberry website served by FastAPI:
@@ -126,10 +126,10 @@ Manual full-screen web kiosk mode opens the same single-origin Raspberry website
 ```bash
 cd ~/Desktop/SignalMaker
 ./kiosk.sh
-SIGNALMAKER_KIOSK_URL=http://127.0.0.1:5000/admin.html ./kiosk.sh
+SIGNALMAKER_KIOSK_URL=http://127.0.0.1:8080/admin.html ./kiosk.sh
 ```
 
-`tui.sh` and `kiosk.sh` wait for `http://127.0.0.1:5000/healthz` before starting. They use the same startup wait defaults as `run.sh`: at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`). After the API is ready, `kiosk.sh` opens Chromium/Chrome at `http://127.0.0.1:5000/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
+`tui.sh` and `kiosk.sh` wait for `http://127.0.0.1:8080/healthz` before starting. They use the same startup wait defaults as `run.sh`: at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`). After the API is ready, `kiosk.sh` opens Chromium/Chrome at `http://127.0.0.1:8080/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
 
 A systemd kiosk service is provided but is optional and should only be enabled on Raspberry installations with a graphical display, not on headless servers:
 
@@ -150,9 +150,9 @@ sudo systemctl stop signalmaker-kiosk
 Validate the local API used by both TUI and kiosk with:
 
 ```bash
-curl -i http://127.0.0.1:5000/healthz
-curl -i http://127.0.0.1:5000/api/v1/services
-curl -i http://127.0.0.1:5000/api/v1/admin/settings
+curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8080/api/v1/services
+curl -i http://127.0.0.1:8080/api/v1/admin/settings
 ```
 
 ### Kraken smoke test
@@ -174,10 +174,10 @@ Useful Raspberry debug commands:
 uname -m
 systemctl status signalmaker-api
 journalctl -u signalmaker-api -f
-curl http://localhost:5000/healthz
-curl -I http://localhost:5000/index.html
-curl -I http://localhost:5000/admin.html
-curl -I http://localhost:5000/dashboard.html
+curl http://localhost:8080/healthz
+curl -I http://localhost:8080/index.html
+curl -I http://localhost:8080/admin.html
+curl -I http://localhost:8080/dashboard.html
 ```
 
 ### Raspberry frontend/API validation
@@ -188,9 +188,9 @@ Use these commands after updating the Raspberry frontend or service files:
 cd ~/Desktop/SignalMaker
 bash scripts/build_frontend.sh
 sudo systemctl restart signalmaker-api
-curl -i http://localhost:5000/healthz
-curl -i http://localhost:5000/api/v1/admin/settings
-curl -I http://localhost:5000/admin.html
+curl -i http://localhost:8080/healthz
+curl -i http://localhost:8080/api/v1/admin/settings
+curl -I http://localhost:8080/admin.html
 ```
 
 The expected HTTP status for the curl checks is:
@@ -202,7 +202,7 @@ HTTP/1.1 200 OK
 Then open:
 
 ```text
-http://IP_DU_RASPBERRY:5000/admin.html
+http://IP_DU_RASPBERRY:8080/admin.html
 ```
 
 The static frontend remains plain HTML/CSS/JS: `bash scripts/build_frontend.sh` only copies files into `frontend/dist` and does not require npm, Vite or esbuild.
