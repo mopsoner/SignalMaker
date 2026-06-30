@@ -65,6 +65,7 @@ class Settings(BaseSettings):
 
     live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
     binance_use_testnet: bool = Field(default=True, alias="BINANCE_USE_TESTNET")
+    binance_account_mode: str = Field(default="cross_margin", alias="BINANCE_ACCOUNT_MODE")
     live_spot_allow_shorts: bool = Field(default=False, alias="LIVE_SPOT_ALLOW_SHORTS")
     live_max_open_positions: int = Field(default=3, alias="LIVE_MAX_OPEN_POSITIONS")
     live_max_notional_per_trade: float = Field(default=250.0, alias="LIVE_MAX_NOTIONAL_PER_TRADE")
@@ -100,6 +101,9 @@ class Settings(BaseSettings):
     bot_scheduler_interval_sec: int = Field(default=30, alias="BOT_SCHEDULER_INTERVAL_SEC")
     bot_executor_limit: int = Field(default=10, alias="BOT_EXECUTOR_LIMIT")
     bot_executor_quantity: float = Field(default=1.0, alias="BOT_EXECUTOR_QUANTITY")
+    momentum_decision_path: str = Field(default="/api/v1/momentum", alias="MOMENTUM_DECISION_PATH")
+    momentum_decision_method: str = Field(default="GET", alias="MOMENTUM_DECISION_METHOD")
+    momentum_decision_limit: int = Field(default=25, alias="MOMENTUM_DECISION_LIMIT")
 
     @property
     def cors_origin_list(self) -> list[str]:
