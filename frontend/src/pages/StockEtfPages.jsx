@@ -5,9 +5,9 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber } from '../lib/format'
+import { tradingViewUrl } from '../lib/tradingview'
 
 const signalClass = (signal) => signal === 'BUY' ? 'badge green' : signal === 'SELL' ? 'badge orange' : 'badge gray'
-const tvSymbol = (symbol) => symbol?.endsWith('.PA') ? `EURONEXT:${symbol.replace('.PA', '')}` : symbol?.endsWith('.US') ? `AMEX:${symbol.replace('.US', '')}` : symbol
 
 function UniverseFilter({ universe, setUniverse, assetType, setAssetType }) {
   return <div className="page-actions" style={{ flexWrap: 'wrap' }}>
@@ -31,7 +31,7 @@ function query(universe, assetType, extra = '') {
 
 function ResultsTable({ rows, engine }) {
   const columns = [
-    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 4 }}><strong>{row.provider_symbol || row.symbol}</strong><span className="stat-hint">{row.name || '—'} · {row.universe_name || '—'}</span><a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol(row.provider_symbol || row.symbol) || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.provider_symbol || row.symbol },
+    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 4 }}><strong>{row.provider_symbol || row.symbol}</strong><span className="stat-hint">{row.name || '—'} · {row.universe_name || '—'}</span><a href={tradingViewUrl(row.provider_symbol || row.symbol, { market: 'stock-etf' })} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.provider_symbol || row.symbol },
     { key: 'signal', title: 'Signal', render: (row) => <span className={signalClass(row.signal)}>{row.signal || 'NO_SIGNAL'}</span>, sortValue: (row) => row.signal || '' },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2), sortValue: (row) => Number(row.score || 0) },
     { key: 'trend', title: 'Trend', render: (row) => row.trend || '—', sortValue: (row) => row.trend || '' },

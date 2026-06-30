@@ -6,6 +6,7 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
+import { tradingViewUrl } from '../lib/tradingview'
 
 const get = (row, key) => row?.state_payload?.[key] ?? null
 const score = (row) => Number(get(row, 'gated_score') ?? get(row, 'score') ?? row.score ?? get(row, 'final_score') ?? 0)
@@ -88,7 +89,7 @@ function MobileAssetCards({ rows }) {
     <DecisionPath row={row} />
     <div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI 1H</span><strong>{fmtNumber(rsiOneHour(row), 2)}</strong></div><div><span>Model</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div>
     <div className="mobile-reason"><span>Reason</span><strong>{plannerReason(row)}</strong></div>
-    <div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>
+    <div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={tradingViewUrl(row.symbol)} target="_blank" rel="noreferrer">TradingView</a></div>
   </article>)}</div>
 }
 
@@ -157,7 +158,7 @@ export default function DashboardPage() {
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => score(b) - score(a)).slice(0, 6), [assets])
 
   const columns = [
-    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
+    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={tradingViewUrl(row.symbol)} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(stage(row))}>{stage(row)}</span>, sortValue: stage },
     { key: 'decision', title: 'Decision path', render: (row) => <DecisionPath row={row} />, sortValue: confirmationLabel },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
