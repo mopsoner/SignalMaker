@@ -36,56 +36,51 @@ def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db
     return persist_runtime_settings(db, payload.model_dump())
 
 
-_APP_DATA_CLEANUP_TABLES = [
-    # ETF/stock generated data first because these rows reference market assets/runs.
-    "market_analysis_results",
-    "market_analysis_runs",
-    "market_data_import_runs",
-    "market_data_job_requests",
-    "market_candles",
-    "market_assets",
-    "market_universes",
-    # Paper/live trading data.
-    "fills",
-    "orders",
-    "positions",
-    "trade_candidates",
-    "live_runs",
-    "asset_state_current",
-    # Momentum scanner, engine and backtest data.
-    "momentum_backtest_equity",
-    "momentum_backtest_trades",
-    "momentum_backtest_runs",
-    "momentum_engine_trades",
-    "momentum_engine_positions",
-    "momentum_structure_current",
-    "momentum_current",
-]
+_PRESERVED_APP_DATA_TABLES = {"app_settings"}
 
 
-def _delete_table_rows(db: Session, table_name: str) -> int:
-    if not inspect(db.bind).has_table(table_name):
-        return 0
-    result = db.execute(text(f"DELETE FROM {table_name}"))
-    return result.rowcount or 0
+def _quote_identifier(db: Session, identifier: str) -> str:
+    return db.bind.dialect.identifier_preparer.quote(identifier)
+
+
+def _table_row_count(db: Session, table_name: str) -> int:
+    quoted = _quote_identifier(db, table_name)
+    return int(db.execute(text(f"SELECT COUNT(*) FROM {quoted}")).scalar() or 0)
+
+
+def _deletable_tables(db: Session) -> list[str]:
+    inspector = inspect(db.bind)
+    return [
+        table_name
+        for table_name in inspector.get_table_names()
+        if table_name not in _PRESERVED_APP_DATA_TABLES
+    ]
 
 
 @router.delete('/admin/cleanup/app-data')
 def clear_application_data(db: Session = Depends(get_db)) -> dict:
-    """Clear application/runtime data while preserving configuration tables.
+    """Clear every database table except operator-managed app settings."""
+    tables = _deletable_tables(db)
+    details = {table: _table_row_count(db, table) for table in tables}
 
-    This deliberately leaves app_settings untouched because it stores
-    operator-managed runtime configuration.
-    This deliberately leaves app_settings plus market_universes and market_assets
-    untouched because they are operator-managed configuration/reference data.
-    """
-    details = {table: _delete_table_rows(db, table) for table in _APP_DATA_CLEANUP_TABLES}
+    if tables:
+        dialect = db.bind.dialect.name
+        quoted_tables = ", ".join(_quote_identifier(db, table) for table in tables)
+        if dialect == "postgresql":
+            db.execute(text(f"TRUNCATE TABLE {quoted_tables} RESTART IDENTITY CASCADE"))
+        else:
+            if dialect == "sqlite":
+                db.execute(text("PRAGMA foreign_keys=OFF"))
+            for table in tables:
+                db.execute(text(f"DELETE FROM {_quote_identifier(db, table)}"))
+            if dialect == "sqlite":
+                db.execute(text("PRAGMA foreign_keys=ON"))
+
     db.commit()
     return {
         'deleted': sum(details.values()),
         'details': details,
-        'preserved': ['app_settings'],
-        'preserved': ['app_settings', 'market_universes', 'market_assets'],
+        'preserved': sorted(_PRESERVED_APP_DATA_TABLES),
     }
 
 
