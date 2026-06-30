@@ -42,15 +42,14 @@ if __name__ == "__main__":
         try:
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
-            binance = runtime.get("binance", {})
 
             enabled = as_bool(bot.get("bot_pipeline_enabled", True), default=True)
-            limit = int(binance.get("binance_max_symbols", DEFAULT_LIMIT))
+            limit = DEFAULT_LIMIT
             interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
             settings_log = (
                 f"bot_pipeline_enabled={enabled} "
                 f"bot_pipeline_interval_sec={interval} "
-                f"binance_max_symbols={limit}"
+                f"symbol_limit={limit}"
             )
 
             print(f"Pipeline tick start: {settings_log}", flush=True)

@@ -21,7 +21,7 @@ class MarketDataService:
         self._ensure_optional_candle_columns()
 
     def _ensure_optional_candle_columns(self) -> None:
-        """Keep existing Replit/Postgres databases compatible with new Binance kline fields."""
+        """Keep existing Replit/Postgres databases compatible with external-ingest candle fields."""
         columns = {
             "quote_volume": "DOUBLE PRECISION NOT NULL DEFAULT 0",
             "number_of_trades": "INTEGER NOT NULL DEFAULT 0",

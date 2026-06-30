@@ -56,7 +56,7 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   const counts = useMemo(() => ({ total: rows.length, buy: rows.filter((r) => r.signal === 'BUY').length, sell: rows.filter((r) => r.signal === 'SELL').length, hold: rows.filter((r) => ['HOLD', 'NO_SIGNAL'].includes(r.signal)).length }), [rows])
   return <div className="page-stack">
     <PageHeader title={title} subtitle={subtitle} />
-    <div className="panel"><strong>Phase 1 Stock/ETF mode:</strong> daily EODHD data only · no realtime stream · no broker execution · isolated from crypto/Binance flows.</div>
+    <div className="panel"><strong>Phase 1 Stock/ETF mode:</strong> daily EODHD data only · no realtime stream · no broker execution · isolated from crypto decision flows.</div>
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="stats-grid"><StatCard label="Results" value={counts.total} /><StatCard label="Buy" value={counts.buy} /><StatCard label="Sell" value={counts.sell} /><StatCard label="Hold / No signal" value={counts.hold} /></div>
     {loading ? <div className="panel">Loading…</div> : null}

@@ -17,7 +17,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
   - `fills`
   - `market_candles`
 - Service separation:
-  - collector service using Binance public REST
+  - market-data ingestion API fed by the Raspberry Executor
   - signal engine wired to legacy v231 logic
   - planner service generating trade candidates
   - executor service for paper trading

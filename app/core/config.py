@@ -39,32 +39,6 @@ class Settings(BaseSettings):
 
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
-    binance_rest_base: str = Field(default="https://api.binance.us", alias="BINANCE_REST_BASE")
-    binance_collector_enabled: bool = Field(default=True, alias="BINANCE_COLLECTOR_ENABLED")
-    binance_testnet_rest_base: str = Field(default="https://testnet.binance.vision", alias="BINANCE_TESTNET_REST_BASE")
-    binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
-    binance_secret_key: str = Field(default="", alias="BINANCE_SECRET_KEY")
-    binance_quote_assets: str = Field(default="USDT", alias="BINANCE_QUOTE_ASSETS")
-    binance_symbol_status: str = Field(default="TRADING", alias="BINANCE_SYMBOL_STATUS")
-    binance_max_symbols: int = Field(default=25, alias="BINANCE_MAX_SYMBOLS")
-    binance_min_quote_volume_24h: float = Field(default=1_000_000.0, alias="BINANCE_MIN_QUOTE_VOLUME_24H")
-    binance_min_trades_24h: int = Field(default=1_000, alias="BINANCE_MIN_TRADES_24H")
-    binance_excluded_base_assets: str = Field(default="USDT,USDC,FDUSD,TUSD,DAI,USDP,BUSD,EUR,GBP,USD,TRY,BRL", alias="BINANCE_EXCLUDED_BASE_ASSETS")
-    binance_collect_max_workers: int = Field(default=4, alias="BINANCE_COLLECT_MAX_WORKERS")
-    binance_incremental_fetch_enabled: bool = Field(default=True, alias="BINANCE_INCREMENTAL_FETCH_ENABLED")
-    binance_incremental_min_1m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_1M")
-    binance_incremental_min_5m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_5M")
-    binance_incremental_min_15m: int = Field(default=3, alias="BINANCE_INCREMENTAL_MIN_15M")
-    binance_incremental_min_1h: int = Field(default=2, alias="BINANCE_INCREMENTAL_MIN_1H")
-    binance_incremental_min_4h: int = Field(default=2, alias="BINANCE_INCREMENTAL_MIN_4H")
-    binance_lookback_1m: int = Field(default=180, alias="BINANCE_LOOKBACK_1M")
-    binance_lookback_5m: int = Field(default=180, alias="BINANCE_LOOKBACK_5M")
-    binance_lookback_15m: int = Field(default=180, alias="BINANCE_LOOKBACK_15M")
-    binance_lookback_1h: int = Field(default=180, alias="BINANCE_LOOKBACK_1H")
-    binance_lookback_4h: int = Field(default=120, alias="BINANCE_LOOKBACK_4H")
-
-    live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
-    binance_use_testnet: bool = Field(default=True, alias="BINANCE_USE_TESTNET")
     live_spot_allow_shorts: bool = Field(default=False, alias="LIVE_SPOT_ALLOW_SHORTS")
     live_max_open_positions: int = Field(default=3, alias="LIVE_MAX_OPEN_POSITIONS")
     live_max_notional_per_trade: float = Field(default=250.0, alias="LIVE_MAX_NOTIONAL_PER_TRADE")
@@ -105,9 +79,6 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
-    @property
-    def quote_assets_list(self) -> list[str]:
-        return [item.strip().upper() for item in self.binance_quote_assets.split(",") if item.strip()]
 
     def signal_config(self) -> dict:
         return {
