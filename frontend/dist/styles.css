@@ -21,3 +21,15 @@ th { color: var(--muted); }
 .scroll { overflow-x: auto; }
 footer { color: var(--muted); margin-top: 20px; font-size: 13px; }
 @media (max-width: 700px) { body { padding: 12px; } th, td { font-size: 12px; padding: 6px; } }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.stat { min-width: 120px; background: #101827; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.stat strong { display:block; font-size: 24px; color: var(--accent); }
+.stat span { color: var(--muted); font-size: 12px; }
+.badge { display:inline-block; padding: 3px 8px; border-radius: 999px; background:#202a3a; font-weight:700; }
+.badge.ok { color: var(--ok); }
+.badge.warn { color: var(--warn); }
+.badge.bad { color: var(--bad); }
+details { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 10px 0; background: #151515; }
+summary { cursor: pointer; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+pre { white-space: pre-wrap; word-break: break-word; }

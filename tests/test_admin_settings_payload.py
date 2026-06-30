@@ -121,8 +121,8 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
 
     payload = runtime_settings.load_admin_settings()
 
-    assert "market_data" not in payload
-    assert "strategy" not in payload
+    assert payload["market_data"]["binance_max_symbols"] == 25
+    assert payload["strategy"]["planner_min_score"] == 4
     assert "admin_token" not in payload["general"]
     assert "binance_quote_assets" not in payload["binance"]
     assert payload["executor"]["quote_assets"] == "USDC"

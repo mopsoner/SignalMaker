@@ -1,295 +1,44 @@
 (function () {
   var apiBase = window.SIGNALMAKER_API_BASE || '';
-
-  function text(value) {
-    if (value === null || value === undefined || value === '') return '-';
-    return String(value).replace(/[&<>'"]/g, function (char) {
-      return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char];
-    });
-  }
-
-  function setHtml(id, html) {
-    var element = document.getElementById(id);
-    if (element) element.innerHTML = html;
-  }
-
-  function operatorHeaders() {
-    var headers = { Accept: 'application/json' };
-    try {
-      var key = window.localStorage.getItem('signalmaker_operator_key') || '';
-      if (key) headers['x-operator-key'] = key;
-    } catch (error) {}
-    return headers;
-  }
-
-  function fetchJson(path, options) {
-    options = options || {};
-    var headers = operatorHeaders();
-    if (options.body) headers['Content-Type'] = 'application/json';
-
-    return fetch(apiBase + path, {
-      method: options.method || 'GET',
-      headers: headers,
-      body: options.body
-    }).then(function (response) {
-      if (!response.ok) throw new Error(response.status + ' ' + response.statusText);
-      return response.json();
-    });
-  }
-
-  function table(rows, columns) {
-    if (!rows || !rows.length) return '<p class="muted">Aucune donnée.</p>';
-    return '<div class="scroll"><table><thead><tr>' + columns.map(function (col) {
-      return '<th>' + text(col.label) + '</th>';
-    }).join('') + '</tr></thead><tbody>' + rows.map(function (row) {
-      return '<tr>' + columns.map(function (col) {
-        var value = typeof col.value === 'function' ? col.value(row) : row[col.key];
-        return '<td>' + text(value) + '</td>';
-      }).join('') + '</tr>';
-    }).join('') + '</tbody></table></div>';
-  }
-
-  function asRows(payload) {
-    if (Array.isArray(payload)) return payload;
-    return payload && (payload.rows || payload.candidates || payload.items || payload.data) || [];
-  }
-
-
   var adminSettingsPayload = null;
   var adminSettingsDirty = false;
 
-  function isAdminSettingsInput(element) {
-    return !!(element && element.getAttribute && element.getAttribute('data-admin-section') && element.getAttribute('data-admin-key'));
-  }
+  function text(value) { if (value === null || value === undefined || value === '') return '-'; return String(value).replace(/[&<>'"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]; }); }
+  function setHtml(id, html) { var el = document.getElementById(id); if (el) el.innerHTML = html; }
+  function operatorHeaders() { var h = { Accept: 'application/json' }; try { var k = localStorage.getItem('signalmaker_operator_key') || ''; if (k) h['x-operator-key'] = k; } catch(e) {} return h; }
+  function fetchJson(path, options) { options = options || {}; var h = operatorHeaders(); if (options.body) h['Content-Type'] = 'application/json'; return fetch(apiBase + path, { method: options.method || 'GET', headers: h, body: options.body }).then(function (r) { if (!r.ok) throw new Error(r.status + ' ' + r.statusText); return r.json(); }); }
+  function asRows(p) { if (Array.isArray(p)) return p; if (!p) return []; if (Array.isArray(p.rows)) return p.rows; if (Array.isArray(p.candidates)) return p.candidates; if (Array.isArray(p.items)) return p.items; if (Array.isArray(p.data)) return p.data; return Object.keys(p).map(function (k) { var v = p[k] || {}; if (typeof v === 'object' && !Array.isArray(v)) { v.name = v.name || k; return v; } return { name:k, value:v }; }); }
+  function table(rows, columns) { rows = rows || []; if (!rows.length) return '<p class="muted">Aucune donnée.</p>'; return '<div class="scroll"><table><thead><tr>' + columns.map(function (c) { return '<th>'+text(c.label)+'</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + columns.map(function (c) { var v = typeof c.value === 'function' ? c.value(r) : r[c.key]; return '<td>'+(c.html ? String(v) : text(v))+'</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>'; }
+  function badge(v) { var cls = (v === true || v === 'ok' || v === 'open' || v === 'running') ? 'ok' : (v === false || v === 'error' || v === 'failed' ? 'bad' : 'warn'); return '<span class="badge '+cls+'">'+text(v)+'</span>'; }
+  function countBy(rows, key) { return rows.reduce(function (a, r) { var v = r[key] || '-'; a[v] = (a[v] || 0) + 1; return a; }, {}); }
+  function statCards(items) { return '<div class="stats">' + items.map(function (i) { return '<div class="stat"><strong>'+text(i.value)+'</strong><span>'+text(i.label)+'</span></div>'; }).join('') + '</div>'; }
+  function byHour(row) { var d = new Date(row.received_at || row.created_at || row.updated_at || Date.now()); if (isNaN(d.getTime())) return '-'; d.setMinutes(0,0,0); return d.toLocaleString(); }
+  function rsi(row) { var p = row.payload || {}; var r = p.remote_candidate || p; return Number(row.rsi_1h || row.rsi || r.rsi_1h || r.entry_rsi || r.rsi || 0); }
+  function momentumSignal(row) { var val = rsi(row); var status = String(row.status || '').toLowerCase(); if (status === 'open' || status === 'filled') return 'En trade'; if (val >= 45 && val <= 60) return 'À acheter (RSI 45-60)'; if (val > 70 || val < 45) return 'À vendre / éviter'; return 'Surveillance'; }
 
-  function adminSettingsHasActiveEdit() {
-    return adminSettingsDirty || isAdminSettingsInput(document.activeElement);
-  }
+  function isAdminInput(el) { return !!(el && el.getAttribute && el.getAttribute('data-admin-section') && el.getAttribute('data-admin-key')); }
+  function hasActiveEdit() { return adminSettingsDirty || isAdminInput(document.activeElement); }
+  function parseAdminValue(raw, original) { if (typeof original === 'boolean') return raw === 'true'; if (typeof original === 'number') { var n = Number(raw); return Number.isNaN(n) ? original : n; } if (Array.isArray(original)) return raw.split(',').map(function (x) { return x.trim(); }).filter(Boolean); return raw; }
+  function renderAdminSettings(payload) { adminSettingsPayload = payload || {}; var sections = ['general','executor','market_data','strategy','binance','kraken','notifications','bot','live','momentum'].filter(function(s){ return adminSettingsPayload[s]; }); return sections.map(function (section) { var vals = adminSettingsPayload[section] || {}; var rows = Object.keys(vals).sort().map(function (key) { var v = vals[key]; var secret = /(_api_key|_secret_key|telegram_secret|discord_url)$/i.test(key); if (typeof v === 'boolean') return '<tr><td><code>'+text(key)+'</code></td><td><select data-admin-section="'+text(section)+'" data-admin-key="'+text(key)+'"><option value="true"'+(v?' selected':'')+'>true</option><option value="false"'+(!v?' selected':'')+'>false</option></select></td></tr>'; var display = Array.isArray(v) ? v.join(',') : v; return '<tr><td><code>'+text(key)+'</code></td><td><input type="'+(secret?'password':(typeof v === 'number'?'number':'text'))+'" autocomplete="off" data-admin-section="'+text(section)+'" data-admin-key="'+text(key)+'" value="'+text(display)+'"></td></tr>'; }).join(''); return '<details open><summary>'+text(section)+'</summary><div class="scroll"><table><tbody>'+rows+'</tbody></table></div></details>'; }).join(''); }
+  function loadOperatorToken() { var i = document.getElementById('operator-key-input'); if (!i || document.activeElement === i || i.dataset.loaded) return; try { i.value = localStorage.getItem('signalmaker_operator_key') || ''; i.dataset.loaded = 'true'; } catch(e) {} }
+  function saveOperatorToken() { var i = document.getElementById('operator-key-input'); try { localStorage.setItem('signalmaker_operator_key', i.value || ''); setHtml('operator-key-result','Token local sauvegardé.'); } catch(e) { setHtml('operator-key-result','Erreur token : '+text(e.message)); } }
+  function loadAdminSettings(force) { if (!document.getElementById('admin-settings-content')) return Promise.resolve(); if (!force && hasActiveEdit()) return Promise.resolve(); return fetchJson('/api/v1/admin/settings').then(function(p){ setHtml('admin-settings-content', renderAdminSettings(p)); }).catch(function(e){ setHtml('admin-settings-content','<p class="warn">Réglages indisponibles : '+text(e.message)+'</p>'); }); }
+  function saveAdminSettings() { var payload = JSON.parse(JSON.stringify(adminSettingsPayload || {})); document.querySelectorAll('[data-admin-section][data-admin-key]').forEach(function (input) { var s=input.dataset.adminSection, k=input.dataset.adminKey; payload[s] = payload[s] || {}; payload[s][k] = parseAdminValue(input.value, adminSettingsPayload[s] && adminSettingsPayload[s][k]); }); return fetchJson('/api/v1/admin/settings', {method:'PUT', body:JSON.stringify(payload)}).then(function(p){ adminSettingsDirty=false; setHtml('admin-save-result','Réglages sauvegardés et relus depuis l’API.'); setHtml('admin-settings-content', renderAdminSettings(p)); }).catch(function(e){ setHtml('admin-save-result','Erreur sauvegarde : '+text(e.message)); }); }
 
-  function parseAdminValue(raw, original) {
-    if (typeof original === 'boolean') return raw === 'true' || raw === '1' || raw === 'on';
-    if (typeof original === 'number') {
-      var number = Number(raw);
-      return Number.isNaN(number) ? original : number;
-    }
-    if (Array.isArray(original)) return raw.split(',').map(function (item) { return item.trim(); }).filter(Boolean);
-    return raw;
-  }
-
-  function renderAdminSettings(payload) {
-    adminSettingsPayload = payload || {};
-    var sectionLabels = {
-      general: 'Paramètres généraux',
-      executor: 'Exécution',
-      binance: 'Plateforme Binance',
-      kraken: 'Plateforme Kraken',
-      notifications: 'Notifications',
-      bot: 'Workers / bot',
-      live: 'Trading live',
-      momentum: 'Momentum'
-    };
-    var sectionHelp = {
-      general: 'Paramètres globaux de l’application. Aucune clé exchange ici.',
-      executor: 'Choix de la plateforme d’exécution et actifs de cotation communs.',
-      binance: 'Paramètres propres à Binance uniquement.',
-      kraken: 'Paramètres propres à Kraken uniquement.',
-      notifications: 'Canaux de notification.',
-      bot: 'Activation et fréquence des workers.',
-      live: 'Garde-fous de trading réel communs aux plateformes.',
-      momentum: 'Synchronisation Momentum.'
-    };
-    var preferred = ['general', 'executor', 'binance', 'kraken', 'notifications', 'bot', 'live', 'momentum'];
-    return preferred.map(function (section) {
-      var values = adminSettingsPayload[section] || {};
-      var keys = Object.keys(values).filter(function (key) { return values[key] !== null && values[key] !== undefined; });
-      var rows = keys.map(function (key) {
-        var value = values[key];
-        var isSecret = /(_api_key|_secret_key|telegram_secret|discord_url)$/i.test(key);
-        var inputType = isSecret ? 'password' : (typeof value === 'number' ? 'number' : 'text');
-        var displayValue = Array.isArray(value) ? value.join(',') : value;
-        if (typeof value === 'boolean') {
-          return '<tr><td><code>' + text(key) + '</code></td><td><select data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '"><option value="true"' + (value ? ' selected' : '') + '>true</option><option value="false"' + (!value ? ' selected' : '') + '>false</option></select></td></tr>';
-        }
-        return '<tr><td><code>' + text(key) + '</code></td><td><input type="' + inputType + '" autocomplete="off" data-admin-section="' + text(section) + '" data-admin-key="' + text(key) + '" value="' + text(displayValue) + '"></td></tr>';
-      }).join('');
-      if (!rows) rows = '<tr><td colspan="2" class="muted">Aucun paramètre modifiable dans cette section.</td></tr>';
-      return '<details open><summary>' + text(sectionLabels[section] || section) + '</summary><p class="muted">' + text(sectionHelp[section] || '') + '</p><div class="scroll"><table><tbody>' + rows + '</tbody></table></div></details>';
-    }).join('');
-  }
-
-  function loadOperatorToken() {
-    var input = document.getElementById('operator-key-input');
-    if (!input) return;
-    if (document.activeElement === input || input.getAttribute('data-loaded') === 'true') return;
-    try { input.value = window.localStorage.getItem('signalmaker_operator_key') || ''; input.setAttribute('data-loaded', 'true'); } catch (error) {}
-  }
-
-  function saveOperatorToken() {
-    var input = document.getElementById('operator-key-input');
-    if (!input) return;
-    try {
-      window.localStorage.setItem('signalmaker_operator_key', input.value || '');
-      setHtml('operator-key-result', 'Token admin local sauvegardé.');
-    } catch (error) {
-      setHtml('operator-key-result', 'Impossible de sauvegarder le token local : ' + text(error.message));
-    }
-  }
-
-  function loadAdminSettings(force) {
-    if (!document.getElementById('admin-settings-content')) return Promise.resolve();
-    if (!force && adminSettingsHasActiveEdit()) return Promise.resolve();
-    return fetchJson('/api/v1/admin/settings').then(function (payload) {
-      setHtml('admin-settings-content', renderAdminSettings(payload));
-    }).catch(function (error) { setHtml('admin-settings-content', '<p class="warn">Réglages indisponibles : ' + text(error.message) + '</p>'); });
-  }
-
-  function saveAdminSettings() {
-    if (!adminSettingsPayload) return;
-    var payload = JSON.parse(JSON.stringify(adminSettingsPayload));
-    document.querySelectorAll('[data-admin-section][data-admin-key]').forEach(function (input) {
-      var section = input.getAttribute('data-admin-section');
-      var key = input.getAttribute('data-admin-key');
-      var original = adminSettingsPayload[section] && adminSettingsPayload[section][key];
-      payload[section][key] = parseAdminValue(input.value, original);
-    });
-    fetchJson('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }).then(function (updated) {
-      adminSettingsDirty = false;
-      setHtml('admin-save-result', 'Réglages sauvegardés.');
-      setHtml('admin-settings-content', renderAdminSettings(updated));
-    }).catch(function (error) { setHtml('admin-save-result', 'Erreur sauvegarde : ' + text(error.message)); });
-  }
-
-  function loadAdminWorkers() {
-    if (!document.getElementById('admin-workers-content')) return Promise.resolve();
-    return fetchJson('/api/v1/admin/workers').then(function (payload) {
-      setHtml('admin-workers-content', '<pre>' + text(JSON.stringify(payload, null, 2)) + '</pre>');
-    }).catch(function (error) { setHtml('admin-workers-content', '<p class="warn">Workers indisponibles : ' + text(error.message) + '</p>'); });
-  }
-
-  function postAdminAction(path, resultId) {
-    fetchJson(path, { method: 'POST' }).then(function (payload) {
-      setHtml(resultId, '<pre>' + text(JSON.stringify(payload, null, 2)) + '</pre>');
-      refresh();
-    }).catch(function (error) { setHtml(resultId, 'Erreur : ' + text(error.message)); });
-  }
-
-  function loadHealth() {
-    return fetchJson('/api/v1/health').catch(function () { return fetchJson('/healthz'); }).then(function (data) {
-      var health = document.getElementById('health');
-      if (!health) return;
-      health.className = 'ok';
-      health.textContent = (data.service || 'SignalMaker') + ' : ' + (data.status || 'ok');
-    }).catch(function (error) {
-      var health = document.getElementById('health');
-      if (!health) return;
-      health.className = 'bad';
-      health.textContent = 'API indisponible : ' + error.message;
-    });
-  }
-
-  function loadPositions() {
-    return fetchJson('/api/v1/positions?limit=100').then(function (rows) {
-      setHtml('positions-content', table(asRows(rows), [
-        {key:'status', label:'Status'}, {key:'symbol', label:'Symbol'}, {key:'side', label:'Side'},
-        {key:'quantity', label:'Qty'}, {key:'entry_price', label:'Entry'}, {key:'mark_price', label:'Mark'},
-        {key:'target_price', label:'TP'}, {key:'unrealized_pnl', label:'PnL'}, {key:'opened_at', label:'Ouvert'}
-      ]));
-    }).catch(function (error) { setHtml('positions-content', '<p class="warn">Positions indisponibles : ' + text(error.message) + '</p>'); });
-  }
-
-  function loadCandidates() {
-    return fetchJson('/api/v1/trade-candidates?limit=100').then(function (payload) {
-      setHtml('candidates-content', table(asRows(payload), [
-        {key:'candidate_id', label:'ID'}, {key:'symbol', label:'Symbol'}, {key:'stage', label:'Stage'},
-        {key:'side', label:'Side'}, {key:'entry_price', label:'Entry'}, {key:'target_price', label:'TP'},
-        {key:'stop_price', label:'Stop'}, {key:'score', label:'Score'}, {key:'status', label:'Status'}, {key:'created_at', label:'Créé'}
-      ]));
-    }).catch(function (error) { setHtml('candidates-content', '<p class="warn">Candidats indisponibles : ' + text(error.message) + '</p>'); });
-  }
-
-  function loadMomentum() {
-    return fetchJson('/api/v1/trade-candidates?limit=100&stage=momentum').then(function (payload) {
-      setHtml('momentum-content', table(asRows(payload), [
-        {key:'candidate_id', label:'ID'}, {key:'symbol', label:'Symbol'}, {key:'side', label:'Side'},
-        {key:'entry_price', label:'Entry'}, {key:'target_price', label:'TP'}, {key:'stop_price', label:'Stop'},
-        {key:'score', label:'Score'}, {key:'status', label:'Status'},
-        {label:'RSI entrée', value:function(row){ var p=row.payload||{}; var r=p.remote_candidate||{}; return row.rsi_1h || r.rsi_1h || r.entry_rsi || '-'; }},
-        {key:'created_at', label:'Créé'}
-      ]));
-    }).catch(function (error) { setHtml('momentum-content', '<p class="warn">Momentum indisponible : ' + text(error.message) + '</p>'); });
-  }
-
-  function loadAssets() {
-    return fetchJson('/api/v1/assets?limit=100&sort_by=updated_at').then(function (payload) {
-      setHtml('assets-content', table(asRows(payload), [
-        {key:'symbol', label:'Symbol'}, {key:'state', label:'State'}, {key:'bias', label:'Bias'},
-        {key:'score', label:'Score'}, {key:'rsi_15m', label:'RSI 15m'}, {key:'updated_at', label:'MAJ'}
-      ]));
-    }).catch(function (error) { setHtml('assets-content', '<p class="warn">Dashboard indisponible : ' + text(error.message) + '</p>'); });
-  }
-
-
-  function loadOrders() {
-    if (document.getElementById('orders-content')) fetchJson('/api/v1/orders?limit=100').then(function (p) { setHtml('orders-content', table(asRows(p), [{key:'order_id', label:'ID'}, {key:'candidate_id', label:'Candidate'}, {key:'symbol', label:'Symbol'}, {key:'side', label:'Side'}, {key:'order_type', label:'Type'}, {key:'quantity', label:'Qty'}, {key:'requested_price', label:'Requested'}, {key:'filled_price', label:'Filled'}, {key:'status', label:'Status'}, {key:'created_at', label:'Date'}])); }).catch(function (e) { setHtml('orders-content', '<p class="warn">Orders indisponibles : '+text(e.message)+'</p>'); });
-    if (document.getElementById('fills-content')) fetchJson('/api/v1/fills?limit=100').then(function (p) { setHtml('fills-content', table(asRows(p), [{key:'fill_id', label:'ID'}, {key:'order_id', label:'Order'}, {key:'position_id', label:'Position'}, {key:'symbol', label:'Symbol'}, {key:'side', label:'Side'}, {key:'quantity', label:'Qty'}, {key:'price', label:'Price'}, {key:'created_at', label:'Date'}])); }).catch(function (e) { setHtml('fills-content', '<p class="warn">Fills indisponibles : '+text(e.message)+'</p>'); });
-  }
-
-  function loadOps() {
-    if (document.getElementById('services-content')) fetchJson('/api/v1/services').then(function (p) { setHtml('services-content', table(asRows(p), [{key:'name', label:'Service'}, {key:'status', label:'Status'}, {key:'detail', label:'Detail'}])); }).catch(function (e) { setHtml('services-content', '<p class="warn">Services indisponibles : '+text(e.message)+'</p>'); });
-    if (document.getElementById('fills-content')) fetchJson('/api/v1/fills?limit=50').then(function (p) { setHtml('fills-content', table(asRows(p), [{key:'symbol', label:'Symbol'}, {key:'side', label:'Side'}, {key:'quantity', label:'Qty'}, {key:'price', label:'Prix'}, {key:'created_at', label:'Date'}])); }).catch(function (e) { setHtml('fills-content', '<p class="warn">Fills indisponibles : '+text(e.message)+'</p>'); });
-    if (document.getElementById('live-runs-content')) fetchJson('/api/v1/live-runs?limit=20').then(function (p) { setHtml('live-runs-content', table(asRows(p), [{key:'id', label:'ID'}, {key:'status', label:'Status'}, {key:'started_at', label:'Début'}, {key:'finished_at', label:'Fin'}])); }).catch(function (e) { setHtml('live-runs-content', '<p class="warn">Runs indisponibles : '+text(e.message)+'</p>'); });
-  }
-
-  function loadLogs() {
-    if (document.getElementById('workers-content')) fetchJson('/api/v1/admin/workers').then(function (p) { setHtml('workers-content', table(asRows(p), [{key:'name', label:'Worker'}, {key:'running', label:'Running'}, {key:'pid', label:'PID'}])); }).catch(function (e) { setHtml('workers-content', '<p class="warn">Workers indisponibles : '+text(e.message)+'</p>'); });
-    if (document.getElementById('logs-content')) fetchJson('/api/v1/admin/logs/executor?lines=120').then(function (p) { setHtml('logs-content', '<pre>' + text((p.lines || p.logs || []).join ? (p.lines || p.logs || []).join('\n') : JSON.stringify(p, null, 2)) + '</pre>'); }).catch(function (e) { setHtml('logs-content', '<p class="warn">Logs indisponibles : '+text(e.message)+'</p>'); });
-  }
-
-  function loadMarketData() {
-  }
-
-  function loadAsset() {
-    var input = document.getElementById('asset-symbol');
-    var params = new URLSearchParams(window.location.search);
-    var symbol = (input && input.value) || params.get('symbol') || '';
-    if (input && symbol) input.value = symbol;
-    if (!symbol) return;
-    fetchJson('/api/v1/assets/' + encodeURIComponent(symbol)).then(function (p) { setHtml('asset-content', '<pre>'+text(JSON.stringify(p, null, 2))+'</pre>'); }).catch(function (e) { setHtml('asset-content', '<p class="warn">Actif indisponible : '+text(e.message)+'</p>'); });
-  }
-
-  function refresh(forceAdminSettings) {
-    var updatedAt = document.getElementById('updated-at');
-    if (updatedAt) updatedAt.textContent = new Date().toLocaleString();
-    loadOperatorToken();
-    if (document.getElementById('health')) loadHealth();
-    if (document.getElementById('positions-content')) loadPositions();
-    if (document.getElementById('candidates-content')) loadCandidates();
-    if (document.getElementById('momentum-content')) loadMomentum();
-    if (document.getElementById('assets-content')) loadAssets();
-    loadAdminSettings(!!forceAdminSettings); loadAdminWorkers();
-    loadOrders(); loadOps(); loadLogs(); loadMarketData(); loadAsset();
-  }
-
-  document.addEventListener('input', function (event) {
-    if (isAdminSettingsInput(event.target)) adminSettingsDirty = true;
-  });
-
-  document.addEventListener('change', function (event) {
-    if (isAdminSettingsInput(event.target)) adminSettingsDirty = true;
-  });
-
-  document.addEventListener('click', function (event) {
-    var action = event.target && event.target.getAttribute('data-action');
-    if (action === 'refresh') refresh(true);
-    if (action === 'sync-momentum') fetchJson('/api/v1/executor/sync-momentum-candidates', { method: 'POST' }).then(function (p) { setHtml('sync-result', 'Sync OK : ' + text(JSON.stringify(p))); refresh(); }).catch(function (e) { setHtml('sync-result', 'Sync erreur : ' + text(e.message)); });
-    if (action === 'load-asset') loadAsset();
-    if (action === 'save-operator-token') saveOperatorToken();
-    if (action === 'save-admin-settings') saveAdminSettings();
-    if (action === 'reset-database' && window.confirm('Reset database runtime ?')) postAdminAction('/api/v1/admin/reset-database', 'admin-action-result');
-    if (action === 'test-binance') postAdminAction('/api/v1/admin/test/binance', 'admin-action-result');
-    if (action === 'test-kraken') postAdminAction('/api/v1/admin/test/kraken', 'admin-action-result');
-    if (action === 'test-notifications') postAdminAction('/api/v1/admin/test/notifications', 'admin-action-result');
-  });
-  refresh();
-  setInterval(refresh, 30000);
+  function loadHealth() { return fetchJson('/api/v1/health').catch(function(){return fetchJson('/healthz');}).then(function(d){ setHtml('health', badge(d.status || 'ok')+' '+text(d.service || 'SignalMaker')); }).catch(function(e){ var el=document.getElementById('health'); if(el){el.className='bad'; el.textContent='API indisponible : '+e.message;} }); }
+  function loadPositions(){ return fetchJson('/api/v1/positions?limit=100').then(function(p){ var rows=asRows(p); setHtml('positions-summary', statCards([{label:'Positions',value:rows.length},{label:'Ouvertes',value:rows.filter(function(r){return r.status==='open';}).length}])); setHtml('positions-content', table(rows,[{key:'status',label:'Status'},{key:'symbol',label:'Symbol'},{key:'side',label:'Side'},{key:'quantity',label:'Qty'},{key:'entry_price',label:'Entry'},{key:'target_price',label:'TP'},{key:'unrealized_pnl',label:'PnL'},{key:'opened_at',label:'Ouvert'}])); }).catch(function(e){ setHtml('positions-content','<p class="warn">Positions indisponibles : '+text(e.message)+'</p>'); }); }
+  function loadCandidates(){ return fetchJson('/api/v1/trade-candidates?limit=200').then(function(p){ var rows=asRows(p); setHtml('candidates-summary', statCards([{label:'Reçus',value:rows.length},{label:'Dernière heure',value:rows.filter(function(r){return Date.now()-new Date(r.created_at||r.received_at||0).getTime()<3600000;}).length}])); setHtml('candidates-content', table(rows,[{label:'Heure reçue',value:byHour},{key:'candidate_id',label:'ID'},{key:'symbol',label:'Symbol'},{key:'stage',label:'Stage'},{key:'side',label:'Side'},{key:'entry_price',label:'Entry'},{key:'target_price',label:'TP'},{key:'score',label:'Score'},{key:'status',label:'Status'},{key:'created_at',label:'Reçu'}])); }).catch(function(e){ setHtml('candidates-content','<p class="warn">Candidats indisponibles : '+text(e.message)+'</p>'); }); }
+  function loadMomentum(){ return fetchJson('/api/v1/trade-candidates?limit=200&stage=momentum').then(function(p){ var rows=asRows(p); var groups=countBy(rows.map(function(r){ r._decision=momentumSignal(r); return r; }), '_decision'); setHtml('momentum-summary', statCards(Object.keys(groups).map(function(k){return {label:k,value:groups[k]};}))); setHtml('momentum-content', table(rows,[{label:'Décision',value:function(r){return r._decision||momentumSignal(r);}},{key:'symbol',label:'Symbol'},{key:'side',label:'Side'},{label:'RSI',value:rsi},{key:'score',label:'Score'},{key:'entry_price',label:'Entry'},{key:'target_price',label:'TP'},{key:'status',label:'Status'},{key:'created_at',label:'Reçu'}])); }).catch(function(e){ setHtml('momentum-content','<p class="warn">Momentum indisponible : '+text(e.message)+'</p>'); }); }
+  function loadAssets(){ return fetchJson('/api/v1/assets?limit=100&sort_by=updated_at').then(function(p){ var rows=asRows(p); setHtml('assets-summary', statCards([{label:'Actifs suivis',value:rows.length}])); setHtml('assets-content', table(rows,[{key:'symbol',label:'Symbol'},{key:'state',label:'State'},{key:'bias',label:'Bias'},{key:'score',label:'Score'},{key:'rsi_15m',label:'RSI 15m'},{key:'updated_at',label:'MAJ'}])); }).catch(function(e){ setHtml('assets-content','<p class="warn">Actifs indisponibles : '+text(e.message)+'</p>'); }); }
+  function loadOrders(){ if(document.getElementById('orders-content')) fetchJson('/api/v1/orders?limit=100').then(function(p){ setHtml('orders-content', table(asRows(p),[{key:'order_id',label:'ID'},{key:'symbol',label:'Symbol'},{key:'side',label:'Side'},{key:'order_type',label:'Type'},{key:'quantity',label:'Qty'},{key:'status',label:'Status'},{key:'created_at',label:'Date'}])); }).catch(function(e){setHtml('orders-content','<p class="warn">Orders indisponibles : '+text(e.message)+'</p>');}); if(document.getElementById('fills-content')) fetchJson('/api/v1/fills?limit=100').then(function(p){ setHtml('fills-content', table(asRows(p),[{key:'symbol',label:'Symbol'},{key:'side',label:'Side'},{key:'quantity',label:'Qty'},{key:'price',label:'Prix'},{key:'created_at',label:'Date'}])); }).catch(function(e){setHtml('fills-content','<p class="warn">Fills indisponibles : '+text(e.message)+'</p>');}); }
+  function workerTable(rows){ return table(rows,[{key:'name',label:'Worker'},{label:'Status',value:function(r){return r.running?'running':'stopped';}},{key:'pid',label:'PID'},{label:'Actions',html:true,value:function(r){return '<button data-worker="'+text(r.name)+'" data-worker-action="start">Start</button> <button class="danger" data-worker="'+text(r.name)+'" data-worker-action="stop">Stop</button>';}}]); }
+  function loadAdminWorkers(){ if(!document.getElementById('admin-workers-content') && !document.getElementById('workers-content')) return Promise.resolve(); return fetchJson('/api/v1/admin/workers').then(function(p){ var html=workerTable(asRows(p)); setHtml('admin-workers-content',html); setHtml('workers-content',html); }).catch(function(e){ setHtml('admin-workers-content','<p class="warn">Workers indisponibles : '+text(e.message)+'</p>'); setHtml('workers-content','<p class="warn">Workers indisponibles : '+text(e.message)+'</p>'); }); }
+  function loadOps(){ if(document.getElementById('services-content')) fetchJson('/api/v1/services').then(function(p){ setHtml('services-content', table(asRows(p),[{key:'name',label:'Service'},{key:'status',label:'Status'},{key:'detail',label:'Détail'}])); }).catch(function(e){setHtml('services-content','<p class="warn">Services indisponibles : '+text(e.message)+'</p>');}); }
+  function loadLogs(){ if(document.getElementById('logs-content')) fetchJson('/api/v1/admin/logs/executor?lines=160').then(function(p){ setHtml('logs-content','<pre>'+text((p.lines||[]).join('\n'))+'</pre>'); }).catch(function(e){ setHtml('logs-content','<p class="warn">Logs indisponibles : '+text(e.message)+'</p>'); }); }
+  function loadAsset(){ var i=document.getElementById('asset-symbol'); var symbol=(i&&i.value)||new URLSearchParams(location.search).get('symbol')||''; if(i&&symbol)i.value=symbol; if(!symbol)return; fetchJson('/api/v1/assets/'+encodeURIComponent(symbol)).then(function(p){setHtml('asset-content','<pre>'+text(JSON.stringify(p,null,2))+'</pre>');}).catch(function(e){setHtml('asset-content','<p class="warn">Actif indisponible : '+text(e.message)+'</p>');}); }
+  function postAdminAction(path,id){ fetchJson(path,{method:'POST'}).then(function(p){setHtml(id,'<pre>'+text(JSON.stringify(p,null,2))+'</pre>'); refresh(true);}).catch(function(e){setHtml(id,'Erreur : '+text(e.message));}); }
+  function refresh(force){ var u=document.getElementById('updated-at'); if(u) u.textContent=new Date().toLocaleString(); loadOperatorToken(); if(document.getElementById('health')) loadHealth(); if(document.getElementById('positions-content')||document.getElementById('dashboard-positions')) loadPositions(); if(document.getElementById('candidates-content')) loadCandidates(); if(document.getElementById('momentum-content')) loadMomentum(); if(document.getElementById('assets-content')) loadAssets(); loadOrders(); loadOps(); loadLogs(); loadAdminWorkers(); loadAdminSettings(!!force); loadAsset(); }
+  document.addEventListener('input', function(e){ if(isAdminInput(e.target)) adminSettingsDirty=true; }); document.addEventListener('change', function(e){ if(isAdminInput(e.target)) adminSettingsDirty=true; });
+  document.addEventListener('click', function(e){ var a=e.target&&e.target.getAttribute('data-action'); var wa=e.target&&e.target.getAttribute('data-worker-action'); if(a==='refresh') refresh(true); if(a==='sync-momentum') postAdminAction('/api/v1/executor/sync-momentum-candidates','sync-result'); if(a==='load-asset') loadAsset(); if(a==='save-operator-token') saveOperatorToken(); if(a==='save-admin-settings') saveAdminSettings(); if(a==='reset-database'&&confirm('Reset database runtime ?')) postAdminAction('/api/v1/admin/reset-database','admin-action-result'); if(a==='test-binance') postAdminAction('/api/v1/admin/test/binance','admin-action-result'); if(a==='test-kraken') postAdminAction('/api/v1/admin/test/kraken','admin-action-result'); if(a==='test-notifications') postAdminAction('/api/v1/admin/test/notifications','admin-action-result'); if(wa){ postAdminAction('/api/v1/admin/workers/'+e.target.getAttribute('data-worker')+'/'+wa, 'ops-action-result'); } });
+  refresh(); setInterval(function(){ refresh(false); }, 30000);
 }());
