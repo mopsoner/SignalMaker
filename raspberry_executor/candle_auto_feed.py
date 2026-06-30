@@ -147,8 +147,9 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
 
 
 def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, limit: int = 0) -> tuple[list[str], str]:
-    if mode in {"cross", "isolated"}:
-        return discover_kraken_margin_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_margin"
+    # Candle/universe discovery must stay spot-based for Kraken. Margin
+    # eligibility is decided later, per BUY execution, so non-margin spot pairs
+    # remain available for analysis, candle feed, momentum and fallback spot buys.
     return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
 
 

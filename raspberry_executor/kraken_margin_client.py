@@ -30,18 +30,20 @@ class KrakenMarginClient:
     records those operations as implicit borrow/repay payloads.
     """
 
-    def __init__(self, kraken: KrakenClient, *, isolated: bool = False, dry_run: bool = True) -> None:
+    def __init__(self, kraken: KrakenClient, *, isolated: bool = False, dry_run: bool = True, leverage: float | str | None = None) -> None:
         self.kraken = kraken  # Compatibility with existing manager attribute names.
         self.kraken = kraken
         self.isolated = False
         self.requested_isolated = isolated
         self.dry_run = dry_run or kraken.dry_run
+        self.leverage_override = leverage
 
     def is_isolated_value(self) -> str:
         return "FALSE"
 
     def leverage(self) -> str:
-        value = max(2.0, min(5.0, float(margin_multiplier())))
+        configured = self.leverage_override if self.leverage_override is not None else margin_multiplier()
+        value = max(2.0, min(5.0, float(configured)))
         if value.is_integer():
             return str(int(value))
         return f"{value:.2f}".rstrip("0").rstrip(".")
