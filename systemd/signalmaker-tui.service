@@ -1,7 +1,7 @@
 [Unit]
 Description=SignalMaker Raspberry fullscreen TUI
-After=network-online.target raspberry-executor.service systemd-user-sessions.service
-Wants=network-online.target raspberry-executor.service
+After=network-online.target signalmaker-api.service raspberry-executor.service systemd-user-sessions.service
+Wants=network-online.target signalmaker-api.service raspberry-executor.service
 Conflicts=getty@tty1.service
 
 [Service]

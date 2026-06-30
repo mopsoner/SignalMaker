@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
-
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$APP_DIR"
 exec bash scripts/start_tui.sh "$@"
