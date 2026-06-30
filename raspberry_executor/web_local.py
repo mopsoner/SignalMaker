@@ -8,8 +8,18 @@ from raspberry_executor.logging_setup import LOG_FILE, tail_logs
 from raspberry_executor.state import StateStore
 
 
+def header_status_html():
+    vals = read_env()
+    remote = escape(vals.get('SIGNALMAKER_BASE_URL', 'not configured'))
+    exchange = escape(vals.get('EXECUTION_EXCHANGE', vals.get('EXCHANGE', 'kraken/binance')))
+    candle = 'enabled' if vals.get('CANDLE_FEED_ENABLED', 'true').strip().lower() not in {'0', 'false', 'no', 'off'} else 'disabled'
+    executor = 'dry-run' if vals.get('DRY_RUN', 'true').strip().lower() in {'1', 'true', 'yes', 'on'} else 'live'
+    return f"<div class='box'><b>Remote SignalMaker URL:</b> {remote} &nbsp; <b>Local exchange:</b> {exchange} &nbsp; <b>Mode:</b> device executor &nbsp; <b>Candle feed status:</b> {candle} &nbsp; <b>Executor status:</b> {executor}</div>"
+
+
 def page(title, body):
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none;cursor:pointer}}button.danger,.button.danger{{background:#b42318}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>{escape(title)}</h1>{body}</body></html>""".encode()
+    header_status = header_status_html()
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none;cursor:pointer}}button.danger,.button.danger{{background:#b42318}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>SignalMaker Raspberry Executor</h1>{header_status}<h2>{escape(title)}</h2>{body}</body></html>""".encode()
 
 
 def cell(v):
@@ -134,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             body += "<button>Save</button></form><p class='warn'>Restart after changing trading settings.</p>"
             return self.send_page('Admin', body)
         rows = ''.join(f"<p><b>{escape(k)}</b>: {escape(v)}</p>" for k, v in public_env().items())
-        return self.send_page('Raspberry Executor', f"<div class='box'><p class='ok'>Local mode: only trade candidates are read from SignalMaker.</p>{rows}</div>")
+        return self.send_page('SignalMaker Raspberry Executor', f"<div class='box'><p class='ok'>Local mode: only trade candidates are read from SignalMaker.</p>{rows}</div>")
 
     def do_POST(self):
         if self.path.startswith('/logs/delete'):

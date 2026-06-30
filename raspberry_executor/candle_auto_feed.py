@@ -259,6 +259,9 @@ def discover_symbols_for_execution_mode(base_url: str, quote_assets: list[str], 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     env = read_env()
     quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
+    explicit_symbols = _csv(env.get("CANDLE_FEED_SYMBOLS") or os.getenv("CANDLE_FEED_SYMBOLS"))
+    if explicit_symbols:
+        return explicit_symbols, quote_assets, f"{execution_mode()}:explicit"
     max_symbols = int(env.get("CANDLE_FEED_MAX_SYMBOLS", "0") or "0")
     mode = execution_mode()
     symbols, source = discover_symbols_for_exchange(settings, quote_assets, mode, limit=max_symbols)
@@ -280,13 +283,13 @@ def _process_pair(settings, client: SignalMakerClient, limiter: RateLimiter, sym
     base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.binance_base_url
     candles = fetch_exchange_klines(exchange, base_url, symbol, interval, limit, start_time=start_time)
     if not candles:
-        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_close_time": latest.get("close_time") if latest else None}
+        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "no_missing_candles", "latest_candle_remote": latest, "latest_close_time": latest.get("close_time") if latest else None}
     if start_time is not None:
         candles = [candle for candle in candles if int(candle["open_time"]) > int(latest["open_time"])]
     if not candles:
-        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "already_up_to_date", "latest_close_time": latest.get("close_time") if latest else None}
+        return {"kind": "skipped", "symbol": symbol, "interval": interval, "reason": "already_up_to_date", "latest_candle_remote": latest, "latest_close_time": latest.get("close_time") if latest else None}
     response = client.post_candles(symbol, interval, candles, source=settings.gateway_id)
-    return {"kind": "pushed", "symbol": symbol, "interval": interval, "count": len(candles), "start_time": start_time, "upserted": response.get("upserted")}
+    return {"kind": "pushed", "symbol": symbol, "interval": interval, "latest_candle_remote": latest, "fetched_missing": len(candles), "posted_missing_candles": len(candles), "count": len(candles), "start_time": start_time, "upserted": response.get("upserted")}
 
 
 def _record_feed_status(status: str, **extra) -> None:

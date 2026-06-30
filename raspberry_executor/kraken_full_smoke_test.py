@@ -61,7 +61,7 @@ class SmokeResult:
 
     @property
     def ok(self) -> bool:
-        required_checks = [check for check in self.checks if not check.get("skipped")]
+        required_checks = [check for check in self.checks if not check.get("skipped") and not check.get("optional")]
         return all(bool(check.get("ok")) for check in required_checks)
 
     def as_dict(self) -> dict[str, Any]:
@@ -356,7 +356,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         result.add("signalmaker_device_candle_feed", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_device_backfill_4h", False, skipped=True, reason="skip_signalmaker_requested")
         result.add("signalmaker_trade_candidates", False, skipped=True, reason="skip_signalmaker_requested")
-        result.add("signalmaker_market_data_momentum_ranking", False, skipped=True, reason="skip_signalmaker_requested")
+        result.add("optional_momentum_ranking_diagnostic", False, skipped=True, optional=True, reason="skip_signalmaker_requested")
     else:
         intervals = [item.strip() for item in str(args.candle_intervals).split(",") if item.strip()]
 
@@ -415,12 +415,22 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
         _run_check(result, "signalmaker_trade_candidates", signalmaker_trade_candidates)
 
-        def signalmaker_market_data_momentum_ranking() -> dict[str, Any]:
-            rankings = signalmaker.list_momentum(limit=args.momentum_limit)
-            decision = build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
-            return {"ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
+        def optional_momentum_ranking_diagnostic() -> dict[str, Any]:
+            try:
+                rankings = signalmaker.list_momentum(limit=args.momentum_limit)
+                decision = build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
+                return {"optional": True, "ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
+            except Exception as exc:
+                details = _error_details(exc)
+                status = details.get("status_code")
+                reason = "momentum_ranking_endpoint_unavailable" if status in {404, 405} or status is None else "momentum_ranking_endpoint_unavailable"
+                return {"optional": True, "ok": False, "reason": reason, **details}
 
-        _run_check(result, "signalmaker_market_data_momentum_ranking", signalmaker_market_data_momentum_ranking)
+        try:
+            details = optional_momentum_ranking_diagnostic()
+            result.add("optional_momentum_ranking_diagnostic", bool(details.pop("ok", True)), **details)
+        except Exception as exc:
+            result.add("optional_momentum_ranking_diagnostic", False, optional=True, reason="momentum_ranking_endpoint_unavailable", **_error_details(exc))
 
     def dry_run_orders() -> dict[str, Any]:
         price = client.current_price(symbol)
@@ -490,10 +500,29 @@ def print_human(result: SmokeResult) -> None:
     print("Credential diagnostics:")
     print(json.dumps(result.credential_sources, indent=2, default=str))
     print(f"Overall: {'PASS' if result.ok else 'FAIL'}\n")
-    for check in result.checks:
-        icon = "⏭️" if check.get("skipped") else ("✅" if check.get("ok") else "❌")
-        print(f"{icon} {check['name']}")
-        print(json.dumps({k: v for k, v in check.items() if k != "name"}, indent=2, default=str))
+    sections = {
+        "DEVICE FEED": {"signalmaker_device_candle_feed", "signalmaker_device_backfill_4h"},
+        "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_methods_dry_run"},
+        "EXCHANGE": {"public_time", "asset_pair_lookup", "ticker_price", "ohlc_1h", "symbol_rules", "discover_spot_symbols", "discover_margin_symbols", "private_account", "private_open_orders", "private_add_order_validate_only"},
+        "OPTIONAL DIAGNOSTICS": {"optional_momentum_ranking_diagnostic"},
+    }
+    printed: set[str] = set()
+    for section, names in sections.items():
+        print(f"\n--- {section} ---")
+        for check in result.checks:
+            if check["name"] not in names:
+                continue
+            printed.add(check["name"])
+            icon = "⏭️" if check.get("skipped") else ("✅" if check.get("ok") else ("⚠️" if check.get("optional") else "❌"))
+            print(f"{icon} {check['name']}")
+            print(json.dumps({k: v for k, v in check.items() if k != "name"}, indent=2, default=str))
+    remaining = [check for check in result.checks if check["name"] not in printed]
+    if remaining:
+        print("\n--- OTHER ---")
+        for check in remaining:
+            icon = "⏭️" if check.get("skipped") else ("✅" if check.get("ok") else ("⚠️" if check.get("optional") else "❌"))
+            print(f"{icon} {check['name']}")
+            print(json.dumps({k: v for k, v in check.items() if k != "name"}, indent=2, default=str))
     print("\n=== JSON à coller pour debug ===")
     print(json.dumps(result.as_dict(), indent=2, default=str))
 

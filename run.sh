@@ -12,6 +12,7 @@ Commands:
   backfill        Run the historical Raspberry -> remote SignalMaker candle backfill once
   executor        Start only the remote SignalMaker trade/momentum executor loop
   local-api       Start only the local Raspberry Executor monitoring API/UI
+  smoke           Run Raspberry Executor Kraken/device smoke checks
   all-local       Start local API + local pipeline + local executor + local scheduler
   api             Alias for local-api
   init-db         Initialize database tables
@@ -116,6 +117,9 @@ case "$command" in
     ;;
   backfill)
     exec "$(python_cmd)" -m raspberry_executor.candle_backfill_4h --run "$@"
+    ;;
+  smoke)
+    exec "$(python_cmd)" -m raspberry_executor.kraken_full_smoke_test "$@"
     ;;
   executor)
     exec "$(python_cmd)" -c 'from raspberry_executor.run_all_v2 import executor_main; executor_main()'

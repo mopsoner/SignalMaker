@@ -9,7 +9,17 @@ from raspberry_executor.logging_setup import tail_logs
 from raspberry_executor.state import StateStore
 
 
+def _header_status_html() -> str:
+    values = read_env()
+    remote = escape(values.get("SIGNALMAKER_BASE_URL", "not configured"))
+    exchange = escape(values.get("EXECUTION_EXCHANGE", values.get("EXCHANGE", "kraken/binance")))
+    candle = "enabled" if values.get("CANDLE_FEED_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"} else "disabled"
+    executor = "dry-run" if values.get("DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"} else "live"
+    return f'<div class="box"><b>Remote SignalMaker URL:</b> {remote} &nbsp; <b>Local exchange:</b> {exchange} &nbsp; <b>Mode:</b> device executor &nbsp; <b>Candle feed status:</b> {candle} &nbsp; <b>Executor status:</b> {executor}</div>'
+
+
 def _page(title: str, body: str) -> bytes:
+    header_status = _header_status_html()
     html = f"""<!doctype html>
 <html>
 <head>
@@ -37,7 +47,9 @@ def _page(title: str, body: str) -> bytes:
 </head>
 <body>
   <nav><a href="/">Status</a><a href="/positions">Positions</a><a href="/admin">Admin</a><a href="/logs">Logs</a></nav>
-  <h1>{escape(title)}</h1>
+  <h1>SignalMaker Raspberry Executor</h1>
+  {header_status}
+  <h2>{escape(title)}</h2>
   {body}
 </body>
 </html>"""
@@ -142,7 +154,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             values = read_env()
             body = "<form method='post' action='/admin'>"
             fields = [
-                ("SIGNALMAKER_BASE_URL", "SignalMaker URL", "text"),
+                ("SIGNALMAKER_BASE_URL", "Remote SignalMaker URL", "text"),
                 ("GATEWAY_ID", "Gateway ID", "text"),
                 ("POLL_SECONDS", "Poll seconds", "number"),
                 ("DRY_RUN", "Dry run true/false", "text"),
@@ -152,7 +164,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 ("MAX_CANDIDATE_AGE_SECONDS", "Max candidate age seconds", "number"),
                 ("MOMENTUM_BUYABLE_RSI_1H_MIN", "Momentum buyable RSI 1H min", "number"),
                 ("MOMENTUM_BUYABLE_RSI_1H_MAX", "Momentum buyable RSI 1H max", "number"),
-                ("EXECUTION_EXCHANGE", "Execution exchange (binance or kraken)", "text"),
+                ("EXECUTION_EXCHANGE", "Local exchange (binance or kraken)", "text"),
                 ("BINANCE_BASE_URL", "Binance base URL", "text"),
                 ("BINANCE_API_KEY", "Binance API key", "password"),
                 ("BINANCE_SECRET_KEY", "Binance secret key", "password"),
@@ -171,7 +183,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         values = public_env()
         rows = "".join(f"<p><b>{escape(k)}</b>: {escape(v)}</p>" for k, v in values.items())
-        self._send("Raspberry Executor", f"<div class='box'><p class='ok'>Web UI online</p>{rows}</div>")
+        self._send("SignalMaker Raspberry Executor", f"<div class='box'><p class='ok'>Web UI online</p>{rows}</div>")
 
     def do_POST(self) -> None:
         if not self.path.startswith("/admin"):
