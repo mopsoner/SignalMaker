@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker Raspberry Executor - Trading</title>
+    <meta name="description" content="Candidats, momentum buy/sell, positions, orders, fills, TP/SL et statuts open/executed.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Trading</h1>
+      <p>Candidats, momentum buy/sell, positions, orders, fills, TP/SL et statuts open/executed.</p>
+      <nav data-main-nav></nav>
+    </header>
+    <main>
+      <section id="trade-candidates" class="card"><h2>Trade candidates</h2><div id="candidates-summary"></div><button data-action="refresh">Rafraîchir</button><div id="candidates-content" class="muted">Chargement...</div></section>
+      <section id="momentum" class="card"><h2>Momentum buy / sell</h2><button data-action="sync-momentum">Synchroniser depuis SignalMaker</button> <button data-action="refresh">Rafraîchir</button><p id="sync-result" class="muted"></p><div id="momentum-summary"></div><div id="momentum-content" class="muted">Chargement...</div></section>
+      <section id="positions" class="card"><h2>Positions et TP/SL</h2><div id="positions-summary"></div><div id="positions-content" class="muted">Chargement...</div></section>
+      <section id="orders" class="card"><h2>Orders</h2><div id="orders-content" class="muted">Chargement...</div></section>
+      <section id="fills" class="card"><h2>Fills</h2><div id="fills-content" class="muted">Chargement...</div></section>
+    </main>
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

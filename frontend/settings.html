@@ -3,40 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker Raspberry Executor - Réglages</title>
-    <meta name="description" content="Réglages SignalMaker en HTML léger">
+    <title>SignalMaker Raspberry Executor - Settings</title>
+    <meta name="description" content="Tous les champs configurables, autocomplete/suggestions et sauvegarde fiable. ">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Réglages</h1>
-      <p>Page HTML statique légère pour les informations de configuration.</p>
-      <nav>
-        <a href="./index.html">Executor</a>
-        <a href="./candidates.html">Trade Candidates</a>
-        <a href="./momentum-candidates.html">Momentum</a>
-        <a href="./positions.html">Positions</a>
-        <a href="./orders.html">Orders/Fills</a>
-        <a href="./settings.html" aria-current="page">Settings</a>
-        <a href="./admin.html">Admin</a>
-        <a href="./logs.html">Logs</a>
-      </nav>
+      <h1>Settings</h1>
+      <p>Tous les champs configurables, autocomplete/suggestions et sauvegarde fiable. </p>
+      <nav data-main-nav></nav>
     </header>
-
     <main>
-      <section class="card">
-        <h2>Admin SignalMaker</h2>
-        <p>La page admin est intégrée au frontend léger et disponible sur <a href="./admin.html">admin.html</a>.</p>
-        <p class="muted">Sur Raspberry, le frontend statique est servi par l’API sur le port 5000 ; les appels API restent relatifs et same-origin.</p>
-      </section>
-
-      <section class="card">
-        <h2>Configuration runtime</h2>
-        <p>Les variables opérationnelles se modifient depuis <a href="./admin.html">admin.html</a>, avec sauvegarde via <code>/api/v1/admin/settings</code>.</p>
-        <p class="muted">Sections disponibles : general, binance, kraken, strategy, notifications, bot, live, momentum et admin/security.</p>
-      </section>
+      <section class="card"><h2>Token admin / operator key</h2><input id="operator-key-input" type="password" autocomplete="current-password" placeholder="Coller le token admin"><button data-action="save-operator-token">Sauvegarder token local</button><p id="operator-key-result" class="muted"></p></section>
+      <section class="card"><h2>Settings runtime</h2><p class="muted">Tous les champs exposés par <code>/api/v1/admin/settings</code> sont éditables. Les champs texte utilisent autocomplete et suggestions.</p><datalist id="settings-suggestions"><option value="binance"><option value="kraken"><option value="dry-run"><option value="live"><option value="BTCUSDT"><option value="ETHUSDT"><option value="https://"></datalist><div id="admin-settings-content" class="muted">Chargement...</div><p id="admin-save-result" class="muted"></p><button data-action="save-admin-settings">Sauvegarder</button> <button data-action="refresh">Rafraîchir</button></section>
     </main>
-
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>
   </body>
