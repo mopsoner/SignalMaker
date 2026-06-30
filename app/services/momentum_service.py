@@ -1,39 +1,146 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import fmean
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.momentum_current import MomentumCurrent
+from app.models.momentum_structure_current import MomentumStructureCurrent
 from app.services.market_data_service import MarketDataService
 
 
 class MomentumService:
-    """Read-only momentum ranking service for dashboard and Raspberry TUI."""
+    """Momentum calculation and snapshot service.
+
+    Heavy calculations happen explicitly after candle ingestion through
+    recalculate_and_store(). Read paths use the persisted momentum_current table.
+    """
 
     INTERVALS = ("15m", "1h", "4h")
     WEIGHTS = {"15m": 0.35, "1h": 0.40, "4h": 0.25}
-    LOOKBACKS = {"15m": 16, "1h": 24, "4h": 30}
+    LOOKBACKS = {"15m": 32, "1h": 24, "4h": 30}
     EMA_PERIOD = 20
     RSI_PERIOD = 14
+    STRUCTURE_SWING_WINDOW = 2
 
     def __init__(self, db: Session) -> None:
         self.db = db
         self.market_data = MarketDataService(db)
 
     def list_rankings(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        symbols = self.market_data.list_symbols(limit=None)
-        rows = [self._build_symbol_row(symbol) for symbol in symbols]
-        rows.sort(key=lambda row: row["momentum_score"], reverse=True)
-        ranked = rows[:limit]
-        for index, row in enumerate(ranked, start=1):
-            row["rank"] = index
-        return ranked
+        stmt = select(MomentumCurrent).order_by(MomentumCurrent.momentum_score.desc(), MomentumCurrent.symbol.asc()).limit(limit)
+        rows = list(self.db.scalars(stmt).all())
+        structures = self._structure_map([row.symbol for row in rows])
+        return [self._row_to_payload(row, index, structures.get(row.symbol)) for index, row in enumerate(rows, start=1)]
+
+    def recalculate_and_store(self, *, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, Any]:
+        target_symbols = sorted({symbol.upper() for symbol in (symbols or self.market_data.list_symbols(limit=None))})
+        if limit is not None:
+            target_symbols = target_symbols[:limit]
+
+        calculated_rows = [self._build_symbol_row(symbol) for symbol in target_symbols]
+        calculated_rows.sort(key=lambda row: row["momentum_score"], reverse=True)
+        now = datetime.now(timezone.utc)
+        for index, payload in enumerate(calculated_rows, start=1):
+            payload["rank"] = index
+            self._upsert_current(payload, calculated_at=now)
+            self._upsert_structure(payload["symbol"], payload["structure_15m"], calculated_at=now)
+        self.db.commit()
+        return {"symbols": len(target_symbols), "momentum_rows_upserted": len(calculated_rows), "calculated_at": now.isoformat()}
+
+    def _structure_map(self, symbols: list[str]) -> dict[str, MomentumStructureCurrent]:
+        if not symbols:
+            return {}
+        rows = self.db.scalars(select(MomentumStructureCurrent).where(MomentumStructureCurrent.symbol.in_(symbols))).all()
+        return {row.symbol: row for row in rows}
+
+    def _row_to_payload(self, row: MomentumCurrent, rank: int, structure: MomentumStructureCurrent | None = None) -> dict[str, Any]:
+        payload = {
+            "rank": rank,
+            "symbol": row.symbol,
+            "price": row.price,
+            "momentum_15m": row.momentum_15m,
+            "momentum_1h": row.momentum_1h,
+            "momentum_4h": row.momentum_4h,
+            "momentum_score": row.momentum_score,
+            "classification": row.classification,
+            "rsi_15m": row.rsi_15m,
+            "rsi_1h": row.rsi_1h,
+            "rsi_4h": row.rsi_4h,
+            "change_15m": row.change_15m,
+            "change_1h": row.change_1h,
+            "change_4h": row.change_4h,
+            "ema_trend_15m": row.ema_trend_15m,
+            "ema_trend_1h": row.ema_trend_1h,
+            "ema_trend_4h": row.ema_trend_4h,
+            "updated_at": row.updated_at,
+            "data_quality": row.data_quality,
+            "calculated_at": row.calculated_at,
+        }
+        payload.update(self._structure_payload(structure))
+        return payload
+
+    def _structure_payload(self, row: MomentumStructureCurrent | None) -> dict[str, Any]:
+        if row is None:
+            return {
+                "structure_15m_status": "unknown",
+                "structure_15m_bias": "neutral",
+                "mss_15m_bearish": False,
+                "bos_15m_bearish": False,
+                "bos_15m_bullish": False,
+                "last_swing_low_15m": None,
+                "last_swing_high_15m": None,
+                "structure_broken_at": None,
+                "structure_reason": "structure_not_calculated",
+            }
+        return {
+            "structure_15m_status": row.structure_15m_status,
+            "structure_15m_bias": row.structure_15m_bias,
+            "mss_15m_bearish": row.mss_15m_bearish,
+            "bos_15m_bearish": row.bos_15m_bearish,
+            "bos_15m_bullish": row.bos_15m_bullish,
+            "last_swing_low_15m": row.last_swing_low_15m,
+            "last_swing_high_15m": row.last_swing_high_15m,
+            "structure_broken_at": row.structure_broken_at,
+            "structure_reason": row.structure_reason,
+        }
+
+    def _upsert_current(self, payload: dict[str, Any], *, calculated_at: datetime) -> None:
+        row = self.db.get(MomentumCurrent, payload["symbol"])
+        if row is None:
+            row = MomentumCurrent(symbol=payload["symbol"])
+            self.db.add(row)
+        for key in (
+            "price", "momentum_15m", "momentum_1h", "momentum_4h", "momentum_score", "classification",
+            "rsi_15m", "rsi_1h", "rsi_4h", "change_15m", "change_1h", "change_4h",
+            "ema_trend_15m", "ema_trend_1h", "ema_trend_4h", "data_quality", "rank", "updated_at",
+        ):
+            setattr(row, key, payload.get(key))
+        row.calculated_at = calculated_at
+
+    def _upsert_structure(self, symbol: str, payload: dict[str, Any], *, calculated_at: datetime) -> None:
+        row = self.db.get(MomentumStructureCurrent, symbol)
+        if row is None:
+            row = MomentumStructureCurrent(symbol=symbol)
+            self.db.add(row)
+        row.structure_15m_status = payload["structure_15m_status"]
+        row.structure_15m_bias = payload["structure_15m_bias"]
+        row.mss_15m_bearish = payload["mss_15m_bearish"]
+        row.bos_15m_bearish = payload["bos_15m_bearish"]
+        row.bos_15m_bullish = payload["bos_15m_bullish"]
+        row.last_swing_low_15m = payload["last_swing_low_15m"]
+        row.last_swing_high_15m = payload["last_swing_high_15m"]
+        row.structure_broken_at = payload["structure_broken_at"]
+        row.structure_reason = payload["structure_reason"]
+        row.calculated_at = calculated_at
 
     def _build_symbol_row(self, symbol: str) -> dict[str, Any]:
         bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
         interval_payloads = {interval: self._interval_momentum(bundle.get(interval) or []) for interval in self.INTERVALS}
+        structure_15m = self._structure_15m(bundle.get("15m") or [])
 
         weighted_score = 0.0
         available_weight = 0.0
@@ -70,11 +177,90 @@ class MomentumService:
             "ema_trend_4h": interval_payloads["4h"]["ema_trend"],
             "updated_at": max(latest_times) if latest_times else None,
             "data_quality": "complete" if available_count == len(self.INTERVALS) else f"partial:{available_count}/{len(self.INTERVALS)}",
+            "structure_15m": structure_15m,
+        }
+
+    def _structure_15m(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(candles) < 8:
+            return {
+                "structure_15m_status": "insufficient_data",
+                "structure_15m_bias": "neutral",
+                "mss_15m_bearish": False,
+                "bos_15m_bearish": False,
+                "bos_15m_bullish": False,
+                "last_swing_low_15m": None,
+                "last_swing_high_15m": None,
+                "structure_broken_at": None,
+                "structure_reason": "not_enough_15m_candles",
+            }
+
+        highs = [float(candle["high"]) for candle in candles]
+        lows = [float(candle["low"]) for candle in candles]
+        closes = [float(candle["close"]) for candle in candles]
+        window = self.STRUCTURE_SWING_WINDOW
+        swing_lows: list[tuple[int, float]] = []
+        swing_highs: list[tuple[int, float]] = []
+        for index in range(window, len(candles) - window):
+            low_slice = lows[index - window:index + window + 1]
+            high_slice = highs[index - window:index + window + 1]
+            if lows[index] == min(low_slice):
+                swing_lows.append((index, lows[index]))
+            if highs[index] == max(high_slice):
+                swing_highs.append((index, highs[index]))
+
+        last_close = closes[-1]
+        previous_close = closes[-2]
+        last_swing_low = swing_lows[-1][1] if swing_lows else min(lows[:-1])
+        last_swing_high = swing_highs[-1][1] if swing_highs else max(highs[:-1])
+        last_time = candles[-1].get("ingested_at")
+        broken_at = last_time if isinstance(last_time, datetime) else datetime.now(timezone.utc)
+
+        bos_bearish = bool(last_swing_low is not None and last_close < last_swing_low)
+        mss_bearish = bool(last_swing_low is not None and previous_close >= last_swing_low and last_close < last_swing_low)
+        bos_bullish = bool(last_swing_high is not None and last_close > last_swing_high)
+
+        if bos_bearish or mss_bearish:
+            return {
+                "structure_15m_status": "broken_bearish",
+                "structure_15m_bias": "bearish",
+                "mss_15m_bearish": mss_bearish,
+                "bos_15m_bearish": bos_bearish,
+                "bos_15m_bullish": False,
+                "last_swing_low_15m": last_swing_low,
+                "last_swing_high_15m": last_swing_high,
+                "structure_broken_at": broken_at,
+                "structure_reason": "15m_close_below_last_swing_low",
+            }
+
+        if bos_bullish:
+            status = "valid_bullish"
+            bias = "bullish"
+            reason = "15m_close_above_last_swing_high"
+        elif last_close >= last_swing_low:
+            status = "valid"
+            bias = "neutral_bullish"
+            reason = "15m_structure_holding_above_last_swing_low"
+        else:
+            status = "unknown"
+            bias = "neutral"
+            reason = "structure_unclear"
+
+        return {
+            "structure_15m_status": status,
+            "structure_15m_bias": bias,
+            "mss_15m_bearish": False,
+            "bos_15m_bearish": False,
+            "bos_15m_bullish": bos_bullish,
+            "last_swing_low_15m": last_swing_low,
+            "last_swing_high_15m": last_swing_high,
+            "structure_broken_at": None,
+            "structure_reason": reason,
         }
 
     def _interval_momentum(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
         if len(candles) < 2:
             return self._empty_interval_payload()
+
         closes = [float(candle["close"]) for candle in candles if candle.get("close") is not None]
         if len(closes) < 2 or closes[0] == 0:
             return self._empty_interval_payload()
@@ -99,6 +285,7 @@ class MomentumService:
         rsi_component = ((rsi - 50.0) / 2.0) if rsi is not None else 0.0
         momentum = price_change + rsi_component + ema_bonus
         latest_ingested = candles[-1].get("ingested_at")
+
         return {
             "momentum": round(momentum, 4),
             "change": round(price_change, 4),

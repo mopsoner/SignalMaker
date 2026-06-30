@@ -19,6 +19,9 @@ from app.strategy.legacy_signals import (
 )
 
 ALLOWED_CONFIRM_SESSIONS = {"london_open", "london", "new_york"}
+ENTRY_RSI_MIN = 45.0
+ENTRY_RSI_MAX = 55.0
+ENTRY_RSI_TIMEFRAME = "1h"
 
 
 def _find_imbalance_target(candles: list[dict[str, Any]], direction: str, current_price: float, timeframe: str) -> dict[str, Any] | None:
@@ -78,6 +81,44 @@ def _latest_local_pivot(candles: list[dict[str, Any]], *, direction: str, left: 
             if all(level < float(c["low"]) for c in left_slice + right_slice):
                 return level
     return None
+
+
+def _entry_rsi_config(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = (cfg or {}).get("entry_rsi") if isinstance(cfg, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    min_value = float(raw.get("min", ENTRY_RSI_MIN))
+    max_value = float(raw.get("max", ENTRY_RSI_MAX))
+    if min_value > max_value:
+        min_value, max_value = max_value, min_value
+    timeframe = str(raw.get("timeframe", ENTRY_RSI_TIMEFRAME) or ENTRY_RSI_TIMEFRAME).lower()
+    if timeframe not in {"1h", "4h"}:
+        timeframe = ENTRY_RSI_TIMEFRAME
+    return {"min": min_value, "max": max_value, "timeframe": timeframe}
+
+
+def _entry_rsi_source(timeframe: str) -> str:
+    return "rsi_macro" if timeframe == "4h" else "rsi_htf"
+
+
+def _rsi_in_entry_band(value: float | None, cfg: dict[str, Any] | None = None) -> bool:
+    entry_cfg = _entry_rsi_config(cfg)
+    return value is not None and entry_cfg["min"] <= float(value) <= entry_cfg["max"]
+
+
+def _rsi_entry_profile(value: float | None, timeframe: str = ENTRY_RSI_TIMEFRAME, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    entry_cfg = _entry_rsi_config({"entry_rsi": {**(_entry_rsi_config(cfg)), "timeframe": timeframe}})
+    preferred = _rsi_in_entry_band(value, {"entry_rsi": entry_cfg})
+    min_label = f"{entry_cfg['min']:g}"
+    max_label = f"{entry_cfg['max']:g}"
+    return {
+        "value": value,
+        "timeframe": entry_cfg["timeframe"],
+        "source": _entry_rsi_source(entry_cfg["timeframe"]),
+        "preferred": preferred,
+        "min": entry_cfg["min"],
+        "max": entry_cfg["max"],
+        "reason": f"preferred_{min_label}_{max_label}_rsi_entry" if preferred else f"entry_rsi_outside_{min_label}_{max_label}_band",
+    }
 
 
 def _find_consistent_external_swings(candles: list[dict[str, Any]]) -> tuple[float | None, float | None]:
@@ -282,7 +323,7 @@ def _level_is_relevant(*, bias: str, price: float, level: float | None, toleranc
     return True
 
 
-def _pick_entry_liquidity_context(*, bias: str, price: float, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None, previous_day_high: float | None = None, previous_day_low: float | None = None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
+def _pick_entry_liquidity_context(*, bias: str, price: float, eq: dict[str, bool], today_asia_high: float | None, today_asia_low: float | None, today_london_high: float | None, today_london_low: float | None, high_main: float, low_main: float, high_htf: float | None, low_htf: float | None, high_macro: float | None, low_macro: float | None, imbalance_up_5m: dict[str, Any] | None, imbalance_down_5m: dict[str, Any] | None, previous_day_high: float | None = None, previous_day_low: float | None = None, range_high_1h: float | None = None, range_low_1h: float | None = None, range_high_4h: float | None = None, range_low_4h: float | None = None, major_swing_high_4h: float | None = None, major_swing_low_4h: float | None = None, old_resistance_shelf: dict[str, Any] | None = None, old_support_shelf: dict[str, Any] | None = None) -> dict[str, Any]:
     if bias in {"bear_watch", "bear_confirm"}:
         candidates = (
             ({"type": "recent_high_1h", "level": high_htf, "reason": "nearest 1h resistance used as primary sell entry context", "timeframe": "1h", "scope": "entry"} if high_htf is not None else None),
@@ -618,12 +659,19 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
 
     utad_watch = False
     spring_watch = False
-    if rsi_main is not None and rsi_main >= cfg["signals"]["overbought"] and (near_recent_high or near_htf_high or near_macro_high or eq_main["equal_highs"] or eq_htf["equal_highs"] or eq_macro["equal_highs"]):
+    entry_rsi_cfg = _entry_rsi_config(cfg)
+    entry_rsi_value = rsi_macro if entry_rsi_cfg["timeframe"] == "4h" else rsi_htf
+    rsi_entry_ok = _rsi_in_entry_band(entry_rsi_value, cfg)
+    rsi_main_overbought = rsi_main is not None and rsi_main >= cfg["signals"]["overbought"]
+    rsi_main_oversold = rsi_main is not None and rsi_main <= cfg["signals"]["oversold"]
+    near_sell_liquidity = near_recent_high or near_htf_high or near_macro_high or eq_main["equal_highs"] or eq_htf["equal_highs"] or eq_macro["equal_highs"]
+    near_buy_liquidity = near_recent_low or near_htf_low or near_macro_low or eq_main["equal_lows"] or eq_htf["equal_lows"] or eq_macro["equal_lows"]
+    if (rsi_main_overbought or rsi_entry_ok) and near_sell_liquidity:
         utad_watch = True
-        score_breakdown["structure"] += 2
-    if rsi_main is not None and rsi_main <= cfg["signals"]["oversold"] and (near_recent_low or near_htf_low or near_macro_low or eq_main["equal_lows"] or eq_htf["equal_lows"] or eq_macro["equal_lows"]):
+        score_breakdown["structure"] += 2 if rsi_main_overbought else 1
+    if (rsi_main_oversold or rsi_entry_ok) and near_buy_liquidity:
         spring_watch = True
-        score_breakdown["structure"] += 2
+        score_breakdown["structure"] += 2 if rsi_main_oversold else 1
 
     sweep_up = last["high"] > prev_high and last["close"] < prev_high
     sweep_down = last["low"] < prev_low and last["close"] > prev_low
@@ -775,6 +823,8 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         imbalance_down_5m=imbalance_down_5m,
         previous_day_high=previous_day_high,
         previous_day_low=previous_day_low,
+        range_high_1h=range_high_1h,
+        range_low_1h=range_low_1h,
         range_high_4h=range_high_4h,
         range_low_4h=range_low_4h,
         major_swing_high_4h=major_swing_high_4h,
@@ -881,11 +931,12 @@ def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: 
         "signal_interval": infer_interval_label(candles_main),
         "price": price,
         "rsi_main": rsi_main,
-        "rsi_main_timeframe": "5m",
+        "rsi_main_timeframe": cfg.get("execution_interval", infer_interval_label(candles_main)),
         "rsi_htf": rsi_htf,
         "rsi_htf_timeframe": "1h",
         "rsi_macro": rsi_macro,
         "rsi_macro_timeframe": "4h",
+        "entry_rsi": _rsi_entry_profile(entry_rsi_value, entry_rsi_cfg["timeframe"], cfg),
         "state": state,
         "trigger": trigger,
         "bias": bias,

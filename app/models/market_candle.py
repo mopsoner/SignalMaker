@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, String, JSON
+from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -27,12 +27,4 @@ class MarketCandle(Base):
     number_of_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     taker_buy_base_volume: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     taker_buy_quote_volume: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="BINANCE")
-    asset_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
-    provider_symbol: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    asset_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    exchange: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    universe: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

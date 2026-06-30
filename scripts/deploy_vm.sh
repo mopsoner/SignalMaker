@@ -18,12 +18,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 source .venv/bin/activate
-REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-requirements.txt}"
-if [ ! -f "$REQUIREMENTS_FILE" ]; then
-  echo "Requirements file not found: $REQUIREMENTS_FILE" >&2
-  exit 1
-fi
-.venv/bin/pip install -q -r "$REQUIREMENTS_FILE"
+.venv/bin/pip install -q -r requirements.txt
 
 mkdir -p logs data
 
