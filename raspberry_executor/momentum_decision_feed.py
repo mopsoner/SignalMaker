@@ -13,6 +13,7 @@ from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
+from raspberry_executor.execution_core import place_spot_market_entry
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_leverage_attempts, margin_multiplier
 from raspberry_executor.state import StateStore
 
@@ -477,10 +478,10 @@ def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, s
         state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
         return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"
 
-    price = kraken.current_price(symbol)
-    qty = rules.quantity_from_quote(symbol, notional, price, market=True)
-    order = kraken.place_market_entry(symbol, "long", qty)
-    fill_price = kraken.average_fill_price(order, fallback=price) or price
+    entry = place_spot_market_entry(kraken=kraken, rules=rules, symbol=symbol, quote_amount=notional)
+    qty = str(entry["quantity"])
+    order = entry["entry_payload"]
+    fill_price = float(entry["entry_price"])
     acquired = float(qty) if kraken.dry_run else kraken.free_balance(rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {

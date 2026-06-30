@@ -5,6 +5,7 @@ from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_settings import margin_multiplier, margin_transfer_spot_balance
+from raspberry_executor.execution_core import place_leveraged_market_entry
 
 
 def amount_str(value: float) -> str:
@@ -240,15 +241,17 @@ class MarginOrderManager:
         if total_quote <= 0:
             raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} balance_guard={balance_guard}")
 
-        current_price = self.kraken.current_price(symbol)
-        quantity = self.rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
-        entry = self.margin.margin_order(symbol, "BUY", quantity, "MARKET")
-        entry_order_id = self._order_id(entry)
-        confirm = self.confirm_margin_entry_order(symbol=symbol, entry_order_id=entry_order_id, submitted_payload=entry, fallback_price=current_price)
-        entry_price = float(confirm["entry_price"])
-        executed_qty = confirm["executed_qty"]
-        implicit_leverage_payload = {"status": "implicit_margin", "exchange": entry.get("exchange"), "symbol": symbol, "quote_asset": quote, "leverage": effective_leverage, "leverage_notional": leverage_notional}
-        return {"symbol": symbol, "side": "long", "mode": "cross_margin" if not self.margin.isolated else "margin", "margin_isolated": self.margin.isolated, "margin_multiplier": leverage_float, "leverage": effective_leverage, "quote_asset": quote, "own_quote_amount": own_quote, "requested_own_quote_amount": requested_own_quote, "quote_balance_guard": balance_guard, "leverage_notional": leverage_notional, "implicit_margin": True, "implicit_leverage_payload": implicit_leverage_payload, "total_quote_amount": total_quote, "quantity": executed_qty, "entry_price": entry_price, "entry_order_id": entry_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "transfer_payload": {}, "borrow_payload": implicit_leverage_payload, "borrow_quote_amount": leverage_notional, "borrow_error": None, "entry_payload": entry}
+        return place_leveraged_market_entry(
+            kraken=self.kraken,
+            margin=self.margin,
+            rules=self.rules,
+            symbol=symbol,
+            quote_amount=quote_amount,
+            leverage=effective_leverage,
+            min_notional=min_notional,
+            clamp_quote=lambda _symbol, _quote, requested: (own_quote, balance_guard),
+            confirm_entry=lambda confirm_symbol, order_id, payload, fallback_price: self.confirm_margin_entry_order(symbol=confirm_symbol, entry_order_id=order_id, submitted_payload=payload, fallback_price=fallback_price),
+        )
 
     open_leveraged_market_entry = place_margin_market_entry
 
