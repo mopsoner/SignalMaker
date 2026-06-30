@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker Raspberry Executor - Feed & Backfill</title>
+    <meta name="description" content="Candle feed, dernières candles distantes, backfill, retry queue et erreurs exposées par l’API.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Feed & Backfill</h1>
+      <p>Candle feed, dernières candles distantes, backfill, retry queue et erreurs exposées par l’API.</p>
+      <nav data-main-nav></nav>
+    </header>
+    <main>
+      <section class="card"><h2>Status API / feed</h2><p id="health" class="muted">Chargement...</p><div id="device-settings-summary" class="muted">Chargement...</div><button data-action="refresh">Rafraîchir</button></section>
+      <section class="card"><h2>Résumé candles distantes</h2><div id="candles-summary" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Dernières candles poussées</h2><div id="candles-content" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Backfill / retry / errors</h2><p class="muted">Cette page consolide les informations disponibles sans modifier les workers métier. Consultez Logs / Ops pour les erreurs de backfill et retry queue détaillées.</p><div id="logs-content" class="muted">Chargement...</div></section>
+    </main>
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

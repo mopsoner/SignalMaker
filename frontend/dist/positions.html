@@ -3,34 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker Raspberry Executor - Positions</title>
-    <meta name="description" content="Positions SignalMaker en HTML léger">
+    <title>SignalMaker Raspberry Executor - Redirection</title>
+    <meta name="description" content="Cette page historique est conservée et redirige vers la vue mutualisée.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Positions</h1>
-      <p>Page HTML statique légère pour consulter les positions.</p>
-      <nav>
-        <a href="./index.html">Executor</a>
-        <a href="./candidates.html">Trade Candidates</a>
-        <a href="./momentum-candidates.html">Momentum</a>
-        <a href="./positions.html" aria-current="page">Positions</a>
-        <a href="./orders.html">Orders/Fills</a>
-        <a href="./settings.html">Settings</a>
-        <a href="./admin.html">Admin</a>
-        <a href="./logs.html">Logs</a>
-      </nav>
+      <h1>Redirection</h1>
+      <p>Cette page historique est conservée et redirige vers la vue mutualisée.</p>
+      <nav data-main-nav></nav>
     </header>
-
     <main>
-      <section class="card">
-        <h2>Positions</h2>
-        <div id="positions-content" class="muted">Chargement...</div>
-        <button data-action="refresh">Rafraîchir</button>
-      </section>
+      <section class="card"><h2>Page mutualisée</h2><p>Le contenu a été regroupé dans <a href="./trading.html#positions">trading.html#positions</a>.</p><p><a class="button-link" href="./trading.html#positions">Continuer</a></p></section><script>window.location.replace('./trading.html#positions');</script>
     </main>
-
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>
   </body>

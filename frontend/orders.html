@@ -3,29 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker Raspberry Executor - Orders/Fills</title>
-    <meta name="description" content="Ordres et fills du Raspberry executor.">
+    <title>SignalMaker Raspberry Executor - Redirection</title>
+    <meta name="description" content="Cette page historique est conservée et redirige vers la vue mutualisée.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Orders / Fills</h1>
-      <p>Entry, take-profit, stop-loss, statuts et fills exécutés par l’executor.</p>
-      <nav>
-        <a href="./index.html">Executor</a>
-        <a href="./candidates.html">Trade Candidates</a>
-        <a href="./momentum-candidates.html">Momentum</a>
-        <a href="./positions.html">Positions</a>
-        <a href="./orders.html" aria-current="page">Orders/Fills</a>
-        <a href="./settings.html">Settings</a>
-        <a href="./admin.html">Admin</a>
-        <a href="./logs.html">Logs</a>
-      </nav>
+      <h1>Redirection</h1>
+      <p>Cette page historique est conservée et redirige vers la vue mutualisée.</p>
+      <nav data-main-nav></nav>
     </header>
     <main>
-      <section class="card"><h2>Orders</h2><div id="orders-content" class="muted">Chargement...</div></section>
-      <section class="card"><h2>Fills</h2><div id="fills-content" class="muted">Chargement...</div></section>
-      <button data-action="refresh">Rafraîchir</button>
+      <section class="card"><h2>Page mutualisée</h2><p>Le contenu a été regroupé dans <a href="./trading.html#orders">trading.html#orders</a>.</p><p><a class="button-link" href="./trading.html#orders">Continuer</a></p></section><script>window.location.replace('./trading.html#orders');</script>
     </main>
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>

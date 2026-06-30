@@ -1,1 +1,27 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SignalMaker Raspberry Executor - Ops</title><link rel="stylesheet" href="./styles.css"></head><body><header><h1>Ops</h1><p>Monitoring réel des workers, API, executor, services, fills et runs. Les workers peuvent être arrêtés ou relancés.</p><nav><a href="./index.html">Dashboard</a><a href="./candidates.html">Trade candidates</a><a href="./momentum-candidates.html">Momentum</a><a href="./ops.html" aria-current="page">Ops</a><a href="./admin.html">Admin</a></nav></header><main><section class="card"><h2>API</h2><p id="health" class="muted">Chargement...</p></section><section class="card"><h2>Workers contrôlables</h2><div id="ops-action-result" class="muted"></div><div id="workers-content" class="muted">Chargement...</div></section><section class="card"><h2>Services API</h2><div id="services-content" class="muted">Chargement...</div></section><section class="card"><h2>Derniers fills</h2><div id="fills-content" class="muted">Chargement...</div></section><section class="card"><h2>Logs executor</h2><div id="logs-content" class="muted">Chargement...</div></section></main><footer>Dernière mise à jour : <span id="updated-at">-</span></footer><script src="./app.js" defer></script></body></html>
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker Raspberry Executor - Logs / Ops</title>
+    <meta name="description" content="Workers, services, logs, smoke tests et diagnostics Kraken/Binance.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Logs / Ops</h1>
+      <p>Workers, services, logs, smoke tests et diagnostics Kraken/Binance.</p>
+      <nav data-main-nav></nav>
+    </header>
+    <main>
+      <section class="card"><h2>API</h2><p id="health" class="muted">Chargement...</p><button data-action="run-executor">Run executor une fois</button><p id="executor-run-result" class="muted"></p></section>
+      <section class="card"><h2>Workers contrôlables</h2><div id="ops-action-result" class="muted"></div><div id="workers-content" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Services API</h2><div id="services-content" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Diagnostics</h2><button data-action="test-binance">Tester Binance</button> <button data-action="test-kraken">Tester Kraken</button> <button data-action="test-notifications">Tester notifications</button> <button class="danger" data-action="reset-database">Reset database runtime</button><p id="admin-action-result" class="muted"></p></section>
+      <section class="card"><h2>Derniers fills</h2><div id="fills-content" class="muted">Chargement...</div></section>
+      <section class="card"><h2>Logs executor</h2><div id="logs-content" class="muted">Chargement...</div></section>
+    </main>
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

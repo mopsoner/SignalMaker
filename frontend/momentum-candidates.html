@@ -1,1 +1,22 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SignalMaker Raspberry Executor - Momentum</title><link rel="stylesheet" href="./styles.css"></head><body><header><h1>Momentum</h1><p>Momentum en cours de trade, à acheter et à vendre selon la rotation et la zone RSI 45-60.</p><nav><a href="./index.html">Dashboard</a><a href="./candidates.html">Trade candidates</a><a href="./momentum-candidates.html" aria-current="page">Momentum</a><a href="./ops.html">Ops</a><a href="./admin.html">Admin</a></nav></header><main><section class="card"><h2>Rotation momentum</h2><button data-action="sync-momentum">Synchroniser depuis SignalMaker</button> <button data-action="refresh">Rafraîchir</button><p id="sync-result" class="muted"></p><div id="momentum-summary"></div><div id="momentum-content" class="muted">Chargement...</div></section></main><footer>Dernière mise à jour : <span id="updated-at">-</span></footer><script src="./app.js" defer></script></body></html>
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignalMaker Raspberry Executor - Redirection</title>
+    <meta name="description" content="Cette page historique est conservée et redirige vers la vue mutualisée.">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>Redirection</h1>
+      <p>Cette page historique est conservée et redirige vers la vue mutualisée.</p>
+      <nav data-main-nav></nav>
+    </header>
+    <main>
+      <section class="card"><h2>Page mutualisée</h2><p>Le contenu a été regroupé dans <a href="./trading.html#momentum">trading.html#momentum</a>.</p><p><a class="button-link" href="./trading.html#momentum">Continuer</a></p></section><script>window.location.replace('./trading.html#momentum');</script>
+    </main>
+    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
