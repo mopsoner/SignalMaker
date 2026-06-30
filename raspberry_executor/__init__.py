@@ -57,7 +57,7 @@ def _bootstrap_runtime_from_admin() -> None:
         return
 
     live = payload.get("live") or {}
-    kraken = payload.get("kraken") or {}
+    executor = payload.get("executor") or {}
     kraken = payload.get("kraken") or {}
 
     if "live_trading_enabled" in live:
@@ -71,11 +71,13 @@ def _bootstrap_runtime_from_admin() -> None:
     if live.get("live_max_notional_per_trade") not in (None, ""):
         os.environ["ORDER_QUOTE_AMOUNT"] = str(live.get("live_max_notional_per_trade"))
 
-    if kraken.get("kraken_quote_assets"):
-        os.environ["QUOTE_ASSETS"] = str(kraken.get("kraken_quote_assets"))
+    quote_assets = executor.get("quote_assets") or executor.get("QUOTE_ASSETS") or kraken.get("kraken_quote_assets")
+    if quote_assets:
+        os.environ["QUOTE_ASSETS"] = str(quote_assets)
 
-    if kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE"):
-        os.environ["EXECUTION_EXCHANGE"] = str(kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE")).strip().lower()
+    execution_exchange = executor.get("execution_exchange") or executor.get("EXECUTION_EXCHANGE") or kraken.get("execution_exchange") or kraken.get("EXECUTION_EXCHANGE")
+    if execution_exchange:
+        os.environ["EXECUTION_EXCHANGE"] = str(execution_exchange).strip().lower()
     if kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL"):
         os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL")).rstrip("/")
     if kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY"):

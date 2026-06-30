@@ -23,7 +23,6 @@ class SettingsPayload(BaseModel):
     general: dict[str, Any] = {}
     executor: dict[str, Any] = {}
     kraken: dict[str, Any] = {}
-    kraken: dict[str, Any] = {}
     market_data: dict[str, Any] = {}
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
@@ -63,17 +62,11 @@ def reset_database(db: Session = Depends(get_db)) -> dict:
     return reset_database_preserving_config(db)
 
 
-@router.post('/admin/test/kraken')
-def test_kraken(db: Session = Depends(get_db)) -> dict:
-    base = load_runtime_settings(db)['kraken']['kraken_rest_base'].rstrip('/')
-    response = requests.get(f'{base}/api/v3/ping', timeout=10)
-    return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
-
 
 @router.post('/admin/test/kraken')
 def test_kraken(db: Session = Depends(get_db)) -> dict:
     runtime = load_runtime_settings(db)['kraken']
-    base = runtime['kraken_base_url'].rstrip('/')
+    base = (runtime.get('kraken_rest_base') or runtime.get('kraken_base_url') or 'https://api.kraken.com').rstrip('/')
     client = KrakenClient(
         base,
         str(runtime.get('kraken_api_key') or ''),

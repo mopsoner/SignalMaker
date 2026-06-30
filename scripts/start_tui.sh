@@ -9,7 +9,11 @@ if [ -d ".venv" ]; then
 fi
 
 export TERM="${TERM:-linux}"
-export SIGNALMAKER_BASE_URL="${SIGNALMAKER_BASE_URL:-http://127.0.0.1:5000}"
+if [ -z "${APP_PORT:-}" ] && [ -f ".env" ]; then
+  APP_PORT="$(awk -F= '$1 == "APP_PORT" {print $2; exit}' .env)"
+fi
+APP_PORT="${APP_PORT:-8080}"
+export SIGNALMAKER_BASE_URL="${SIGNALMAKER_BASE_URL:-http://127.0.0.1:${APP_PORT}}"
 
 wait_for_api() {
   local base_url="${SIGNALMAKER_BASE_URL%/}"

@@ -154,7 +154,7 @@ def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
     env = read_env()
-    quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USDT"))
+    quote_assets = settings.quote_assets or _csv(env.get("QUOTE_ASSETS", "USD,USDC"))
     explicit_symbols = _csv(env.get("CANDLE_FEED_SYMBOLS") or os.getenv("CANDLE_FEED_SYMBOLS"))
     if explicit_symbols:
         return explicit_symbols, quote_assets, f"{execution_mode()}:explicit"
@@ -205,7 +205,7 @@ def run_once() -> dict:
         "running",
         reason="run_started",
         execution_mode=execution_mode(),
-        quote_assets=_csv(env.get("QUOTE_ASSETS", "USDT")),
+        quote_assets=_csv(env.get("QUOTE_ASSETS", "USD,USDC")),
         intervals=intervals,
     )
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
@@ -278,7 +278,7 @@ def run_loop() -> None:
     doc_limit = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
     rpm_override = env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60")
     weight_ratio = "1.0"
-    logger.info("candle feed started exchange=%s execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s request_limit_1m=%s weight_ratio=%s rpm_override=%s", exchange, execution_mode(), env.get("QUOTE_ASSETS", "USDC"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, weight_ratio, rpm_override)
+    logger.info("candle feed started exchange=%s execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s request_limit_1m=%s weight_ratio=%s rpm_override=%s", exchange, execution_mode(), env.get("QUOTE_ASSETS", "USD,USDC"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, weight_ratio, rpm_override)
 
     while True:
         try:

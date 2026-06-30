@@ -80,7 +80,7 @@ def load_settings() -> Settings:
     # Runtime DB settings are the source of truth for admin-managed values.
     # The persisted env store remains the fallback when DB values are empty or unavailable.
     values = {**read_env(), **_runtime_overrides()}
-    quote_assets = _csv(values.get("QUOTE_ASSETS", "USDC"))
+    quote_assets = _csv(values.get("QUOTE_ASSETS", "USD,USDC"))
     return Settings(
         signalmaker_base_url=str(values.get("SIGNALMAKER_BASE_URL", "")).rstrip("/"),
         gateway_id=str(values.get("GATEWAY_ID", "raspberry-fr-1")),

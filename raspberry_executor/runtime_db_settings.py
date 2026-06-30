@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
 DEFAULT_RUNTIME: dict[str, dict[str, Any]] = {
-    "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
+    "executor": {"execution_exchange": "kraken", "quote_assets": "USD,USDC"},
     "kraken": {
         "kraken_exchange_name": "kraken",
         "kraken_base_url": "https://api.kraken.com",
