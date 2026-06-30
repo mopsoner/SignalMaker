@@ -9,7 +9,7 @@ ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_frontend.sh
 Restart=on-failure
 RestartSec=5
 Environment=FRONTEND_PORT=5001
-Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:5000
+Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:8080
 
 [Install]
 WantedBy=multi-user.target

@@ -4,7 +4,6 @@ import threading
 from raspberry_executor.candidate_status_sync import run_loop as candidate_status_sync_loop
 from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
 from raspberry_executor.candle_backfill_4h import run_loop as candle_backfill_4h_loop
-from raspberry_executor.config import load_settings
 from raspberry_executor.env_store import ensure_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import execution_mode, margin_enabled
@@ -13,7 +12,6 @@ from raspberry_executor.order_monitor_loop import run_loop as order_monitor_loop
 from raspberry_executor.settings_bootstrap import bootstrap_settings
 from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
-from raspberry_executor.web_dashboard_margin import run_web
 
 logger = setup_logging("raspberry-executor")
 
@@ -36,9 +34,8 @@ def main() -> None:
         logger.info("settings bootstrap startup=%s", settings_summary)
     except Exception as exc:
         logger.error("settings bootstrap startup error=%s", str(exc))
-    settings = load_settings()
     host = os.getenv("WEB_HOST", "0.0.0.0")
-    port = int(os.getenv("WEB_PORT", "8090"))
+    app_port = os.getenv("EXECUTOR_API_PORT", os.getenv("APP_PORT", "8080"))
 
     try:
         summary = bootstrap_wallet_positions()
@@ -46,8 +43,7 @@ def main() -> None:
     except Exception as exc:
         logger.error("wallet bootstrap startup error=%s", str(exc))
 
-    threading.Thread(target=run_web, kwargs={"host": host, "port": port}, daemon=True).start()
-    logger.info("local 360 dashboard started http://%s:%s execution_mode=%s", host, port, execution_mode())
+    logger.info("Raspberry Executor API/UI is served by FastAPI on http://%s:%s", host, app_port)
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()
     logger.info("candle feed thread started for SignalMaker live TFs")

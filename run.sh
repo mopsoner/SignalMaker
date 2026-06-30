@@ -28,7 +28,7 @@ USAGE
 }
 
 wait_for_api() {
-  local port="${APP_PORT:-5000}"
+  local port="${EXECUTOR_API_PORT:-${APP_PORT:-8080}}"
   local health_url="http://127.0.0.1:${port}/healthz"
   local timeout_seconds="${API_STARTUP_TIMEOUT:-300}"
   local check_interval_seconds="${API_STARTUP_CHECK_INTERVAL:-30}"
@@ -103,6 +103,36 @@ start_api_and_workers() {
   wait -n "${pids[@]}"
 }
 
+start_api_and_device() {
+  local pids=()
+  local started_api=false
+
+  cleanup() {
+    if [ "${#pids[@]}" -gt 0 ]; then
+      kill "${pids[@]}" 2>/dev/null || true
+    fi
+  }
+
+  trap cleanup EXIT INT TERM
+
+  bash scripts/start_api.sh "$@" &
+  pids+=("$!")
+  started_api=true
+
+  if ! wait_for_api; then
+    cleanup
+    if [ "$started_api" = true ]; then
+      wait "${pids[0]}" 2>/dev/null || true
+    fi
+    exit 1
+  fi
+
+  "$(python_cmd)" -m raspberry_executor.run_all_v2 "$@" &
+  pids+=("$!")
+
+  wait -n "${pids[@]}"
+}
+
 command="${1:-device}"
 if [ "$#" -gt 0 ]; then
   shift
@@ -110,7 +140,7 @@ fi
 
 case "$command" in
   device|all)
-    exec "$(python_cmd)" -m raspberry_executor.run_all_v2 "$@"
+    start_api_and_device "$@"
     ;;
   candle-feed)
     exec "$(python_cmd)" -m raspberry_executor.candle_auto_feed "$@"
@@ -131,7 +161,7 @@ case "$command" in
     exec python -m scripts.init_db "$@"
     ;;
   frontend)
-    echo "The Raspberry frontend is served by signalmaker-api on http://127.0.0.1:${APP_PORT:-5000}/index.html; no separate frontend server is started."
+    echo "The Raspberry frontend is served by signalmaker-api on http://127.0.0.1:${EXECUTOR_API_PORT:-${APP_PORT:-8080}}/index.html; no separate frontend server is started."
     exit 0
     ;;
   pipeline-loop)
