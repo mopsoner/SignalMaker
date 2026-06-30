@@ -375,8 +375,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         def signalmaker_momentum() -> dict[str, Any]:
             rankings = signalmaker.list_momentum(limit=args.momentum_limit)
             decision = build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
-            sync = signalmaker.sync_momentum_candidates(limit=args.momentum_limit, min_momentum_score=None)
-            return {"ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason"), "sync": sync}
+            return {"ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
 
         _run_check(result, "signalmaker_momentum", signalmaker_momentum)
 
