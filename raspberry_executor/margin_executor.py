@@ -2,6 +2,7 @@ import os
 import time
 from datetime import datetime, timezone
 
+from raspberry_executor.classic_candidate_executor import execute_classic_candidate
 from raspberry_executor.config import load_settings
 from raspberry_executor.exchange_factory import create_margin_exchange
 from raspberry_executor.local_candidate_store import mark_candidate_executed, upsert_remote_candidates
@@ -176,107 +177,13 @@ def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: di
 
 
 def process_candidate(settings, kraken, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict, *, from_queue: bool = False) -> str:
-    ensure_candidate_visible(candidate)
-    candidate_id = candidate.get("candidate_id")
-    if not candidate_id:
-        return "missing_candidate_id"
-    accepted, reason = guard.accept(candidate, already_executed=state.already_executed(candidate_id))
-    if not accepted:
-        if from_queue and reason == "already_executed_locally":
-            remove_pending(candidate_id)
-        return reason
+    """Compatibility wrapper around the unified classic candidate executor.
 
-    symbol = guard.execution_symbol(candidate)
-    side = guard.normalize_side(str(candidate.get("side", "")))
-    fingerprint = signal_fingerprint(symbol, side, candidate)
-
-    if signal_fingerprint_enabled() and state.already_executed_fingerprint(fingerprint):
-        state.mark_executed(candidate_id)
-        set_candidate_executed(candidate_id)
-        remove_pending(candidate_id)
-        state.add_event(candidate_id, "candidate_skipped_duplicate_signal", {"symbol": symbol, "side": side, "signal_fingerprint": fingerprint, "candidate": candidate})
-        logger.warning("candidate skipped duplicate signal candidate=%s fingerprint=%s", candidate_id, fingerprint)
-        return "duplicate_signal"
-
-    if state.has_open_position_for(symbol, side):
-        mark_signal_done(state, candidate_id, fingerprint)
-        remove_pending(candidate_id)
-        state.add_event(candidate_id, "candidate_skipped_open_position_exists", {"symbol": symbol, "side": side, "signal_fingerprint": fingerprint, "candidate": candidate})
-        logger.warning("candidate skipped because open position already exists candidate=%s symbol=%s side=%s", candidate_id, symbol, side)
-        return "open_position_exists"
-
-    if side == "short" and not shorts_enabled():
-        if log_skipped_disabled_shorts():
-            state.add_event(candidate_id, "short_skipped_disabled", {"symbol": symbol, "candidate": candidate})
-        if from_queue:
-            remove_pending(candidate_id)
-        return "shorts_disabled"
-
-    try:
-        manager.margin.ensure_isolated_account(symbol)
-    except Exception as exc:
-        text = str(exc)
-        if is_margin_token_collateral_limit(text):
-            return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
-        if is_margin_unavailable(text):
-            return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
-        state.add_event(candidate_id, "margin_setup_error", {"error": text, "candidate": candidate})
-        logger.error("margin setup failed candidate=%s error=%s", candidate_id, text)
-        return "error"
-
-    if side == "short":
-        try:
-            result = manager.open_short_with_margin_borrow_sell(symbol=symbol, quote_amount=float(settings.order_quote_amount))
-            save_short_position(state, candidate_id, fingerprint, candidate, symbol, result)
-            if result_is_dry_run(result):
-                logger.info("margin short simulated dry-run candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
-                return "simulated_dry_run"
-            logger.info("margin short opened candidate=%s symbol=%s mode=%s qty=%s", candidate_id, symbol, result.get("mode"), result.get("quantity"))
-            return "opened"
-        except Exception as exc:
-            text = str(exc)
-            if is_margin_token_collateral_limit(text):
-                return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
-            if is_margin_unavailable(text):
-                return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
-            if is_insufficient_balance(text):
-                state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
-                logger.warning("margin short skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
-                return "insufficient_balance"
-            state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
-            logger.error("margin short failed candidate=%s error=%s", candidate_id, text)
-            return "error"
-
-    try:
-        result = manager.open_long_with_margin_take_profit(symbol=symbol, quote_amount=float(settings.order_quote_amount), target_price=float(candidate["target_price"]))
-    except Exception as exc:
-        text = str(exc)
-        if is_margin_token_collateral_limit(text):
-            return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, text, from_queue=from_queue)
-        if is_margin_unavailable(text):
-            return margin_unavailable_error(state, candidate_id, candidate, symbol, side, text)
-        if is_insufficient_balance(text):
-            state.add_event(candidate_id, "margin_skipped_insufficient_balance", {"error": text, "symbol": symbol, "side": side, "candidate": candidate})
-            logger.warning("margin long skipped insufficient balance candidate=%s symbol=%s error=%s", candidate_id, symbol, text)
-            return "insufficient_balance"
-        state.add_event(candidate_id, "margin_execution_error", {"error": text, "candidate": candidate})
-        logger.error("margin long failed candidate=%s error=%s", candidate_id, text)
-        return "error"
-
-    if result.get("tp_error") and is_margin_token_collateral_limit(result.get("tp_error")):
-        return queue_margin_token_limit(state, candidate_id, candidate, symbol, side, result.get("tp_error"), from_queue=from_queue)
-
-    save_long_position(state, candidate_id, fingerprint, candidate, symbol, manager, result)
-    if result_is_dry_run(result):
-        logger.info("margin long simulated dry-run candidate=%s symbol=%s qty=%s", candidate_id, symbol, result.get("quantity"))
-        return "simulated_dry_run"
-    if result.get("tp_error"):
-        state.add_event(candidate_id, "position_opened_needs_tp_replay", {"symbol": symbol, "error": result.get("tp_error"), "result": result})
-        logger.warning("margin long opened without tp candidate=%s symbol=%s qty=%s error=%s", candidate_id, symbol, result.get("quantity"), result.get("tp_error"))
-        return "opened_needs_tp_replay"
-    logger.info("margin long opened candidate=%s symbol=%s qty=%s tp=%s quote_guard=%s", candidate_id, symbol, result["quantity"], result.get("tp_order_id"), result.get("quote_balance_guard"))
-    return "opened"
-
+    Classic long candidates now use one path: validate once, try cross-margin
+    BUY MARKET with leverage, fall back to spot BUY MARKET, then place the
+    matching take-profit SELL LIMIT for the mode actually opened.
+    """
+    return execute_classic_candidate(settings, kraken, rules, manager, spot_manager, state, guard, candidate, from_queue=from_queue)
 
 def process_pending(settings, kraken, rules, manager, spot_manager, state, guard) -> dict:
     stats = {"pending_checked": 0, "pending_retried": 0, "pending_waiting_cooldown": 0, "pending_opened": 0, "pending_errors": 0, "pending_dropped": 0}
@@ -302,7 +209,7 @@ def process_pending(settings, kraken, rules, manager, spot_manager, state, guard
             continue
         stats["pending_retried"] += 1
         result = process_candidate(settings, kraken, rules, manager, spot_manager, state, guard, item["candidate"], from_queue=True)
-        if result in {"opened", "opened_needs_tp_replay", "sold"}:
+        if result in {"opened", "opened_spot_fallback"}:
             stats["pending_opened"] += 1
         elif result == "error":
             stats["pending_errors"] += 1
@@ -320,16 +227,15 @@ def main() -> None:
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=disabled", getattr(kraken, "exchange_name", "kraken"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
+    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=enabled", getattr(kraken, "exchange_name", "kraken"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)
-            stats = {"fetched": len(candidates), "opened": 0, "opened_needs_tp_replay": 0, "sold": 0, "errors": 0, "margin_unavailable": 0, "duplicate_signal": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0, "simulated_dry_run": 0}
+            stats = {"fetched": len(candidates), "opened": 0, "opened_spot_fallback": 0, "errors": 0, "margin_unavailable": 0, "duplicate_signal": 0, "skipped": 0, "shorts_disabled": 0, "insufficient_balance": 0, "token_collateral_retry_scheduled": 0, "simulated_dry_run": 0}
             for candidate in candidates:
                 result = process_candidate(settings, kraken, rules, manager, spot_manager, state, guard, candidate)
                 if result == "opened": stats["opened"] += 1
-                elif result == "opened_needs_tp_replay": stats["opened_needs_tp_replay"] += 1
-                elif result == "sold": stats["sold"] += 1
+                elif result == "opened_spot_fallback": stats["opened_spot_fallback"] += 1
                 elif result == "error": stats["errors"] += 1
                 elif result == "margin_unavailable_error": stats["margin_unavailable"] += 1
                 elif result == "duplicate_signal": stats["duplicate_signal"] += 1
