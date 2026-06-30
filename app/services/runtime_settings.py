@@ -24,15 +24,10 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "kraken": {
         "kraken_exchange_name": "kraken",
-        "kraken_rest_base": base_settings.kraken_rest_base,
+        "kraken_rest_base": os.getenv("KRAKEN_BASE_URL", base_settings.kraken_rest_base),
+        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", base_settings.kraken_rest_base),
         "kraken_api_key": base_settings.kraken_api_key,
         "kraken_secret_key": base_settings.kraken_secret_key,
-    },
-    "kraken": {
-        "kraken_exchange_name": "kraken",
-        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", "https://api.kraken.com"),
-        "kraken_api_key": os.getenv("KRAKEN_API_KEY", ""),
-        "kraken_secret_key": os.getenv("KRAKEN_SECRET_KEY", ""),
     },
     "market_data": {
         "kraken_collector_enabled": getattr(base_settings, "kraken_collector_enabled", True),
@@ -113,15 +108,10 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
         "QUOTE_ASSETS": "quote_assets",
     },
     "kraken": {
-        "KRAKEN_BASE_URL": "kraken_rest_base",
-        "KRAKEN_API_KEY": "kraken_api_key",
-        "KRAKEN_SECRET_KEY": "kraken_secret_key",
-        "KRAKEN_USE_TESTNET": "kraken_use_testnet",
-    },
-    "kraken": {
         "KRAKEN_BASE_URL": "kraken_base_url",
         "KRAKEN_API_KEY": "kraken_api_key",
         "KRAKEN_SECRET_KEY": "kraken_secret_key",
+        "KRAKEN_USE_TESTNET": "kraken_use_testnet",
     },
     "notifications": {
         "TELEGRAM_BOT_TOKEN": "telegram_secret",
@@ -199,7 +189,6 @@ def _apply_legacy_admin_setting_locations(payload: dict[str, dict[str, Any]]) ->
     """Keep old persisted admin rows working after splitting executor/market data settings."""
     kraken = payload.setdefault("kraken", {})
     executor = payload.setdefault("executor", {})
-    kraken = payload.setdefault("kraken", {})
     market_data = payload.setdefault("market_data", {})
 
     for legacy_key in ("execution_exchange", "EXECUTION_EXCHANGE"):
@@ -225,7 +214,7 @@ def _canonical_admin_field(section: str, key: str) -> tuple[str, str]:
 
 def _with_admin_aliases(payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     admin_payload = {section: values.copy() for section, values in payload.items()}
-    for section in ("general", "executor", "kraken", "kraken", "market_data", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
+    for section in ("general", "executor", "kraken", "market_data", "strategy", "notifications", "bot", "live", "momentum", "admin/security"):
         admin_payload.setdefault(section, {})
     for section, aliases in ADMIN_FIELD_ALIASES.items():
         for display_key, runtime_key in aliases.items():
@@ -254,7 +243,6 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
     "general": ("app_name", "app_env", "cors_origins", "create_tables_on_boot"),
     "executor": tuple(DEFAULT_SETTINGS["executor"].keys()),
-    "kraken": ("kraken_exchange_name", "kraken_rest_base", "kraken_api_key", "kraken_secret_key"),
     "kraken": ("kraken_exchange_name", "kraken_base_url", "kraken_api_key", "kraken_secret_key"),
     "market_data": tuple(DEFAULT_SETTINGS["market_data"].keys()),
     "strategy": tuple(DEFAULT_SETTINGS["strategy"].keys()),
@@ -334,6 +322,11 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         payload.setdefault("market_data", {})["kraken_collector_enabled"] = bool(payload.get("market_data", {}).get("kraken_collector_enabled", True))
         _apply_legacy_admin_setting_locations(payload)
+        kraken = payload.setdefault("kraken", {})
+        if kraken.get("kraken_base_url"):
+            kraken["kraken_rest_base"] = kraken["kraken_base_url"]
+        elif kraken.get("kraken_rest_base"):
+            kraken["kraken_base_url"] = kraken["kraken_rest_base"]
         payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
         payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
         return payload
@@ -344,6 +337,11 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
 
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     payload = _normalize_admin_payload(payload)
+    kraken_payload = payload.setdefault("kraken", {})
+    if kraken_payload.get("kraken_base_url"):
+        kraken_payload["kraken_rest_base"] = kraken_payload["kraken_base_url"]
+    elif kraken_payload.get("kraken_rest_base"):
+        kraken_payload["kraken_base_url"] = kraken_payload["kraken_rest_base"]
     for source in LEGACY_ADMIN_SETTING_ALIASES:
         db.execute(delete(AppSetting).where(AppSetting.category == source[0], AppSetting.key == source[1]))
     strategy = payload.get("strategy")

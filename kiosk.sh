@@ -3,7 +3,10 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$APP_DIR"
 
-APP_PORT="${APP_PORT:-5000}"
+if [ -z "${APP_PORT:-}" ] && [ -f ".env" ]; then
+  APP_PORT="$(awk -F= '$1 == "APP_PORT" {print $2; exit}' .env)"
+fi
+APP_PORT="${APP_PORT:-8080}"
 URL="${SIGNALMAKER_KIOSK_URL:-http://127.0.0.1:${APP_PORT}/index.html}"
 HEALTH_URL="${SIGNALMAKER_HEALTH_URL:-http://127.0.0.1:${APP_PORT}/healthz}"
 

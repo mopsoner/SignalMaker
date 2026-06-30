@@ -13,8 +13,8 @@ from typing import Any
 
 BASE_URL = os.getenv("SIGNALMAKER_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 REFRESH_SECONDS = int(os.getenv("SIGNALMAKER_TUI_REFRESH", "10") or "10")
-SECRET_KEYS = {"kraken_api_key", "kraken_secret_key", "kraken_api_key", "kraken_secret_key", "telegram_secret", "discord_url"}
-SECTIONS = ["general", "executor", "kraken", "kraken", "market_data", "live", "bot", "momentum", "notifications"]
+SECRET_KEYS = {"kraken_api_key", "kraken_secret_key", "telegram_secret", "discord_url"}
+SECTIONS = ["general", "executor", "kraken", "market_data", "strategy", "live", "bot", "momentum", "notifications"]
 
 MENU = [
     ("Status / Health", "status"), ("Services / Workers", "services"), ("Assets", "assets"),
@@ -128,7 +128,7 @@ def fetch_screen(kind: str) -> tuple[str, list[Any], list[str] | None, list[str]
         return "Logs", lines, ["worker", "line"], []
     if kind == "kraken":
         settings = api_get("/api/v1/admin/settings"); kr = settings.get("kraken", {}) if isinstance(settings, dict) else {}; ex = settings.get("executor", {}) if isinstance(settings, dict) else {}
-        rows = [{"key": "exchange", "value": ex.get("execution_exchange") or kr.get("execution_exchange")}, {"key": "execution_mode", "value": ex.get("execution_mode")}, {"key": "quote_assets", "value": ex.get("quote_assets") or settings.get("general", {}).get("quote_assets", "-") if isinstance(settings, dict) else "-"}, {"key": "kraken_base_url", "value": kr.get("kraken_base_url")}, {"key": "kraken_api_key", "value": mask("kraken_api_key", kr.get("kraken_api_key"))}, {"key": "kraken_secret_key", "value": mask("kraken_secret_key", kr.get("kraken_secret_key"))}]
+        rows = [{"key": "exchange", "value": ex.get("execution_exchange")}, {"key": "execution_mode", "value": ex.get("execution_mode", "cross")}, {"key": "quote_assets", "value": ex.get("quote_assets") or settings.get("market_data", {}).get("kraken_quote_assets", "-") if isinstance(settings, dict) else "-"}, {"key": "kraken_rest_base", "value": kr.get("kraken_rest_base") or kr.get("kraken_base_url")}, {"key": "kraken_api_key", "value": mask("kraken_api_key", kr.get("kraken_api_key"))}, {"key": "kraken_secret_key", "value": mask("kraken_secret_key", kr.get("kraken_secret_key"))}]
         try: rows += [{"key": f"test_{k}", "value": v} for k, v in api_request("/api/v1/admin/test/kraken", method="POST").items()]
         except Exception as exc: notes.append(str(exc))
         return "Kraken Diagnostics (dry-run/validate only)", rows, ["key", "value"], notes

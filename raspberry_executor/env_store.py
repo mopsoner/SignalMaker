@@ -9,7 +9,7 @@ DEFAULTS = {
     "GATEWAY_ID": "raspberry-fr-1",
     "POLL_SECONDS": "15",
     "DRY_RUN": "false",
-    "QUOTE_ASSETS": "USDC",
+    "QUOTE_ASSETS": "USD,USDC",
     "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "900",
     "EXECUTION_EXCHANGE": "kraken",
