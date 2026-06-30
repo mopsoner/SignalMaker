@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker Raspberry Executor - Redirection</title>
-    <meta name="description" content="Cette page historique est conservée et redirige vers la vue mutualisée.">
+    <title>SignalMaker Raspberry Executor - Trade candidates</title>
+    <meta name="description" content="Candidats de trade reçus, scores, niveaux entry/TP/SL et statuts d’exécution.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Redirection</h1>
-      <p>Cette page historique est conservée et redirige vers la vue mutualisée.</p>
+      <h1>Trade candidates</h1>
+      <p>Candidats reçus, scores, niveaux entry/TP/SL et statut d’exécution.</p>
       <nav data-main-nav></nav>
     </header>
     <main>
-      <section class="card"><h2>Page mutualisée</h2><p>Le contenu a été regroupé dans <a href="./trading.html#trade-candidates">trading.html#trade-candidates</a>.</p><p><a class="button-link" href="./trading.html#trade-candidates">Continuer</a></p></section><script>window.location.replace('./trading.html#trade-candidates');</script>
+      <section id="trade-candidates" class="card"><h2>Candidats</h2><div id="candidates-summary"></div><button data-action="refresh">Rafraîchir</button><div id="candidates-content" class="muted">Chargement...</div></section>
     </main>
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>

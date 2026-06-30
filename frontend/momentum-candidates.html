@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker Raspberry Executor - Redirection</title>
-    <meta name="description" content="Cette page historique est conservée et redirige vers la vue mutualisée.">
+    <title>SignalMaker Raspberry Executor - Momentum</title>
+    <meta name="description" content="Vue momentum buy/sell, décisions RSI et synchronisation des candidats SignalMaker.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Redirection</h1>
-      <p>Cette page historique est conservée et redirige vers la vue mutualisée.</p>
+      <h1>Momentum</h1>
+      <p>Décisions momentum buy/sell, RSI et synchronisation depuis SignalMaker.</p>
       <nav data-main-nav></nav>
     </header>
     <main>
-      <section class="card"><h2>Page mutualisée</h2><p>Le contenu a été regroupé dans <a href="./trading.html#momentum">trading.html#momentum</a>.</p><p><a class="button-link" href="./trading.html#momentum">Continuer</a></p></section><script>window.location.replace('./trading.html#momentum');</script>
+      <section id="momentum" class="card"><h2>Momentum buy / sell</h2><button data-action="sync-momentum">Synchroniser depuis SignalMaker</button> <button data-action="refresh">Rafraîchir</button><p id="sync-result" class="muted"></p><div id="momentum-summary"></div><div id="momentum-content" class="muted">Chargement...</div></section>
     </main>
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>
