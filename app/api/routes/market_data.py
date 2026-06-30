@@ -21,6 +21,15 @@ def list_candles(symbol: str | None = Query(default=None), interval: str | None 
 @router.post("/candles", response_model=CandleIngestResponse)
 def ingest_candles(payload: CandleIngestRequest, db: Session = Depends(get_db)) -> CandleIngestResponse:
     candles = [item.model_dump() for item in payload.candles]
+    if not candles:
+        return CandleIngestResponse(
+            status="ok",
+            source=payload.source,
+            symbol=payload.symbol.upper(),
+            interval=payload.interval,
+            received=0,
+            upserted=0,
+        )
     upserted = MarketDataService(db).upsert_candles(payload.symbol, payload.interval, candles)
     return CandleIngestResponse(
         status="ok",

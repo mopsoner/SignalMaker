@@ -1,49 +1,14 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SignalMaker - Status</title>
-    <meta name="description" content="SignalMaker status léger HTML/JS">
-    <link rel="stylesheet" href="./styles.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SignalMaker</title>
+    <meta name="description" content="SignalMaker live trading dashboard" />
+    <script type="module" crossorigin src="/assets/index-S4NYGWDT.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DqihsCvf.css">
   </head>
   <body>
-    <header>
-      <h1>SignalMaker</h1>
-      <p>Interface légère pour Raspberry Pi ancien (pages HTML, CSS et JS sans build Node/Vite).</p>
-      <nav>
-        <a href="./index.html" aria-current="page">Status</a>
-        <a href="./momentum-candidates.html">Candidate Sync</a>
-        <a href="./positions.html">Positions</a>
-        <a href="./settings.html">Réglages</a>
-        <a href="./admin.html">Admin</a>
-        <a href="./dashboard.html">Dashboard</a>
-        <a href="./candidates.html">Trade Candidates</a>
-        <a href="./ops.html">Ops</a>
-        <a href="./logs.html">Logs</a>
-        <a href="./market-data.html">Market Data</a>
-      </nav>
-    </header>
-
-    <main>
-      <section class="card">
-        <h2>Status API</h2>
-        <p id="health" class="muted">Chargement...</p>
-        <button data-action="refresh">Rafraîchir</button>
-      </section>
-
-      <section class="card">
-        <h2>Résumé</h2>
-        <p>Cette version garde le front volontairement simple : des fichiers HTML statiques servis directement au Raspberry.</p>
-        <ul>
-          <li>Pas de React.</li>
-          <li>Pas de Vite/esbuild.</li>
-          <li>Pas de build npm obligatoire sur le Raspberry.</li>
-        </ul>
-      </section>
-    </main>
-
-    <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
-    <script src="./app.js" defer></script>
+    <div id="root"></div>
   </body>
 </html>

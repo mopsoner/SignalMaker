@@ -11,7 +11,7 @@ class SignalEngineService:
             'status': 'ready',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'strategy': 'legacy_wyckoff_v231',
-            'primary_interval': '5m',
+            'primary_interval': '15m',
         }
 
     def _range_position(self, price: float, low: float | None, high: float | None) -> float | None:
@@ -193,6 +193,32 @@ class SignalEngineService:
             'equal_highs_1h': eq_highs,
             'equal_lows_1h': eq_lows,
         }
+
+    def _entry_rsi_profile(self, signal: dict, cfg: dict | None = None) -> dict:
+        raw_cfg = (cfg or {}).get('entry_rsi') if isinstance(cfg, dict) else None
+        raw_cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
+        min_value = float(raw_cfg.get('min', 45.0))
+        max_value = float(raw_cfg.get('max', 55.0))
+        if min_value > max_value:
+            min_value, max_value = max_value, min_value
+        timeframe = str(raw_cfg.get('timeframe', '1h') or '1h').lower()
+        if timeframe not in {'1h', '4h'}:
+            timeframe = '1h'
+        source = 'rsi_macro' if timeframe == '4h' else 'rsi_htf'
+        entry_value = signal.get(source)
+        preferred = entry_value is not None and min_value <= float(entry_value) <= max_value
+        min_label = f'{min_value:g}'
+        max_label = f'{max_value:g}'
+        return {
+            'value': entry_value,
+            'timeframe': timeframe,
+            'source': source,
+            'preferred': preferred,
+            'min': min_value,
+            'max': max_value,
+            'reason': f'preferred_{min_label}_{max_label}_rsi_entry' if preferred else f'entry_rsi_outside_{min_label}_{max_label}_band',
+        }
+
 
     def _wyckoff_event_level(self, signal: dict) -> dict:
         bias = signal.get('bias') or 'neutral'
@@ -463,6 +489,7 @@ class SignalEngineService:
             'trade': 0.0,
             'state_fit': 0.0,
             'block_penalty': 0.0,
+            'entry_rsi': 0.0,
         }
 
         if macro_window.get('valid'):
@@ -493,6 +520,12 @@ class SignalEngineService:
             adjustments['zone_validity'] += 1.5
         else:
             adjustments['zone_validity'] -= 1.0
+
+        entry_rsi = signal.get('entry_rsi') or {}
+        if entry_rsi.get('preferred'):
+            adjustments['entry_rsi'] += 1.25
+        elif entry_rsi.get('value') is not None:
+            adjustments['entry_rsi'] -= 0.25
 
         if exec_trigger.get('valid'):
             adjustments['confirm'] += 2.0
@@ -531,6 +564,7 @@ class SignalEngineService:
         signal['macro_window_4h'] = macro_window
         signal['refinement_context_1h'] = refinement
         signal['execution_trigger_5m'] = exec_trigger
+        signal['entry_rsi'] = signal.get('entry_rsi') or self._entry_rsi_profile(signal, cfg)
         signal['engine_name'] = 'legacy_wyckoff_v231_hierarchical'
         signal['macro_liquidity_context'] = self._preferred_macro_context(signal)
         signal['liquidity_context'] = signal['macro_liquidity_context']
@@ -599,7 +633,10 @@ class SignalEngineService:
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
         cfg = get_runtime_signal_config()
-        candles_main = candles['5m']
+        execution_interval = cfg.get('execution_interval', '15m')
+        candles_main = candles.get(execution_interval) or candles.get('15m') or candles.get('5m')
+        if not candles_main:
+            raise KeyError(f'missing_{execution_interval}_candles')
         signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)
         signal = self._apply_hierarchy(signal, candles['1h'], candles_main, cfg)
         return signal
