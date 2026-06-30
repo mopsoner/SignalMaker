@@ -11,7 +11,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.executor_service import ExecutorService
 from app.services.runtime_settings import load_runtime_settings
@@ -37,7 +36,7 @@ if __name__ == "__main__":
             limit = int(bot.get("bot_executor_limit", DEFAULT_LIMIT))
             quantity = float(bot.get("bot_executor_quantity", DEFAULT_QUANTITY))
             interval = int(bot.get("bot_executor_interval_sec", DEFAULT_INTERVAL))
-            mode = 'live' if live_cfg.get('live_trading_enabled', settings.live_trading_enabled) else 'paper'
+            mode = 'paper'
 
             result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
             print(f"Executor tick ({mode}): {result}", flush=True)

@@ -2,7 +2,6 @@ import os
 from collections import deque
 from typing import Any
 
-import requests
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import inspect, text
@@ -18,7 +17,6 @@ router = APIRouter()
 
 class SettingsPayload(BaseModel):
     general: dict[str, Any] = {}
-    binance: dict[str, Any] = {}
     strategy: dict[str, Any] = {}
     notifications: dict[str, Any] = {}
     bot: dict[str, Any] = {}
@@ -98,12 +96,6 @@ def start_worker(worker_name: str) -> dict:
 def stop_worker(worker_name: str) -> dict:
     return WorkerControlService().stop(worker_name)
 
-
-@router.post('/admin/test/binance')
-def test_binance(db: Session = Depends(get_db)) -> dict:
-    base = load_runtime_settings(db)['binance']['binance_rest_base'].rstrip('/')
-    response = requests.get(f'{base}/api/v3/ping', timeout=10)
-    return {'status': 'ok' if response.ok else 'error', 'http_status': response.status_code, 'base_url': base}
 
 
 _ALLOWED_WORKERS = {"pipeline", "executor", "scheduler", "momentum_engine", "momentum_backtest"}

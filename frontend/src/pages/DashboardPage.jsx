@@ -88,14 +88,14 @@ function MobileAssetCards({ rows }) {
     <DecisionPath row={row} />
     <div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI 1H</span><strong>{fmtNumber(rsiOneHour(row), 2)}</strong></div><div><span>Model</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div>
     <div className="mobile-reason"><span>Reason</span><strong>{plannerReason(row)}</strong></div>
-    <div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>
+    <div className="mobile-asset-actions"><Link to={`/assets/${encodeURIComponent(row.symbol)}`}>Debug view</Link><a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>
   </article>)}</div>
 }
 
 export default function DashboardPage() {
   const [marketFilter, setMarketFilter] = useState('actionable')
   const { data: adminSettings } = usePollingQuery(useCallback(() => api.adminSettings(), []), 30000)
-  const assetLimit = Number(adminSettings?.binance?.binance_max_symbols || 50)
+  const assetLimit = 50
   const { data: assets = [], loading, error } = usePollingQuery(useCallback(() => api.assets(`?limit=${assetLimit}&sort_by=updated_at`), [assetLimit]), 15000)
 
   const counts = useMemo(() => ({
@@ -157,7 +157,7 @@ export default function DashboardPage() {
   const strongestAssets = useMemo(() => [...assets].sort((a, b) => score(b) - score(a)).slice(0, 6), [assets])
 
   const columns = [
-    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
+    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol || '')}`} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(stage(row))}>{stage(row)}</span>, sortValue: stage },
     { key: 'decision', title: 'Decision path', render: (row) => <DecisionPath row={row} />, sortValue: confirmationLabel },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },

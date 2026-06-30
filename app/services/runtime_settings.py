@@ -34,28 +34,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "cors_origins": base_settings.cors_origins,
         "create_tables_on_boot": base_settings.create_tables_on_boot,
     },
-    "binance": {
-        "binance_rest_base": base_settings.binance_rest_base,
-        "binance_collector_enabled": base_settings.binance_collector_enabled,
-        "binance_quote_assets": base_settings.binance_quote_assets,
-        "binance_symbol_status": base_settings.binance_symbol_status,
-        "binance_max_symbols": base_settings.binance_max_symbols,
-        "binance_min_quote_volume_24h": base_settings.binance_min_quote_volume_24h,
-        "binance_min_trades_24h": base_settings.binance_min_trades_24h,
-        "binance_excluded_base_assets": base_settings.binance_excluded_base_assets,
-        "binance_collect_max_workers": base_settings.binance_collect_max_workers,
-        "binance_incremental_fetch_enabled": base_settings.binance_incremental_fetch_enabled,
-        "binance_incremental_min_1m": base_settings.binance_incremental_min_1m,
-        "binance_incremental_min_5m": base_settings.binance_incremental_min_5m,
-        "binance_incremental_min_15m": base_settings.binance_incremental_min_15m,
-        "binance_incremental_min_1h": base_settings.binance_incremental_min_1h,
-        "binance_incremental_min_4h": base_settings.binance_incremental_min_4h,
-        "binance_lookback_1m": base_settings.binance_lookback_1m,
-        "binance_lookback_5m": base_settings.binance_lookback_5m,
-        "binance_lookback_15m": base_settings.binance_lookback_15m,
-        "binance_lookback_1h": base_settings.binance_lookback_1h,
-        "binance_lookback_4h": base_settings.binance_lookback_4h,
-    },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
         "signal_execution_interval": "15m",
@@ -97,9 +75,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_engine_min_score": 0.0,
     },
     "live": {
-        "live_trading_enabled": base_settings.live_trading_enabled,
-        "binance_use_testnet": base_settings.binance_use_testnet,
-        "binance_testnet_rest_base": base_settings.binance_testnet_rest_base,
         "live_spot_allow_shorts": base_settings.live_spot_allow_shorts,
         "live_max_open_positions": base_settings.live_max_open_positions,
         "live_max_notional_per_trade": base_settings.live_max_notional_per_trade,
@@ -121,10 +96,6 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         strategy = payload.setdefault("strategy", {})
         strategy["signal_execution_interval"] = "15m"
         strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy.get("signal_entry_rsi_timeframe"))
-        payload.setdefault("binance", {})["binance_collector_enabled"] = _as_bool(
-            payload.get("binance", {}).get("binance_collector_enabled", True),
-            default=True,
-        )
         payload.setdefault("bot", {})["bot_momentum_engine_enabled"] = _as_bool(
             payload.get("bot", {}).get("bot_momentum_engine_enabled", True),
             default=True,
@@ -146,10 +117,6 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
         strategy["signal_execution_interval"] = "15m"
         if "signal_entry_rsi_timeframe" in strategy:
             strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy["signal_entry_rsi_timeframe"])
-
-    binance = payload.get("binance")
-    if isinstance(binance, dict) and "binance_collector_enabled" in binance:
-        binance["binance_collector_enabled"] = _as_bool(binance["binance_collector_enabled"], default=True)
 
     bot = payload.get("bot")
     if isinstance(bot, dict) and "bot_momentum_engine_enabled" in bot:

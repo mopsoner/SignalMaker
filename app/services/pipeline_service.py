@@ -57,16 +57,8 @@ class PipelineService:
     def _execution_interval(self) -> str:
         return EXECUTION_INTERVAL
 
-    def _lookback_key(self, interval: str) -> str:
-        return f"binance_lookback_{interval}"
-
     def _bundle_limits(self, execution_interval: str) -> dict[str, int]:
-        runtime = self.collector.runtime["binance"]
-        return {
-            execution_interval: int(runtime.get(self._lookback_key(execution_interval), 180)),
-            "1h": int(runtime["binance_lookback_1h"]),
-            "4h": int(runtime["binance_lookback_4h"]),
-        }
+        return {execution_interval: 180, "1h": 180, "4h": 120}
 
     def _clean_public_text(self, value):
         if isinstance(value, str):
@@ -235,7 +227,7 @@ class PipelineService:
 
         logger.info("Pipeline run started run_id=%s symbols_requested=%s limit=%s", run_id, len(symbols), limit)
 
-        max_workers = max(1, int(self.collector.runtime["binance"].get("binance_collect_max_workers", 4)))
+        max_workers = 1
         worker_count = min(max_workers, max(1, len(symbols)))
 
         fetched_exec, collect_errors = self._collect_interval_parallel(symbols, execution_interval, latest_close_times, worker_count)
@@ -421,7 +413,7 @@ class PipelineService:
             "execution_interval": execution_interval,
             "analysis_ordering": "score_desc_existing_asset_state",
             "analysis_top_symbols": analyzed_symbols[:10],
-            "incremental_fetch_enabled": bool(self.collector.runtime["binance"].get("binance_incremental_fetch_enabled", True)),
+            "external_ingest_only": True,
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
             "state_counts": dict(state_counts),

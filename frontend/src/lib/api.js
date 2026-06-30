@@ -64,7 +64,6 @@ export const api = {
   workerStatus: () => request('/api/v1/admin/workers'),
   startWorker: (name) => request(`/api/v1/admin/workers/${name}/start`, { method: 'POST' }),
   stopWorker: (name) => request(`/api/v1/admin/workers/${name}/stop`, { method: 'POST' }),
-  testBinance: () => request('/api/v1/admin/test/binance', { method: 'POST' }),
   testNotifications: () => request('/api/v1/admin/test/notifications', { method: 'POST' }),
 
   stockEtfDashboard: (params = '') => request(`/api/v1/stocks-etfs/dashboard${params}`),
