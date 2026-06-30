@@ -726,3 +726,52 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
         "momentum_fallback_buy_exhausted",
         "momentum_decision_cadence_wait",
     ]
+
+
+def test_kraken_buy_attempts_margin_5_then_3_before_spot_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
+
+    attempts = []
+
+    class FakeMargin:
+        dry_run = False
+        isolated = False
+
+        def __init__(self, kraken, *, isolated: bool, dry_run: bool, leverage=None) -> None:
+            self.leverage_value = leverage
+            self.dry_run = dry_run
+
+        def leverage(self):
+            return str(self.leverage_value)
+
+        def ensure_isolated_account(self, symbol: str) -> dict:
+            return {"status": "cross_margin"}
+
+        def margin_free_balance(self, symbol: str, asset: str) -> float:
+            return 10.0
+
+        def max_borrowable(self, symbol: str, asset: str) -> float:
+            return 0.0
+
+        def margin_order(self, symbol: str, side: str, quantity: str, order_type: str = "MARKET", **kwargs) -> dict:
+            attempts.append(self.leverage_value)
+            raise RuntimeError(f"pair_not_margin_enabled_leverage_{self.leverage_value}")
+
+    monkeypatch.setattr(momentum_module, "MarginClient", FakeMargin)
+    state = StateStore()
+    kraken = FakeKraken(quote_balances=[10.0, 10.0])
+    cfg = SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], exchange="kraken")
+
+    result = buy_symbol(cfg, kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+
+    assert attempts == [5, 3]
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert kraken.orders[0]["executedQty"] == "10.00000000"
+    assert [event["event_type"] for event in state.events()] == [
+        "momentum_buy_margin_fallback_spot",
+        "position_opened",
+        "momentum_bought",
+    ]

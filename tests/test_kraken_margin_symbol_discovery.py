@@ -36,14 +36,14 @@ def test_discover_kraken_margin_symbols_keeps_only_margin_tradeable_quotes(monke
     assert candle_auto_feed.discover_kraken_margin_symbols("https://kraken.test", ["USDC"]) == ["BTCUSDC", "ETHUSDC"]
 
 
-def test_discover_symbols_for_exchange_uses_kraken_margin_filter_for_cross(monkeypatch):
+def test_discover_symbols_for_exchange_keeps_spot_universe_for_cross(monkeypatch):
     monkeypatch.setattr(candle_auto_feed.requests, "get", lambda *args, **kwargs: FakeResponse(kraken_asset_pairs_payload()))
     settings = SimpleNamespace(exchange="kraken", kraken_base_url="https://kraken.test", kraken_api_key="")
 
     symbols, source = candle_auto_feed.discover_symbols_for_exchange(settings, ["USDC"], "cross")
 
-    assert symbols == ["BTCUSDC", "ETHUSDC"]
-    assert source == "kraken_margin"
+    assert symbols == ["ADAUSDC", "BTCUSDC", "ETHUSDC"]
+    assert source == "kraken_spot"
 
 
 def test_discover_kraken_spot_symbols_can_include_non_margin_spot_pairs(monkeypatch):
