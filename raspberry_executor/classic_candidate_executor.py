@@ -6,7 +6,7 @@ from typing import Any
 from raspberry_executor.local_candidate_store import mark_candidate_executed, upsert_remote_candidates
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import margin_enabled
+from raspberry_executor.margin_settings import margin_enabled, margin_leverage_attempts
 from raspberry_executor.pending_trade_queue import remove_pending
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.spot_order_manager import SpotOrderManager
@@ -167,8 +167,8 @@ def _save_position(state: StateStore, normalized: NormalizedCandidate, candidate
     })
 
 
-def _open_margin_long(manager: MarginOrderManager, symbol: str, quote_amount: float, target_price: float) -> dict:
-    result = manager.open_long_with_margin_take_profit(symbol=symbol, quote_amount=quote_amount, target_price=target_price)
+def _open_margin_long(manager: MarginOrderManager, symbol: str, quote_amount: float, target_price: float, *, leverage: float | int | None = None) -> dict:
+    result = manager.open_long_with_margin_take_profit(symbol=symbol, quote_amount=quote_amount, target_price=target_price, leverage=leverage)
     if result.get("tp_error"):
         raise RuntimeError(result.get("tp_error"))
     result["mode"] = "cross_margin"
@@ -208,22 +208,26 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
     exchange_name = getattr(exchange, "exchange_name", getattr(settings, "exchange", "kraken"))
     margin_error = None
     if margin_manager is not None and margin_enabled():
-        try:
-            result = _open_margin_long(margin_manager, normalized.symbol, float(settings.order_quote_amount), normalized.target_price)
-            _save_position(state, normalized, candidate, result, "cross_margin", exchange_name)
-            logger.info("classic candidate opened on margin candidate=%s symbol=%s qty=%s tp=%s", normalized.candidate_id, normalized.symbol, result.get("quantity"), result.get("tp_order_id"))
-            return "opened"
-        except Exception as exc:
-            margin_error = str(exc)
-            spot_quote_available = _spot_quote_balance_available(exchange, rules, normalized.symbol, float(settings.order_quote_amount))
-            recoverable = _recoverable_margin_error(margin_error, spot_quote_available=spot_quote_available)
-            state.add_event(normalized.candidate_id, "candidate_margin_attempt_failed", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "recoverable": recoverable, "spot_quote_available": spot_quote_available, "candidate": candidate})
-            if not recoverable:
-                state.add_event(normalized.candidate_id, "execution_error", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
-                logger.exception("classic margin execution failed with blocking error candidate=%s", normalized.candidate_id)
-                return "error"
-            state.add_event(normalized.candidate_id, "candidate_margin_fallback_spot", {"error": margin_error, "symbol": normalized.symbol, "side": normalized.side, "spot_quote_available": spot_quote_available, "candidate": candidate})
-            logger.warning("recoverable margin error, falling back to spot candidate=%s error=%s", normalized.candidate_id, margin_error)
+        margin_attempts: list[dict[str, Any]] = []
+        spot_quote_available = _spot_quote_balance_available(exchange, rules, normalized.symbol, float(settings.order_quote_amount))
+        for leverage in margin_leverage_attempts():
+            try:
+                result = _open_margin_long(margin_manager, normalized.symbol, float(settings.order_quote_amount), normalized.target_price, leverage=leverage)
+                _save_position(state, normalized, candidate, result, "cross_margin", exchange_name)
+                logger.info("classic candidate opened on margin candidate=%s symbol=%s leverage=%s qty=%s tp=%s", normalized.candidate_id, normalized.symbol, leverage, result.get("quantity"), result.get("tp_order_id"))
+                return "opened"
+            except Exception as exc:
+                margin_error = str(exc)
+                recoverable = _recoverable_margin_error(margin_error, spot_quote_available=spot_quote_available)
+                attempt = {"leverage": leverage, "error": margin_error, "recoverable": recoverable}
+                margin_attempts.append(attempt)
+                state.add_event(normalized.candidate_id, "candidate_margin_attempt_failed", {"error": margin_error, "leverage": leverage, "symbol": normalized.symbol, "side": normalized.side, "recoverable": recoverable, "spot_quote_available": spot_quote_available, "candidate": candidate})
+                if not recoverable:
+                    state.add_event(normalized.candidate_id, "execution_error", {"error": margin_error, "leverage": leverage, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
+                    logger.exception("classic margin execution failed with blocking error candidate=%s leverage=%s", normalized.candidate_id, leverage)
+                    return "error"
+        state.add_event(normalized.candidate_id, "candidate_margin_fallback_spot", {"error": margin_error, "margin_attempts": margin_attempts, "symbol": normalized.symbol, "side": normalized.side, "spot_quote_available": spot_quote_available, "candidate": candidate})
+        logger.warning("recoverable margin errors, falling back to spot candidate=%s attempts=%s", normalized.candidate_id, margin_attempts)
 
     try:
         result = _open_spot_long(spot_manager, exchange, normalized.symbol, float(settings.order_quote_amount), normalized.target_price)

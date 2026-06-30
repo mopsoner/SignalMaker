@@ -263,8 +263,8 @@ class MarginOrderManager:
         order = self.margin.margin_order(symbol, "SELL", exit_qty, "LIMIT", price=tp, time_in_force="GTC")
         return {"symbol": symbol, "quantity": exit_qty, "tp_order_id": self._order_id(order), "tp_payload": order, "exit_strategy": "take_profit_only"}
 
-    def open_long_with_margin_take_profit(self, *, symbol: str, quote_amount: float, target_price: float) -> dict:
-        result = self.place_margin_market_entry(symbol=symbol, quote_amount=quote_amount)
+    def open_long_with_margin_take_profit(self, *, symbol: str, quote_amount: float, target_price: float, leverage: float | str | None = None) -> dict:
+        result = self.place_margin_market_entry(symbol=symbol, quote_amount=quote_amount, leverage=leverage)
         result["exit_strategy"] = "take_profit_only"
         executed_qty = result["quantity"]
         try:
