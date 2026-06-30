@@ -118,6 +118,21 @@ def momentum_buyable_text(row: dict) -> str:
     return "buy" if 45 <= rsi <= 55 else "blocked"
 
 
+
+def summarize_candle_feed(client: SignalMakerClient) -> tuple[dict, str | None]:
+    try:
+        rows = client.candle_summary()
+    except Exception as exc:
+        return {"ok": False, "count": 0, "latest": None, "symbols": []}, str(exc)
+    latest = None
+    for row in rows:
+        value = row.get("latest_open_time") or row.get("last_open_time") or row.get("open_time") or row.get("updated_at")
+        dt = parse_dt(value)
+        if dt and (latest is None or dt > latest):
+            latest = dt
+    symbols = [safe(row.get("symbol")) for row in rows[:5]]
+    return {"ok": True, "count": len(rows), "latest": latest.isoformat() if latest else None, "symbols": symbols}, None
+
 def fetch_candidates(limit: int | None = None):
     try:
         settings = load_settings()
@@ -171,6 +186,8 @@ def snapshot():
     limit = candidate_display_limit()
     candidates, candidate_error = fetch_candidates(limit=limit)
     settings = load_settings()
+    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
+    candle_feed, candle_error = summarize_candle_feed(client)
     positions, pnl_summary = enrich_positions_with_pnl(list(state.open_positions().items()), settings)
     events = list(reversed(state.events()[-160:]))
     now = datetime.now().astimezone()
@@ -187,6 +204,8 @@ def snapshot():
         "momentum_candidates": momentum_candidate_rows(candidates),
         "candidates": candidates,
         "candidate_error": candidate_error,
+        "candle_feed": candle_feed,
+        "candle_error": candle_error,
         "candidate_limit": limit,
         "refreshed_at": now.strftime("%d/%m %H:%M:%S"),
     }
@@ -224,10 +243,17 @@ def position_result(row: dict) -> str:
 
 def render_header(stdscr, width, data):
     add(stdscr, 0, 0, " " * (width - 1), curses.color_pair(1))
-    add(stdscr, 0, 2, " SignalMaker Raspberry Executor TUI ", curses.color_pair(1) | curses.A_BOLD)
+    add(stdscr, 0, 2, " SignalMaker Raspberry Executor — Overview ", curses.color_pair(1) | curses.A_BOLD)
     right = f"mode={data['execution_mode']} dry={data['margin_dry_run']} shorts={data['shorts_enabled']} {data['refreshed_at']}"
     add(stdscr, 0, max(2, width - len(right) - 2), right, curses.color_pair(1))
 
+
+def candle_feed_text(data) -> str:
+    feed = data.get("candle_feed") or {}
+    if data.get("candle_error"):
+        return "ERROR"
+    latest = fr_datetime(feed.get("latest"), with_date=False) if feed.get("latest") else "-"
+    return f"{feed.get('count', 0)} symbols @ {latest}"
 
 def render_status(stdscr, y, x, h, w, data):
     box(stdscr, y, x, h, w, "Control")
@@ -242,6 +268,7 @@ def render_status(stdscr, y, x, h, w, data):
         ("Dry run", f"global={settings.dry_run} margin={data['margin_dry_run']}"),
         ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
         ("Candidates", f"{len(data.get('candidates') or [])}/{data.get('candidate_limit', '-')}") ,
+        ("Candle feed", candle_feed_text(data)),
         ("Mom cands", len(data.get("momentum_candidates") or [])),
         ("Mom action", momentum.get("action", "-")),
         ("Mom result", momentum.get("execution_result", "-")),
@@ -283,6 +310,7 @@ def render_momentum(stdscr, y, x, h, w, data):
         ("Result", m.get("execution_result")),
         ("Rank/Score", f"{safe(target.get('rank'))}/{safe(target.get('momentum_score'))}"),
         ("Next", m.get("next_check_at")),
+        ("Orders", m.get("order_sequence")),
         ("Reason", m.get("reason")),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
@@ -344,8 +372,16 @@ def _event_details(event: dict) -> str:
 
 
 def render_events(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "Recent Events")
-    events = data["events"][: max(0, h - 3)]
+    box(stdscr, y, x, h, w, "Important Errors / Last Activity")
+    error_events = []
+    normal_events = []
+    for event in data["events"]:
+        text = (str(event.get("event_type", "")) + " " + _event_details(event)).lower()
+        if any(x in text for x in ["error", "failed", "blocked", "not_confirmed", "insufficient", "rejected", "mismatch"]):
+            error_events.append(event)
+        else:
+            normal_events.append(event)
+    events = (error_events[:3] + normal_events)[: max(0, h - 3)]
     if not events:
         add(stdscr, y + 1, x + 2, "No events", curses.color_pair(4))
         return
@@ -362,7 +398,10 @@ def render_events(stdscr, y, x, h, w, data):
 
 
 def render_footer(stdscr, height, width, data):
-    text = f" q quit | r refresh | candidates={data.get('candidate_limit', '-')} | auto {REFRESH_SECONDS}s | refresh={data['refreshed_at']}"
+    candle = candle_feed_text(data)
+    if data.get("candle_error"):
+        candle = "candle ERROR"
+    text = f" q quit | r refresh | candle={candle} | candidates={data.get('candidate_limit', '-')} | auto {REFRESH_SECONDS}s | refresh={data['refreshed_at']}"
     add(stdscr, height - 1, 0, " " * (width - 1), curses.color_pair(1))
     add(stdscr, height - 1, 2, text, curses.color_pair(1))
 
