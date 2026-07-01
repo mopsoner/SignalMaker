@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.runtime_settings import BOOTSTRAP_ENV_ALIASES
+
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 
@@ -20,13 +22,16 @@ DEFAULT_RUNTIME: dict[str, dict[str, Any]] = {
     },
 }
 
+LIGHTWEIGHT_BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
+    env_key: target
+    for env_key, target in BOOTSTRAP_ENV_ALIASES.items()
+    if target[0] in DEFAULT_RUNTIME and target[1] in DEFAULT_RUNTIME[target[0]]
+}
+
 LEGACY_ALIASES: dict[tuple[str, str], tuple[str, str]] = {
-    ("kraken", "KRAKEN_BASE_URL"): ("kraken", "kraken_base_url"),
-    ("kraken", "KRAKEN_API_KEY"): ("kraken", "kraken_api_key"),
-    ("kraken", "KRAKEN_SECRET_KEY"): ("kraken", "kraken_secret_key"),
-    ("kraken", "EXECUTION_EXCHANGE"): ("executor", "execution_exchange"),
-    ("executor", "EXECUTION_EXCHANGE"): ("executor", "execution_exchange"),
-    ("executor", "QUOTE_ASSETS"): ("executor", "quote_assets"),
+    (category, env_key): target
+    for env_key, target in LIGHTWEIGHT_BOOTSTRAP_ENV_ALIASES.items()
+    for category in {target[0], "executor", "kraken"}
 }
 
 
@@ -39,7 +44,8 @@ def _read_env_file() -> dict[str, str]:
                 continue
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
-    values.update({key: value for key, value in os.environ.items() if key in {"DATABASE_URL"}})
+    relevant_keys = {"DATABASE_URL", *LIGHTWEIGHT_BOOTSTRAP_ENV_ALIASES}
+    values.update({key: value for key, value in os.environ.items() if key in relevant_keys})
     return values
 
 
@@ -97,8 +103,17 @@ def _db_rows() -> tuple[list[tuple[str, str, Any]], str | None]:
         return [], str(exc)
 
 
+def _payload_from_env(values: dict[str, str]) -> dict[str, dict[str, Any]]:
+    payload = {section: defaults.copy() for section, defaults in DEFAULT_RUNTIME.items()}
+    for env_key, (section, key) in LIGHTWEIGHT_BOOTSTRAP_ENV_ALIASES.items():
+        if env_key in values:
+            payload.setdefault(section, {})[key] = values[env_key]
+    return payload
+
+
 def load_runtime_settings_lightweight() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    payload = {section: values.copy() for section, values in DEFAULT_RUNTIME.items()}
+    env_values = _read_env_file()
+    payload = _payload_from_env(env_values)
     rows, error = _db_rows()
     seen: set[tuple[str, str]] = set()
     legacy_seen: dict[str, dict[str, Any]] = {}
@@ -114,4 +129,8 @@ def load_runtime_settings_lightweight() -> tuple[dict[str, dict[str, Any]], dict
         payload.setdefault(target_category, {})[target_key] = value
         if not is_alias:
             seen.add(target)
-    return payload, {"database_url_loaded": bool(_database_url()), "db_error": error, "legacy_aliases_seen": legacy_seen}
+    return payload, {
+        "database_url_loaded": bool(env_values.get("DATABASE_URL", "sqlite:///./signalmaker.db")),
+        "db_error": error,
+        "legacy_aliases_seen": legacy_seen,
+    }
