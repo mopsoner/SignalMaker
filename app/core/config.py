@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,15 +48,15 @@ class Settings(BaseSettings):
 
     admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
 
-    kraken_rest_base: str = Field(default="https://api.kraken.us", alias="KRAKEN_REST_BASE")
     kraken_collector_enabled: bool = Field(default=True, alias="KRAKEN_COLLECTOR_ENABLED")
     kraken_testnet_rest_base: str = Field(default="https://testnet.kraken.vision", alias="KRAKEN_TESTNET_REST_BASE")
     kraken_api_key: str = Field(default="", alias="KRAKEN_API_KEY")
     kraken_secret_key: str = Field(default="", alias="KRAKEN_SECRET_KEY")
     execution_exchange: str = Field(default="kraken", alias="EXECUTION_EXCHANGE")
-    kraken_base_url: str = Field(default="https://api.kraken.com", alias="KRAKEN_BASE_URL")
-    kraken_api_key: str = Field(default="", alias="KRAKEN_API_KEY")
-    kraken_secret_key: str = Field(default="", alias="KRAKEN_SECRET_KEY")
+    kraken_base_url: str = Field(
+        default="https://api.kraken.com",
+        validation_alias=AliasChoices("KRAKEN_BASE_URL", "KRAKEN_REST_BASE"),
+    )
     kraken_quote_assets: str = Field(default="USD,USDC", alias="KRAKEN_QUOTE_ASSETS")
     kraken_symbol_status: str = Field(default="TRADING", alias="KRAKEN_SYMBOL_STATUS")
     kraken_max_symbols: int = Field(default=25, alias="KRAKEN_MAX_SYMBOLS")

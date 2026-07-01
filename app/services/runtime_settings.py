@@ -63,8 +63,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "kraken": {
         "kraken_exchange_name": "kraken",
-        "kraken_rest_base": os.getenv("KRAKEN_BASE_URL", base_settings.kraken_rest_base),
-        "kraken_base_url": os.getenv("KRAKEN_BASE_URL", base_settings.kraken_rest_base),
+        "kraken_base_url": base_settings.kraken_base_url,
         "kraken_api_key": base_settings.kraken_api_key,
         "kraken_secret_key": base_settings.kraken_secret_key,
     },
@@ -190,6 +189,39 @@ LEGACY_ADMIN_SETTING_ALIASES[("kraken", "EXECUTION_EXCHANGE")] = ("executor", "e
 def _has_value(value: Any) -> bool:
     return value is not None and str(value) != ""
 
+
+def _migrate_legacy_kraken_base_url_rows(db: Session, rows: list[AppSetting]) -> list[AppSetting]:
+    """Rename persisted kraken_rest_base rows to canonical kraken_base_url rows.
+
+    The legacy row is read only as migration input and is deleted afterwards so
+    admin/runtime payloads expose only kraken_base_url. Existing canonical values
+    win over legacy values unless they are empty.
+    """
+    by_location = {(row.category, row.key): row for row in rows}
+    legacy_row = by_location.get(("kraken", "kraken_rest_base"))
+    if legacy_row is None:
+        return rows
+
+    canonical_row = by_location.get(("kraken", "kraken_base_url"))
+    changed = False
+    if canonical_row is None and _has_value(legacy_row.value):
+        canonical_row = AppSetting(category="kraken", key="kraken_base_url", value=legacy_row.value)
+        db.add(canonical_row)
+        rows.append(canonical_row)
+        changed = True
+    elif canonical_row is not None and not _has_value(canonical_row.value) and _has_value(legacy_row.value):
+        canonical_row.value = legacy_row.value
+        changed = True
+
+    db.delete(legacy_row)
+    if legacy_row in rows:
+        rows.remove(legacy_row)
+    changed = True
+
+    if changed:
+        db.commit()
+        rows = db.execute(select(AppSetting)).scalars().all()
+    return rows
 
 def _migrate_legacy_admin_setting_rows(db: Session, rows: list[AppSetting]) -> list[AppSetting]:
     """Move legacy display-key rows to canonical rows without letting aliases win.
@@ -401,6 +433,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
     try:
         rows = db.execute(select(AppSetting)).scalars().all()
         if all(hasattr(db, attr) for attr in ("add", "delete", "commit")):
+            rows = _migrate_legacy_kraken_base_url_rows(db, rows)
             rows = _migrate_legacy_admin_setting_rows(db, rows)
             rows = migrate_bootstrap_settings_to_app_settings(db, rows)
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
@@ -419,10 +452,9 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload.setdefault("market_data", {})["kraken_collector_enabled"] = bool(payload.get("market_data", {}).get("kraken_collector_enabled", True))
         _apply_legacy_admin_setting_locations(payload)
         kraken = payload.setdefault("kraken", {})
-        if kraken.get("kraken_base_url"):
-            kraken["kraken_rest_base"] = kraken["kraken_base_url"]
-        elif kraken.get("kraken_rest_base"):
+        if not kraken.get("kraken_base_url") and kraken.get("kraken_rest_base"):
             kraken["kraken_base_url"] = kraken["kraken_rest_base"]
+        kraken.pop("kraken_rest_base", None)
         payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
         payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
         return payload
@@ -434,10 +466,10 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     payload = _normalize_admin_payload(payload)
     kraken_payload = payload.setdefault("kraken", {})
-    if kraken_payload.get("kraken_base_url"):
-        kraken_payload["kraken_rest_base"] = kraken_payload["kraken_base_url"]
-    elif kraken_payload.get("kraken_rest_base"):
+    if not kraken_payload.get("kraken_base_url") and kraken_payload.get("kraken_rest_base"):
         kraken_payload["kraken_base_url"] = kraken_payload["kraken_rest_base"]
+    kraken_payload.pop("kraken_rest_base", None)
+    db.execute(delete(AppSetting).where(AppSetting.category == "kraken", AppSetting.key == "kraken_rest_base"))
     for source in LEGACY_ADMIN_SETTING_ALIASES:
         db.execute(delete(AppSetting).where(AppSetting.category == source[0], AppSetting.key == source[1]))
     strategy = payload.get("strategy")
