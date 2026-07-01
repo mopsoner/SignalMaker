@@ -60,8 +60,6 @@ class Settings(BaseSettings):
     cors_origins: str = Field(default="http://localhost:8080,http://127.0.0.1:8080", alias="CORS_ORIGINS")
     cors_origin_regex: str = Field(default="", alias="CORS_ORIGIN_REGEX")
 
-    admin_token: str = Field(default="changeme-admin-token", alias="ADMIN_TOKEN")
-
     kraken_collector_enabled: bool = Field(default=True, alias="KRAKEN_COLLECTOR_ENABLED")
     kraken_testnet_rest_base: str = Field(default="https://testnet.kraken.vision", alias="KRAKEN_TESTNET_REST_BASE")
     kraken_api_key: str = Field(default="", alias="KRAKEN_API_KEY")
