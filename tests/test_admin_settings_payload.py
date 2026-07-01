@@ -412,3 +412,55 @@ def test_persist_runtime_settings_keeps_existing_secrets_for_empty_or_masked_pay
     assert rows[("kraken", "kraken_secret_key")].value == "existing-secret"
     assert rows[("notifications", "telegram_secret")].value == "existing-telegram"
     assert rows[("notifications", "discord_url")].value == "existing-discord"
+
+
+def test_coerce_bool_accepts_common_db_and_admin_values():
+    assert runtime_settings._coerce_bool("false", default=True) is False
+    assert runtime_settings._coerce_bool("true") is True
+    assert runtime_settings._coerce_bool(False, default=True) is False
+    assert runtime_settings._coerce_bool(True) is True
+    assert runtime_settings._coerce_bool("0", default=True) is False
+    assert runtime_settings._coerce_bool("1") is True
+    assert runtime_settings._coerce_bool("yes") is True
+    assert runtime_settings._coerce_bool("no", default=True) is False
+    assert runtime_settings._coerce_bool("on") is True
+    assert runtime_settings._coerce_bool("off", default=True) is False
+    assert runtime_settings._coerce_bool("unexpected", default=True) is True
+
+
+def test_load_runtime_settings_coerces_boolean_fields_from_db_values():
+    rows = [
+        runtime_settings.AppSetting(category="market_data", key="kraken_collector_enabled", value="false"),
+        runtime_settings.AppSetting(category="market_data", key="kraken_incremental_fetch_enabled", value="0"),
+        runtime_settings.AppSetting(category="momentum", key="momentum_candidates_sync_enabled", value="true"),
+        runtime_settings.AppSetting(category="momentum", key="momentum_candidates_require_wyckoff_context", value="1"),
+        runtime_settings.AppSetting(category="live", key="live_trading_enabled", value=False),
+        runtime_settings.AppSetting(category="live", key="kraken_use_testnet", value=True),
+        runtime_settings.AppSetting(category="bot", key="bot_pipeline_enabled", value="false"),
+        runtime_settings.AppSetting(category="bot", key="bot_executor_enabled", value="true"),
+        runtime_settings.AppSetting(category="bot", key="bot_scheduler_enabled", value="0"),
+    ]
+
+    class FakeScalars:
+        def all(self):
+            return rows
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def execute(self, statement):
+            return FakeResult()
+
+    payload = runtime_settings.load_runtime_settings(FakeDb())
+
+    assert payload["market_data"]["kraken_collector_enabled"] is False
+    assert payload["market_data"]["kraken_incremental_fetch_enabled"] is False
+    assert payload["momentum"]["momentum_candidates_sync_enabled"] is True
+    assert payload["momentum"]["momentum_candidates_require_wyckoff_context"] is True
+    assert payload["live"]["live_trading_enabled"] is False
+    assert payload["live"]["kraken_use_testnet"] is True
+    assert payload["bot"]["bot_pipeline_enabled"] is False
+    assert payload["bot"]["bot_executor_enabled"] is True
+    assert payload["bot"]["bot_scheduler_enabled"] is False

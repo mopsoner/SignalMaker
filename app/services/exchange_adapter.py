@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Protocol
 
-from app.services.runtime_settings import load_runtime_settings
+from app.services.runtime_settings import _coerce_bool, load_runtime_settings
 from raspberry_executor.kraken_client import KrakenClient
 
 
@@ -38,7 +38,7 @@ class KrakenExchangeAdapter:
             str(kraken.get("kraken_base_url") or ""),
             str(kraken.get("kraken_api_key") or ""),
             str(kraken.get("kraken_secret_key") or ""),
-            dry_run=not bool(live.get("live_trading_enabled")),
+            dry_run=not _coerce_bool(live.get("live_trading_enabled"), default=False),
         )
 
     def is_configured(self) -> bool:

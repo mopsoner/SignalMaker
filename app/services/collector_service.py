@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.market_candle import MarketCandle
-from app.services.runtime_settings import load_runtime_settings
+from app.services.runtime_settings import _coerce_bool, load_runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class CollectorService:
         runtime = load_runtime_settings()
         self.runtime = runtime
         self.base_url = runtime['kraken']['kraken_base_url'].rstrip('/')
-        self.collector_enabled = bool(runtime.get('market_data', runtime['kraken']).get('kraken_collector_enabled', False))
+        self.collector_enabled = _coerce_bool(runtime.get('market_data', runtime['kraken']).get('kraken_collector_enabled'), default=False)
         self.session = requests.Session()
         self._rate = RateLimiter()
 

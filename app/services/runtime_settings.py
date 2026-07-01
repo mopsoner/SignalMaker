@@ -251,6 +251,56 @@ def _has_value(value: Any) -> bool:
     return value is not None and str(value) != ""
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    """Return a real bool for common DB/env/admin representations.
+
+    Avoid ``bool(str)`` semantics, where any non-empty string (including
+    ``"false"`` or ``"0"``) would become True. Unknown or empty values fall
+    back to ``default`` so existing defaults remain authoritative.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        if normalized == "":
+            return default
+    return default
+
+
+BOOL_SETTING_KEYS: dict[str, dict[str, bool]] = {
+    "market_data": {
+        "kraken_collector_enabled": True,
+        "kraken_incremental_fetch_enabled": True,
+    },
+    "momentum": {
+        "momentum_candidates_sync_enabled": False,
+        "momentum_candidates_require_wyckoff_context": True,
+    },
+    "live": {
+        "live_trading_enabled": False,
+        "kraken_use_testnet": False,
+    },
+    "bot": {
+        key: default
+        for key, default in DEFAULT_SETTINGS["bot"].items()
+        if key.endswith("_enabled")
+    },
+}
+
+
+def _coerce_runtime_bools(payload: dict[str, dict[str, Any]]) -> None:
+    for section, defaults in BOOL_SETTING_KEYS.items():
+        section_payload = payload.setdefault(section, {})
+        for key, default in defaults.items():
+            section_payload[key] = _coerce_bool(section_payload.get(key), default=default)
+
+
 def _migrate_legacy_kraken_base_url_rows(db: Session, rows: list[AppSetting]) -> list[AppSetting]:
     """Rename persisted kraken_rest_base rows to canonical kraken_base_url rows.
 
@@ -559,14 +609,12 @@ def load_runtime_settings(db: Session | None = None, *, include_sources: bool = 
                 seen_canonical.add(target)
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
         sources.setdefault("strategy", {})["signal_execution_interval"] = "default"
-        payload.setdefault("market_data", {})["kraken_collector_enabled"] = bool(payload.get("market_data", {}).get("kraken_collector_enabled", True))
         _apply_legacy_admin_setting_locations(payload)
         kraken = payload.setdefault("kraken", {})
         if not kraken.get("kraken_base_url") and kraken.get("kraken_rest_base"):
             kraken["kraken_base_url"] = kraken["kraken_rest_base"]
         kraken.pop("kraken_rest_base", None)
-        payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
-        payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
+        _coerce_runtime_bools(payload)
         if include_sources:
             return {"settings": payload, "sources": sources}
         return payload
