@@ -252,3 +252,8 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
     assert checks["signalmaker_trade_candidates"]["replay_fetch_count"] == 1
     assert checks["signalmaker_market_data_momentum_ranking"]["ok"] is True
     assert checks["signalmaker_market_data_momentum_ranking"]["decision_action"] == "BUY"
+    assert checks["classic_candidate_business_workflow"]["ok"] is True
+    assert checks["classic_candidate_business_workflow"]["margin_success"]["outcome"] == "opened"
+    assert checks["classic_candidate_business_workflow"]["spot_fallback"]["outcome"] == "opened_spot_fallback"
+    assert checks["classic_candidate_business_workflow"]["spot_fallback"]["forbidden_spot_fields"] == []
+    assert checks["classic_candidate_business_workflow"]["all_fail"]["outcome"] == "error"
