@@ -6,7 +6,7 @@ bash scripts/bootstrap_all.sh
 ```
 
 ## Production env
-Copy `.env.production.example` to `.env` and edit the database credentials.
+Copy `.env.example` to `.env` and edit the database credentials.
 
 ## systemd templates
 Files are provided under `deploy/systemd/`.

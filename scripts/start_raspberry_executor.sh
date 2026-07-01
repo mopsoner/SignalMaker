@@ -16,7 +16,7 @@ if [ ! -f .deps_ok ]; then
 fi
 
 if [ ! -f .env ]; then
-  cp .env.raspberry.example .env
+  cp .env.example .env
 fi
 
 python -m raspberry_executor.install_sqlite

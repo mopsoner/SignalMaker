@@ -55,11 +55,11 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'signalmaker')\gexec
 SQL
 
 if [ ! -f ".env" ]; then
-  if [ ! -f ".env.raspberry.example" ]; then
-    echo ".env.raspberry.example is missing; cannot create .env" >&2
+  if [ ! -f ".env.example" ]; then
+    echo ".env.example is missing; cannot create .env" >&2
     exit 1
   fi
-  cp .env.raspberry.example .env
+  cp .env.example .env
 fi
 
 env_value() {
