@@ -7,7 +7,6 @@ from typing import Any
 import requests
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.trade_candidate import TradeCandidate
 from app.services.runtime_settings import get_runtime_momentum_config
 from app.services.trade_candidate_service import TradeCandidateService
@@ -47,7 +46,7 @@ class MomentumCandidateSyncService:
                 params=params,
                 timeout=self._float(
                     momentum_config.get("momentum_candidates_http_timeout_sec"),
-                    default=settings.momentum_candidates_http_timeout_sec,
+                    default=10.0,
                 ),
                 headers={"accept": "application/json"},
             )
@@ -105,8 +104,8 @@ class MomentumCandidateSyncService:
         return summary
 
     def _url(self, momentum_config: dict[str, Any]) -> str:
-        base_url = str(momentum_config.get("signalmaker_base_url") or settings.signalmaker_base_url)
-        path = str(momentum_config.get("momentum_candidates_source_path") or settings.momentum_candidates_source_path or "/api/v1/momentum")
+        base_url = str(momentum_config.get("signalmaker_base_url") or "")
+        path = str(momentum_config.get("momentum_candidates_source_path") or "/api/v1/momentum")
         if not path.startswith("/"):
             path = "/" + path
         base = base_url.rstrip("/")
@@ -124,19 +123,19 @@ class MomentumCandidateSyncService:
         require_wyckoff_context: bool | None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "limit": limit if limit is not None else int(momentum_config.get("momentum_candidates_limit", settings.momentum_candidates_limit)),
+            "limit": limit if limit is not None else int(momentum_config.get("momentum_candidates_limit", 100)),
             "min_momentum_score": min_momentum_score
             if min_momentum_score is not None
             else self._float(
                 momentum_config.get("momentum_candidates_min_score"),
-                default=settings.momentum_candidates_min_score,
+                default=0.0,
             ),
             "require_wyckoff_context": require_wyckoff_context
             if require_wyckoff_context is not None
             else bool(
                 momentum_config.get(
                     "momentum_candidates_require_wyckoff_context",
-                    settings.momentum_candidates_require_wyckoff_context,
+                    True,
                 )
             ),
         }
@@ -159,7 +158,7 @@ class MomentumCandidateSyncService:
         price = self._float(candidate.get("entry_price"), default=self._float(candidate.get("price")))
         target = self._float(candidate.get("target_price"), default=self._float(candidate.get("take_profit_price")))
         if target is None and price is not None:
-            target_pct = self._float(momentum_config.get("momentum_candidates_target_pct"), default=settings.momentum_candidates_target_pct) or 0.0
+            target_pct = self._float(momentum_config.get("momentum_candidates_target_pct"), default=3.0) or 0.0
             if target_pct > 0:
                 target = price * (1.0 + (target_pct / 100.0))
         candidate["candidate_id"] = str(candidate.get("candidate_id") or f"momentum-{str(candidate.get('symbol') or '').upper()}-rank-{candidate.get('rank') or 'open'}")
@@ -235,7 +234,7 @@ class MomentumCandidateSyncService:
     def _effective_min_score(self, momentum_config: dict[str, Any], min_momentum_score: float | None) -> float:
         return self._float(
             min_momentum_score if min_momentum_score is not None else momentum_config.get("momentum_candidates_min_score"),
-            default=settings.momentum_candidates_min_score,
+            default=0.0,
         ) or 0.0
 
     def _float(self, value: Any, *, default: float | None = None) -> float | None:

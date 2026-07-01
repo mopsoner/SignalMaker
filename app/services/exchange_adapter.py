@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from typing import Any, Protocol
 
-from app.core.config import settings
 from app.services.runtime_settings import load_runtime_settings
 from raspberry_executor.kraken_client import KrakenClient
 
@@ -31,14 +30,15 @@ class ExecutionAdapter(Protocol):
 class KrakenExchangeAdapter:
     exchange_name = "kraken"
 
-    def __init__(self) -> None:
-        runtime = load_runtime_settings()
+    def __init__(self, db=None) -> None:
+        runtime = load_runtime_settings(db)
         kraken = runtime.get("kraken", {}) if isinstance(runtime.get("kraken"), dict) else {}
+        live = runtime.get("live", {}) if isinstance(runtime.get("live"), dict) else {}
         self.client = KrakenClient(
-            str(kraken.get("kraken_base_url") or settings.kraken_base_url),
-            str(kraken.get("kraken_api_key") or settings.kraken_api_key),
-            str(kraken.get("kraken_secret_key") or settings.kraken_secret_key),
-            dry_run=not settings.live_trading_enabled,
+            str(kraken.get("kraken_base_url") or ""),
+            str(kraken.get("kraken_api_key") or ""),
+            str(kraken.get("kraken_secret_key") or ""),
+            dry_run=not bool(live.get("live_trading_enabled")),
         )
 
     def is_configured(self) -> bool:
@@ -75,14 +75,14 @@ class KrakenExchangeAdapter:
         return self.client.get_order(symbol, order_id)
 
 
-def configured_exchange_name() -> str:
-    runtime = load_runtime_settings()
+def configured_exchange_name(db=None) -> str:
+    runtime = load_runtime_settings(db)
     executor = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
-    return str(executor.get("execution_exchange") or settings.execution_exchange or "kraken").strip().lower()
+    return str(executor.get("execution_exchange") or "kraken").strip().lower()
 
 
-def create_execution_adapter() -> ExecutionAdapter:
-    name = configured_exchange_name()
+def create_execution_adapter(db=None) -> ExecutionAdapter:
+    name = configured_exchange_name(db)
     if name in {"kraken", "kraken_pro"}:
-        return KrakenExchangeAdapter()
+        return KrakenExchangeAdapter(db)
     raise RuntimeError(f"unsupported_execution_exchange:{name}")

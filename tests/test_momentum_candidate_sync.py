@@ -173,7 +173,13 @@ def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monk
             self.oco_calls.append({"args": args, "kwargs": kwargs})
             raise AssertionError("OCO stop-loss order should not be used")
 
-    monkeypatch.setattr("app.services.risk_service.settings.live_trading_enabled", True)
+    db_session.add_all([
+        AppSetting(category="live", key="live_trading_enabled", value=True),
+        AppSetting(category="live", key="live_require_tp_sl", value=False),
+        AppSetting(category="live", key="live_max_open_positions", value=10),
+        AppSetting(category="live", key="live_max_notional_per_trade", value=1000.0),
+    ])
+    db_session.commit()
     TradeCandidateService(db_session).upsert_open_candidate(
         candidate_id="BTCUSDT-momentum",
         symbol="BTCUSDT",
@@ -308,3 +314,112 @@ def test_momentum_business_listing_excludes_smoke_and_dry_run_candidates(db_sess
     rows = service.list_candidates(limit=10, stage="momentum", exclude_test_data=True)
 
     assert [row.candidate_id for row in rows] == ["momentum-LIVE-open"]
+
+
+def test_risk_service_uses_live_runtime_app_settings(db_session):
+    from app.services.risk_service import RiskService
+
+    db_session.add_all(
+        [
+            AppSetting(category="live", key="live_trading_enabled", value=True),
+            AppSetting(category="live", key="live_require_tp_sl", value=False),
+            AppSetting(category="live", key="live_max_open_positions", value=3),
+            AppSetting(category="live", key="live_max_notional_per_trade", value=50.0),
+        ]
+    )
+    db_session.commit()
+
+    RiskService(db_session).validate_live_candidate(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=100.0,
+        stop_price=None,
+        target_price=None,
+        quantity=0.25,
+    )
+
+    with pytest.raises(RuntimeError, match="exceeds max per trade 50.00"):
+        RiskService(db_session).validate_live_candidate(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            stop_price=None,
+            target_price=None,
+            quantity=0.75,
+        )
+
+
+def test_exchange_adapter_dry_run_uses_live_runtime_app_setting(db_session, monkeypatch):
+    from app.services import exchange_adapter
+
+    db_session.add_all(
+        [
+            AppSetting(category="kraken", key="kraken_base_url", value="https://runtime.kraken"),
+            AppSetting(category="kraken", key="kraken_api_key", value="runtime-key"),
+            AppSetting(category="kraken", key="kraken_secret_key", value="runtime-secret"),
+            AppSetting(category="live", key="live_trading_enabled", value=True),
+        ]
+    )
+    db_session.commit()
+
+    captured = {}
+
+    class FakeKrakenClient:
+        def __init__(self, base_url, api_key, secret_key, *, dry_run):
+            captured.update(base_url=base_url, api_key=api_key, secret_key=secret_key, dry_run=dry_run)
+
+        def is_configured(self):
+            return True
+
+    monkeypatch.setattr(exchange_adapter, "KrakenClient", FakeKrakenClient)
+
+    exchange_adapter.KrakenExchangeAdapter(db_session)
+
+    assert captured == {
+        "base_url": "https://runtime.kraken",
+        "api_key": "runtime-key",
+        "secret_key": "runtime-secret",
+        "dry_run": False,
+    }
+
+
+def test_momentum_sync_uses_runtime_params_from_app_settings(db_session, monkeypatch):
+    db_session.add_all(
+        [
+            AppSetting(category="momentum", key="signalmaker_base_url", value="https://ops.local/api/v1"),
+            AppSetting(category="momentum", key="momentum_candidates_source_path", value="/api/v1/custom-momentum"),
+            AppSetting(category="momentum", key="momentum_candidates_limit", value=7),
+            AppSetting(category="momentum", key="momentum_candidates_min_score", value=4.5),
+            AppSetting(category="momentum", key="momentum_candidates_min_rr", value=1.7),
+            AppSetting(category="momentum", key="momentum_candidates_require_wyckoff_context", value=False),
+            AppSetting(category="momentum", key="momentum_candidates_http_timeout_sec", value=2.5),
+            AppSetting(category="momentum", key="momentum_candidates_target_pct", value=10.0),
+        ]
+    )
+    db_session.commit()
+    calls = patch_get(monkeypatch, [{"symbol": "ETHUSDT", "rank": 1, "price": 200.0, "momentum_score": 5.0}])
+
+    summary = MomentumCandidateSyncService(db_session).sync()
+
+    assert calls[0]["url"] == "https://ops.local/api/v1/custom-momentum"
+    assert calls[0]["timeout"] == 2.5
+    assert calls[0]["params"] == {
+        "limit": 7,
+        "min_momentum_score": 4.5,
+        "require_wyckoff_context": False,
+        "min_rr": 1.7,
+    }
+    assert summary["upserted"] == 1
+    row = db_session.get(TradeCandidate, "momentum-ETHUSDT-open")
+    assert row.target_price == pytest.approx(220.0)
+
+
+def test_executor_reconcile_uses_live_runtime_app_setting(db_session, monkeypatch):
+    monkeypatch.setattr("app.services.executor_service.create_execution_adapter", lambda db=None: object())
+    db_session.add(AppSetting(category="live", key="live_reconcile_enabled", value=True))
+    db_session.commit()
+
+    service = ExecutorService(db_session)
+    service.positions.list_positions = lambda limit, status: []
+
+    assert service.reconcile_live_positions() == {"enabled": True, "checked": 0, "closed": [], "updated": []}

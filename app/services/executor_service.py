@@ -1,12 +1,12 @@
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.services.exchange_adapter import create_execution_adapter
 from app.services.fill_service import FillService
 from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.risk_service import RiskService
 from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
+from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
 from raspberry_executor.kraken_margin_client import KrakenMarginClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
@@ -23,8 +23,15 @@ class ExecutorService:
         self.positions = PositionService(db)
         self.candidates = TradeCandidateService(db)
         self.risk = RiskService(db)
-        self.exchange = create_execution_adapter()
+        self.exchange = create_execution_adapter(db)
         self.kraken = self.exchange  # backward-compatible test/extension hook
+
+    def _runtime_section(self, section: str) -> dict:
+        values = load_runtime_settings(self.db).get(section, {})
+        return values if isinstance(values, dict) else {}
+
+    def _runtime_csv(self, section: str, key: str) -> list[str]:
+        return [item.strip() for item in str(self._runtime_section(section).get(key, '')).split(',') if item.strip()]
 
     def _is_short_side(self, side: str | None) -> bool:
         return (side or '').lower() in {'short', 'sell', 'bear'}
@@ -56,7 +63,8 @@ class ExecutorService:
         exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'kraken'))
         if not active.is_configured():
             raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
-        if candidate.side != 'long' and not settings.live_spot_allow_shorts:
+        live_runtime = self._runtime_section('live')
+        if candidate.side != 'long' and not live_runtime.get('live_spot_allow_shorts'):
             raise RuntimeError('Live short execution is not supported in current spot mode')
 
         normalized = active.normalize_order(candidate.symbol, quantity=quantity, target_price=candidate.target_price, stop_price=None)
@@ -64,7 +72,7 @@ class ExecutorService:
         margin_error = None
         if candidate.side == 'long' and margin_enabled() and hasattr(active, 'client'):
             try:
-                rules = KrakenSymbolRules(settings.kraken_base_url, quote_assets=settings.kraken_quote_assets.split(','))
+                rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
                 margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
                 margin_manager = MarginOrderManager(active.client, margin, rules)
                 margin_result = margin_manager.open_long_with_margin_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
@@ -80,7 +88,7 @@ class ExecutorService:
         if execution_mode == 'spot':
             try:
                 if hasattr(active, 'client'):
-                    rules = KrakenSymbolRules(settings.kraken_base_url, quote_assets=settings.kraken_quote_assets.split(','))
+                    rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
                     spot_result = SpotOrderManager(active.client, rules).open_long_with_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
                     entry_resp = spot_result.get('entry_payload') or {}
                     tp_resp = spot_result.get('tp_payload') or {}
@@ -215,7 +223,7 @@ class ExecutorService:
         return result
 
     def reconcile_live_positions(self) -> dict:
-        if not settings.live_reconcile_enabled:
+        if not self._runtime_section('live').get('live_reconcile_enabled'):
             return {'enabled': False, 'checked': 0, 'closed': [], 'updated': []}
         checked = 0
         closed = []
