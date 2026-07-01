@@ -300,3 +300,32 @@ def test_cleanup_legacy_app_settings_backs_up_then_deletes_legacy_rows(tmp_path)
     assert rows == [canonical]
     assert '"critical_rows"' in (tmp_path / "backup.json").read_text()
     assert "https://legacy.kraken" in (tmp_path / "backup.json").read_text()
+
+
+def test_admin_settings_sources_prefer_canonical_db_over_bootstrap_env(monkeypatch):
+    canonical = runtime_settings.AppSetting(
+        category="kraken", key="kraken_base_url", value="https://db.kraken"
+    )
+
+    class FakeScalars:
+        def all(self):
+            return [canonical]
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def execute(self, statement):
+            return FakeResult()
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_legacy_bootstrap_values",
+        lambda: {"KRAKEN_BASE_URL": "https://env.kraken"},
+    )
+
+    payload = runtime_settings.load_admin_settings(FakeDb(), include_sources=True)
+
+    assert payload["settings"]["kraken"]["kraken_base_url"] == "https://db.kraken"
+    assert payload["sources"]["kraken"]["kraken_base_url"] == "db"

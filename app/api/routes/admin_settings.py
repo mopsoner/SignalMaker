@@ -3,7 +3,7 @@ from collections import deque
 from typing import Any
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -32,8 +32,10 @@ class SettingsPayload(BaseModel):
 
 
 @router.get('/admin/settings')
-def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
-    return load_admin_settings(db)
+def get_admin_settings(
+    include_sources: bool = Query(False), db: Session = Depends(get_db)
+) -> dict[str, dict[str, Any]] | dict[str, dict[str, dict[str, Any]]]:
+    return load_admin_settings(db, include_sources=include_sources)
 
 
 @router.put('/admin/settings')
