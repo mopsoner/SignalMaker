@@ -270,6 +270,147 @@ def _safe_sample(values: list[str], limit: int = 10) -> list[str]:
     return values[:limit]
 
 
+
+def _classic_candidate_business_workflow_smoke(settings: Settings, symbol: str, order_quote: float) -> dict[str, Any]:
+    """Exercise the classic candidate orchestration without touching live Kraken.
+
+    This is intentionally a business/workflow smoke, not a Kraken payload smoke:
+    it runs margin_executor.process_candidate through the same margin success,
+    margin-to-spot fallback, and full-failure paths covered by the unit tests.
+    """
+    import tempfile
+    from types import SimpleNamespace
+
+    from raspberry_executor import classic_candidate_executor, sqlite_db
+    from raspberry_executor.margin_executor import process_candidate
+    from raspberry_executor.risk_guard import RiskGuard
+    from raspberry_executor.state import StateStore
+
+    class BusinessRules:
+        def symbol_info(self, _symbol):
+            quote = next((asset for asset in (settings.quote_assets or ["USD"]) if symbol.upper().endswith(asset.upper())), "USD")
+            return {"quoteAsset": quote}
+
+    class BusinessExchange:
+        exchange_name = "kraken"
+        dry_run = False
+
+    class BusinessMarginManager:
+        def __init__(self, *, fail_with: str | None = None):
+            self.fail_with = fail_with
+            self.calls: list[dict[str, Any]] = []
+
+        def open_long_with_margin_take_profit(self, *, symbol, quote_amount, target_price, leverage=None):
+            self.calls.append({"symbol": symbol, "quote_amount": quote_amount, "target_price": target_price, "leverage": leverage})
+            if self.fail_with:
+                raise RuntimeError(self.fail_with)
+            return {
+                "symbol": symbol,
+                "side": "long",
+                "quantity": "0.2",
+                "entry_price": 100.0,
+                "entry_order_id": "business-margin-entry",
+                "tp_order_id": "business-margin-tp",
+                "entry_payload": {"orderId": "business-margin-entry", "symbol": symbol, "side": "BUY", "type": "MARKET", "margin": True, "leverage": str(leverage)},
+                "tp_payload": {"orderId": "business-margin-tp", "symbol": symbol, "side": "SELL", "type": "LIMIT", "margin": True, "price": str(target_price)},
+            }
+
+    class BusinessSpotManager:
+        def __init__(self, *, fail_with: str | None = None):
+            self.fail_with = fail_with
+            self.calls: list[dict[str, Any]] = []
+
+        def open_long_with_take_profit(self, *, symbol, quote_amount, target_price):
+            self.calls.append({"symbol": symbol, "quote_amount": quote_amount, "target_price": target_price})
+            if self.fail_with:
+                raise RuntimeError(self.fail_with)
+            return {
+                "symbol": symbol,
+                "side": "long",
+                "quantity": "0.2",
+                "entry_price": 100.0,
+                "entry_order_id": "business-spot-entry",
+                "tp_order_id": "business-spot-tp",
+                "entry_payload": {"orderId": "business-spot-entry", "symbol": symbol, "side": "BUY", "type": "MARKET"},
+                "tp_payload": {"orderId": "business-spot-tp", "symbol": symbol, "side": "SELL", "type": "LIMIT", "price": str(target_price)},
+            }
+
+    def candidate(candidate_id: str) -> dict[str, Any]:
+        return {"candidate_id": candidate_id, "symbol": symbol, "side": "long", "status": "open", "entry_price": 100.0, "target_price": 110.0, "stop_price": 95.0}
+
+    def events_for(state: StateStore, candidate_id: str) -> list[dict[str, Any]]:
+        return [event for event in state.events() if event["candidate_id"] == candidate_id]
+
+    def run_case(tmpdir: str, case: str, margin_fail: str | None = None, spot_fail: str | None = None) -> dict[str, Any]:
+        sqlite_db.DB_PATH = Path(tmpdir) / f"{case}.db"
+        state = StateStore()
+        margin_manager = BusinessMarginManager(fail_with=margin_fail)
+        spot_manager = BusinessSpotManager(fail_with=spot_fail)
+        outcome = process_candidate(
+            SimpleNamespace(order_quote_amount=float(order_quote), exchange="kraken"),
+            BusinessExchange(),
+            BusinessRules(),
+            margin_manager,
+            spot_manager,
+            state,
+            RiskGuard(settings.quote_assets or ["USD"], 999999),
+            candidate(f"business-{case}"),
+        )
+        positions = state.open_positions()
+        return {"outcome": outcome, "margin_calls": margin_manager.calls, "spot_calls": spot_manager.calls, "positions": positions, "events": events_for(state, f"business-{case}")}
+
+    previous_db_path = sqlite_db.DB_PATH
+    patched = {
+        "margin_enabled": classic_candidate_executor.margin_enabled,
+        "margin_leverage_attempts": classic_candidate_executor.margin_leverage_attempts,
+        "upsert_remote_candidates": classic_candidate_executor.upsert_remote_candidates,
+        "mark_candidate_executed": classic_candidate_executor.mark_candidate_executed,
+        "remove_pending": classic_candidate_executor.remove_pending,
+    }
+    try:
+        classic_candidate_executor.margin_enabled = lambda: True
+        classic_candidate_executor.margin_leverage_attempts = lambda: (5,)
+        classic_candidate_executor.upsert_remote_candidates = lambda _candidates: None
+        classic_candidate_executor.mark_candidate_executed = lambda _candidate_id: None
+        classic_candidate_executor.remove_pending = lambda _candidate_id: None
+        with tempfile.TemporaryDirectory(prefix="signalmaker-business-smoke-") as tmpdir:
+            margin_ok = run_case(tmpdir, "margin-ok")
+            if margin_ok["outcome"] != "opened" or margin_ok["spot_calls"]:
+                raise RuntimeError(f"business_margin_success_failed:{margin_ok}")
+            margin_position = next(iter(margin_ok["positions"].values()))
+            if margin_position.get("mode") != "cross_margin" or margin_position.get("entry_payload", {}).get("leverage") != "5" or margin_position.get("tp_payload", {}).get("type") != "LIMIT":
+                raise RuntimeError(f"business_margin_payload_invalid:{margin_position}")
+
+            fallback = run_case(tmpdir, "spot-fallback", margin_fail="margin unavailable for pair")
+            if fallback["outcome"] != "opened_spot_fallback" or not fallback["margin_calls"] or not fallback["spot_calls"]:
+                raise RuntimeError(f"business_spot_fallback_failed:{fallback}")
+            fallback_position = next(iter(fallback["positions"].values()))
+            spot_entry_payload = fallback_position.get("entry_payload", {})
+            spot_tp_payload = fallback_position.get("tp_payload", {})
+            forbidden_spot_fields = sorted({field for field in ("leverage", "reduce_only") if field in spot_entry_payload or field in spot_tp_payload})
+            if fallback_position.get("mode") != "spot" or forbidden_spot_fields:
+                raise RuntimeError(f"business_spot_payload_invalid:forbidden={forbidden_spot_fields}:position={fallback_position}")
+
+            all_fail = run_case(tmpdir, "all-fail", margin_fail="margin unavailable for pair", spot_fail="spot rejected: insufficient funds")
+            all_fail_types = [event["event_type"] for event in all_fail["events"]]
+            required_error_events = {"candidate_margin_attempt_failed", "candidate_margin_fallback_spot", "candidate_spot_fallback_failed", "execution_error"}
+            if all_fail["outcome"] != "error" or all_fail["positions"] or not required_error_events.issubset(all_fail_types):
+                raise RuntimeError(f"business_all_fail_events_invalid:types={all_fail_types}:case={all_fail}")
+
+            return {
+                "workflow": "process_candidate long: margin -> tp, recoverable margin error -> spot -> tp, margin+spot failure -> clear events",
+                "margin_success": {"outcome": margin_ok["outcome"], "margin_entry": margin_position.get("entry_payload"), "margin_tp": margin_position.get("tp_payload"), "spot_fallback_used": bool(margin_ok["spot_calls"])},
+                "spot_fallback": {"outcome": fallback["outcome"], "margin_attempts": fallback["margin_calls"], "spot_entry": spot_entry_payload, "spot_tp": spot_tp_payload, "forbidden_spot_fields": forbidden_spot_fields, "events": [event["event_type"] for event in fallback["events"]]},
+                "all_fail": {"outcome": all_fail["outcome"], "open_positions": len(all_fail["positions"]), "events": all_fail_types},
+            }
+    finally:
+        sqlite_db.DB_PATH = previous_db_path
+        classic_candidate_executor.margin_enabled = patched["margin_enabled"]
+        classic_candidate_executor.margin_leverage_attempts = patched["margin_leverage_attempts"]
+        classic_candidate_executor.upsert_remote_candidates = patched["upsert_remote_candidates"]
+        classic_candidate_executor.mark_candidate_executed = patched["mark_candidate_executed"]
+        classic_candidate_executor.remove_pending = patched["remove_pending"]
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Teste le device Raspberry Executor Kraken: endpoints Kraken, feed candles vers SignalMaker distant, backfill device, candidats/momentum et méthodes d'ordre dry-run.",
@@ -491,6 +632,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         }
 
     _run_check(result, "margin_order_methods_dry_run", margin_methods)
+    _run_check(result, "classic_candidate_business_workflow", lambda: _classic_candidate_business_workflow_smoke(settings, symbol, args.order_quote))
 
     if args.skip_private:
         result.add("private_account", False, skipped=True, reason="skip_private_requested")
@@ -572,7 +714,7 @@ def print_human(result: SmokeResult) -> None:
     print(f"Overall: {'PASS' if result.ok else 'FAIL'}\n")
     sections = {
         "DEVICE FEED": {"signalmaker_candle_feed", "signalmaker_device_backfill_4h"},
-        "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_order_methods_dry_run"},
+        "TRADING EXECUTOR": {"signalmaker_trade_candidates", "spot_order_methods_dry_run", "margin_order_methods_dry_run", "classic_candidate_business_workflow"},
         "EXCHANGE": {"public_time", "asset_pair_lookup", "ticker_price", "ohlc_1h", "symbol_rules", "discover_spot_symbols", "discover_margin_symbols", "private_account", "private_open_orders", "private_add_order_validate_only", "private_controlled_live_order"},
         "OPTIONAL DIAGNOSTICS": {"signalmaker_market_data_momentum_ranking"},
     }
