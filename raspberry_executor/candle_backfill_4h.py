@@ -124,12 +124,14 @@ def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks
     post_sleep = max(0.0, float(env.get("BACKFILL_4H_POST_SLEEP", "0.2") or "0.2"))
     run_symbol_limit = int(max_symbols or env.get("BACKFILL_4H_MAX_SYMBOLS_PER_RUN", "10") or "10")
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    endpoint_check = client.check_candle_ingest_endpoint()
-    if not endpoint_check.get("ok"):
-        return {"ok": False, "status": "blocked", "endpoint_check": endpoint_check}
     symbols, quote_assets, mode = resolve_feed_symbols(settings)
     if run_symbol_limit > 0:
         symbols = symbols[:run_symbol_limit]
+    if not symbols:
+        return {"ok": False, "status": "blocked", "reason": "no_symbols_to_backfill", "quote_assets": quote_assets, "execution_mode": mode}
+    endpoint_check = client.check_candle_ingest_endpoint(symbols[0], INTERVAL)
+    if not endpoint_check.get("ok"):
+        return {"ok": False, "status": "blocked", "endpoint_check": endpoint_check}
     exchange = getattr(settings, "exchange", "kraken")
     exchange_base_url = settings.kraken_base_url if str(exchange).lower() in {"kraken", "kraken_pro"} else settings.kraken_base_url
     if str(exchange).lower() in {"kraken", "kraken_pro"}:
