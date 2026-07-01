@@ -51,6 +51,8 @@ def test_missing_operator_key_blocks_sensitive_admin_routes(monkeypatch):
         ("post", "/api/v1/admin/reset-database"),
         ("post", "/api/v1/admin/test/kraken"),
         ("post", "/api/v1/admin/test/notifications"),
+        ("get", "/api/v1/admin/workers"),
+        ("get", "/api/v1/admin/logs/pipeline"),
         ("post", "/api/v1/admin/workers/pipeline/start"),
         ("post", "/api/v1/admin/workers/pipeline/stop"),
     ]:
@@ -88,3 +90,21 @@ def test_valid_operator_key_allows_admin_settings_save(monkeypatch):
     assert response.status_code == 200
     assert saved == [{**payload, "kraken": {}, "market_data": {}, "strategy": {}, "notifications": {}, "bot": {}, "live": {}, "momentum": {}}]
     assert response.json() == {"general": {"admin_token": "valid-token"}}
+
+
+def test_valid_operator_key_allows_worker_status_and_logs(monkeypatch):
+    client, _ = _client(monkeypatch)
+
+    class FakeWorkerControlService:
+        def status(self):
+            return {"workers": []}
+
+    monkeypatch.setattr(admin_settings, "WorkerControlService", FakeWorkerControlService)
+
+    for path in [
+        "/api/v1/admin/workers",
+        "/api/v1/admin/logs/pipeline",
+    ]:
+        response = client.get(path, headers={"x-operator-key": "valid-token"})
+
+        assert response.status_code == 200, path
