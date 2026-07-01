@@ -142,7 +142,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
-        "signal_execution_interval": "15m",
+        "signal_execution_interval": base_settings.signal_execution_interval,
         "signal_rsi_period": base_settings.signal_rsi_period,
         "signal_swing_window": base_settings.signal_swing_window,
         "signal_equal_level_tolerance_pct": base_settings.signal_equal_level_tolerance_pct,
@@ -659,8 +659,6 @@ def load_runtime_settings(db: Session | None = None, *, include_sources: bool = 
             sources.setdefault(category, {})[key] = "legacy_migration" if target in bootstrap_migrated else "db"
             if not is_alias:
                 seen_canonical.add(target)
-        payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
-        sources.setdefault("strategy", {})["signal_execution_interval"] = "default"
         _apply_legacy_admin_setting_locations(payload)
         kraken = payload.setdefault("kraken", {})
         if not kraken.get("kraken_base_url") and kraken.get("kraken_rest_base"):
@@ -749,10 +747,6 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     db.execute(delete(AppSetting).where(AppSetting.category == "kraken", AppSetting.key == "kraken_rest_base"))
     for source in LEGACY_ADMIN_SETTING_ALIASES:
         db.execute(delete(AppSetting).where(AppSetting.category == source[0], AppSetting.key == source[1]))
-    strategy = payload.get("strategy")
-    if isinstance(strategy, dict):
-        strategy["signal_execution_interval"] = "15m"
-
     for category, values in payload.items():
         if not isinstance(values, dict):
             continue
@@ -773,7 +767,7 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
     strategy = load_runtime_settings(db)["strategy"]
     return {
-        "execution_interval": "15m",
+        "execution_interval": strategy["signal_execution_interval"],
         "rsi_period": strategy["signal_rsi_period"],
         "swing_window": strategy["signal_swing_window"],
         "equal_level_tolerance_pct": strategy["signal_equal_level_tolerance_pct"],
