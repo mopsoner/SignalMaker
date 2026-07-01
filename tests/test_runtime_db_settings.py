@@ -25,8 +25,8 @@ def test_lightweight_runtime_settings_bootstraps_from_env(monkeypatch, tmp_path)
     assert payload["executor"]["execution_exchange"] == "coinbase"
     assert payload["executor"]["quote_assets"] == "EUR,USD"
     assert payload["kraken"]["kraken_base_url"] == "https://rest.kraken.test"
-    assert payload["kraken"]["kraken_api_key"] == "api-key"
-    assert payload["kraken"]["kraken_secret_key"] == "secret-key"
+    assert payload["kraken"]["kraken_api_key"] == ""
+    assert payload["kraken"]["kraken_secret_key"] == ""
 
 
 def test_lightweight_runtime_settings_prefers_db_rows_over_env(monkeypatch, tmp_path):

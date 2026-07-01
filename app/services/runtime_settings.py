@@ -36,8 +36,6 @@ BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
     "KRAKEN_QUOTE_ASSETS": ("executor", "quote_assets"),
     "KRAKEN_BASE_URL": ("kraken", "kraken_base_url"),
     "KRAKEN_REST_BASE": ("kraken", "kraken_base_url"),
-    "KRAKEN_API_KEY": ("kraken", "kraken_api_key"),
-    "KRAKEN_SECRET_KEY": ("kraken", "kraken_secret_key"),
     "KRAKEN_COLLECTOR_ENABLED": ("market_data", "kraken_collector_enabled"),
     "KRAKEN_SYMBOL_STATUS": ("market_data", "kraken_symbol_status"),
     "KRAKEN_MAX_SYMBOLS": ("market_data", "kraken_max_symbols"),
@@ -129,8 +127,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "kraken": {
         "kraken_exchange_name": "kraken",
         "kraken_base_url": base_settings.kraken_base_url,
-        "kraken_api_key": base_settings.kraken_api_key,
-        "kraken_secret_key": base_settings.kraken_secret_key,
     },
     "market_data": {
         "kraken_collector_enabled": getattr(base_settings, "kraken_collector_enabled", True),
@@ -211,8 +207,6 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
     },
     "kraken": {
         "KRAKEN_BASE_URL": "kraken_base_url",
-        "KRAKEN_API_KEY": "kraken_api_key",
-        "KRAKEN_SECRET_KEY": "kraken_secret_key",
         "KRAKEN_USE_TESTNET": "kraken_use_testnet",
     },
     "notifications": {
@@ -281,6 +275,15 @@ LEGACY_READ_ONLY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("kraken", "kraken_api_key"),
+        ("kraken", "kraken_secret_key"),
+        ("kraken", "KRAKEN_API_KEY"),
+        ("kraken", "KRAKEN_SECRET_KEY"),
+    }
+)
+
 OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     {
         ("general", "admin_token"),
@@ -290,6 +293,7 @@ OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
 
 REMOVABLE_LEGACY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     LEGACY_READ_ONLY_APP_SETTING_KEYS
+    | OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS
     | OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS
     | {
         (section, display_key)
@@ -303,8 +307,6 @@ CRITICAL_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
         ("executor", "execution_exchange"),
         ("executor", "quote_assets"),
         ("kraken", "kraken_base_url"),
-        ("kraken", "kraken_api_key"),
-        ("kraken", "kraken_secret_key"),
         ("notifications", "telegram_chat_id"),
         ("notifications", "telegram_secret"),
         ("notifications", "discord_url"),
@@ -648,14 +650,14 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
                 normalized[target_section][runtime_key] = values[display_key]
                 if target_section == section:
                     normalized[target_section].pop(display_key, None)
+    for section, key in OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS:
+        normalized.get(section, {}).pop(key, None)
     return normalized
 
 
 
 SENSITIVE_ADMIN_FIELDS: frozenset[tuple[str, str]] = frozenset(
     {
-        ("kraken", "kraken_api_key"),
-        ("kraken", "kraken_secret_key"),
         ("notifications", "telegram_secret"),
         ("notifications", "discord_url"),
     }
@@ -682,7 +684,7 @@ def _is_secret_placeholder(value: Any) -> bool:
 
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
     "executor": ("execution_exchange", "quote_assets"),
-    "kraken": ("kraken_base_url", "kraken_api_key", "kraken_secret_key"),
+    "kraken": ("kraken_base_url",),
     "market_data": tuple(DEFAULT_SETTINGS["market_data"]),
     "strategy": tuple(DEFAULT_SETTINGS["strategy"]),
     "notifications": tuple(DEFAULT_SETTINGS["notifications"]),
@@ -771,7 +773,7 @@ def load_runtime_settings(db: Session | None = None, *, include_sources: bool = 
         seen_canonical: set[tuple[str, str]] = set()
         for row in rows:
             original = (row.category, row.key)
-            if original in OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS:
+            if original in OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS | OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS:
                 continue
             category, key = _canonical_admin_field(row.category, row.key)
             target = (category, key)
@@ -868,12 +870,16 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
         kraken_payload["kraken_base_url"] = kraken_payload["kraken_rest_base"]
     kraken_payload.pop("kraken_rest_base", None)
     db.execute(delete(AppSetting).where(AppSetting.category == "kraken", AppSetting.key == "kraken_rest_base"))
+    for category, key in OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS:
+        db.execute(delete(AppSetting).where(AppSetting.category == category, AppSetting.key == key))
     for source in LEGACY_ADMIN_SETTING_ALIASES:
         db.execute(delete(AppSetting).where(AppSetting.category == source[0], AppSetting.key == source[1]))
     for category, values in payload.items():
         if not isinstance(values, dict):
             continue
         for key, value in values.items():
+            if (category, key) in OBSOLETE_KRAKEN_CREDENTIAL_APP_SETTING_KEYS:
+                continue
             if _is_sensitive_admin_field(category, key) and _is_secret_placeholder(value):
                 continue
             row = db.execute(
