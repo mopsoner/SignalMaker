@@ -5,6 +5,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Bootstrap settings loaded from environment at process start.
+
+    Runtime/admin-managed values are stored in app_settings via
+    app.services.runtime_settings. This class remains the bootstrap fallback for
+    defaults needed before the database-backed runtime settings are available.
+    """
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("database_url", mode="before")

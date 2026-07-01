@@ -77,8 +77,9 @@ def _runtime_overrides() -> dict[str, str]:
 
 
 def load_settings() -> Settings:
-    # Runtime DB settings are the source of truth for admin-managed values.
-    # The persisted env store remains the fallback when DB values are empty or unavailable.
+    # app_settings, loaded through _runtime_overrides(), are the runtime source
+    # of truth. The local .env is bootstrap/fallback only for Raspberry-only
+    # fields or when the API database is not reachable during startup.
     values = {**read_env(), **_runtime_overrides()}
     quote_assets = _csv(values.get("QUOTE_ASSETS", "USD,USDC"))
     return Settings(

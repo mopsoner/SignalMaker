@@ -128,3 +128,58 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
     assert payload["executor"]["quote_assets"] == "USDC"
     assert payload["kraken"]["kraken_api_key"] == "key"
     assert payload["kraken"]["kraken_secret_key"] == ""
+
+
+def test_migrate_bootstrap_settings_to_app_settings_fills_missing_canonical_rows(monkeypatch):
+    added = []
+
+    class FakeScalars:
+        def all(self):
+            return added
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def add(self, row):
+            added.append(row)
+
+        def commit(self):
+            pass
+
+        def execute(self, statement):
+            return FakeResult()
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_legacy_bootstrap_values",
+        lambda: {"KRAKEN_BASE_URL": "https://bootstrap.kraken", "QUOTE_ASSETS": "USD,EUR"},
+    )
+
+    rows = runtime_settings.migrate_bootstrap_settings_to_app_settings(FakeDb(), [])
+
+    values = {(row.category, row.key): row.value for row in rows}
+    assert values[("kraken", "kraken_base_url")] == "https://bootstrap.kraken"
+    assert values[("executor", "quote_assets")] == "USD,EUR"
+
+
+def test_migrate_bootstrap_settings_to_app_settings_does_not_overwrite_canonical(monkeypatch):
+    canonical = runtime_settings.AppSetting(category="kraken", key="kraken_base_url", value="https://canonical.kraken")
+
+    class FakeDb:
+        def add(self, row):
+            raise AssertionError("canonical row should not be recreated")
+
+        def commit(self):
+            raise AssertionError("unchanged canonical rows should not commit")
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_legacy_bootstrap_values",
+        lambda: {"KRAKEN_BASE_URL": "https://bootstrap.kraken"},
+    )
+
+    rows = runtime_settings.migrate_bootstrap_settings_to_app_settings(FakeDb(), [canonical])
+
+    assert rows[0].value == "https://canonical.kraken"
