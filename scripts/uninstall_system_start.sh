@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BOT_SERVICE="signalmaker-bot.service"
+EXECUTOR_SERVICE="raspberry-executor.service"
+LEGACY_BOT_SERVICE="signalmaker-bot.service"
 TUI_SERVICE="signalmaker-tui.service"
 TTY_NAME="${TTY_NAME:-tty1}"
 
@@ -15,7 +16,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo TTY_NAME="$TTY_NAME" bash "$0"
 fi
 
-for service in "$TUI_SERVICE" "$BOT_SERVICE"; do
+for service in "$TUI_SERVICE" "$EXECUTOR_SERVICE" "$LEGACY_BOT_SERVICE"; do
   systemctl stop "$service" >/dev/null 2>&1 || true
   systemctl disable "$service" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$service"
@@ -28,6 +29,6 @@ systemctl start "getty@${TTY_NAME}.service" >/dev/null 2>&1 || true
 systemctl daemon-reload
 systemctl reset-failed >/dev/null 2>&1 || true
 
-echo "Removed: $BOT_SERVICE, $TUI_SERVICE"
+echo "Removed: $EXECUTOR_SERVICE, $TUI_SERVICE (and legacy $LEGACY_BOT_SERVICE if present)"
 echo "Restored: getty@${TTY_NAME}.service"
 echo "Project files, .env and SQLite database were not deleted."

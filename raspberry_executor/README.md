@@ -14,9 +14,15 @@ Keep `DRY_RUN=true` for the first tests.
 
 ## Run manually
 
-Run the module:
+Use the single official starter:
 
-`python -m raspberry_executor.run_all_v2`
+`./run.sh device`
+
+Startup chain:
+
+`systemd -> ./run.sh device -> scripts/start_api.sh -> wait for /healthz -> python -m raspberry_executor.run_all_v2`
+
+`run_all_v2` remains the internal engine. Do not launch it directly for normal Raspberry operation. `scripts/start_raspberry_executor.sh` is kept only as a deprecated compatibility wrapper that delegates to `./run.sh device`.
 
 ## systemd
 
