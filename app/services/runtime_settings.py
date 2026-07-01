@@ -10,6 +10,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as base_settings
+from app.core.config import settings_env_file_keys
 from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
 
@@ -598,8 +599,9 @@ def _default_sources() -> dict[str, dict[str, SettingSource]]:
     sources: dict[str, dict[str, SettingSource]] = {
         section: {key: "default" for key in values} for section, values in DEFAULT_SETTINGS.items()
     }
+    bootstrap_keys = set(os.environ) | set(settings_env_file_keys())
     for env_key, (section, key) in BOOTSTRAP_ENV_ALIASES.items():
-        if env_key in os.environ:
+        if env_key in bootstrap_keys:
             sources.setdefault(section, {})[key] = ".env/bootstrap"
     return sources
 
