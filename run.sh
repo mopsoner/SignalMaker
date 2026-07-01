@@ -13,7 +13,6 @@ Commands:
   executor        Start only the remote SignalMaker trade/momentum executor loop
   local-api       Start only the local Raspberry Executor monitoring API/UI
   smoke           Run Raspberry Executor Kraken/device smoke checks
-  all-local       Start local API + local pipeline + local executor + local scheduler
   api             Alias for local-api
   init-db         Initialize database tables
   frontend        Legacy no-op: frontend is served by the API on APP_PORT
@@ -21,7 +20,6 @@ Commands:
   executor-loop   Start the local executor worker loop
   scheduler-loop  Start the local scheduler worker loop
   all             Alias for device (historical default)
-  reserved-vm     Alias for all-local
 
 If no command is provided, historical Raspberry device mode is started.
 USAGE
@@ -67,40 +65,6 @@ python_cmd() {
   else
     echo "python3"
   fi
-}
-
-start_api_and_workers() {
-  local pids=()
-  local started_api=false
-
-  cleanup() {
-    if [ "${#pids[@]}" -gt 0 ]; then
-      kill "${pids[@]}" 2>/dev/null || true
-    fi
-  }
-
-  trap cleanup EXIT INT TERM
-
-  bash scripts/start_api.sh "$@" &
-  pids+=("$!")
-  started_api=true
-
-  if ! wait_for_api; then
-    cleanup
-    if [ "$started_api" = true ]; then
-      wait "${pids[0]}" 2>/dev/null || true
-    fi
-    exit 1
-  fi
-
-  bash scripts/start_pipeline_worker.sh &
-  pids+=("$!")
-  bash scripts/start_executor_worker.sh &
-  pids+=("$!")
-  bash scripts/start_scheduler_worker.sh &
-  pids+=("$!")
-
-  wait -n "${pids[@]}"
 }
 
 start_api_and_device() {
@@ -172,9 +136,6 @@ case "$command" in
     ;;
   scheduler-loop)
     exec bash scripts/start_scheduler_worker.sh "$@"
-    ;;
-  all-local|reserved-vm)
-    start_api_and_workers "$@"
     ;;
   -h|--help|help)
     usage
