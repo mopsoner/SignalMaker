@@ -17,6 +17,7 @@ from app.services.planner_service import PlannerService
 from app.services.signal_context_service import apply_context_driven_progression
 from app.services.signal_engine_service import SignalEngineService
 from app.services.trade_candidate_service import TradeCandidateService
+from app.services.runtime_settings import _coerce_bool
 
 
 EXECUTION_INTERVAL = "15m"
@@ -314,7 +315,7 @@ class PipelineService:
             "execution_interval": execution_interval,
             "analysis_ordering": "score_desc_existing_asset_state",
             "analysis_top_symbols": analyzed_symbols[:10],
-            "incremental_fetch_enabled": bool(self.collector.runtime.get("market_data", self.collector.runtime["kraken"]).get("kraken_incremental_fetch_enabled", True)),
+            "incremental_fetch_enabled": _coerce_bool(self.collector.runtime.get("market_data", self.collector.runtime["kraken"]).get("kraken_incremental_fetch_enabled"), default=True),
             "pipeline_counts": dict(pipeline_counts),
             "planner_reason_counts": dict(planner_reason_counts),
             "state_counts": dict(state_counts),
