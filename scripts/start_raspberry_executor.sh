@@ -3,6 +3,9 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 
+echo "DEPRECATED: scripts/start_raspberry_executor.sh is a compatibility wrapper." >&2
+echo "Official Raspberry Executor entrypoint: ./run.sh device" >&2
+
 if [ ! -d .venv ]; then
   python3 -m venv .venv
 fi
@@ -20,4 +23,4 @@ if [ ! -f .env ]; then
 fi
 
 python -m raspberry_executor.install_sqlite
-exec python -m raspberry_executor.run_all_v2
+exec ./run.sh device "$@"

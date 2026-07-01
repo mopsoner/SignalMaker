@@ -38,8 +38,8 @@ fi
 info "5) Verify systemd service file"
 [ -f "$SERVICE_FILE" ] || fail "Missing $SERVICE_FILE after pull"
 
-if ! grep -Eq "scripts/start_raspberry_executor.sh|raspberry_executor.run_all_v2" "$SERVICE_FILE"; then
-  fail "$SERVICE_FILE does not start the Raspberry executor bundle"
+if ! grep -Eq "run\.sh device" "$SERVICE_FILE"; then
+  fail "$SERVICE_FILE does not use the official ./run.sh device entrypoint"
 fi
 
 info "6) Install updated systemd service"
@@ -65,13 +65,13 @@ info "12) ExecStart check"
 sudo systemctl cat "$SERVICE_NAME" | grep ExecStart || true
 
 info "13) Recent relevant logs"
-journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|momentum decision|order monitor|Raspberry margin executor started|run_all_v2|start_raspberry_executor" || true
+journalctl -u "$SERVICE_NAME" -n 160 --no-pager | grep -E "settings bootstrap|dry_run|candidate status sync|execution mode|local 360 dashboard|candle feed|momentum decision|order monitor|Raspberry margin executor started|run_all_v2|run\.sh device" || true
 
 info "14) Quick runtime checks"
-if sudo systemctl cat "$SERVICE_NAME" | grep -Eq "scripts/start_raspberry_executor.sh|raspberry_executor.run_all_v2"; then
-  echo "OK: systemd starts the Raspberry executor bundle"
+if sudo systemctl cat "$SERVICE_NAME" | grep -Eq "run\.sh device"; then
+  echo "OK: systemd uses the official ./run.sh device entrypoint"
 else
-  warn "systemd does not show scripts/start_raspberry_executor.sh or raspberry_executor.run_all_v2"
+  warn "systemd does not show ./run.sh device"
 fi
 
 if journalctl -u "$SERVICE_NAME" -n 200 --no-pager | grep -q "settings bootstrap startup"; then
@@ -97,10 +97,10 @@ cat <<'EOF'
 Done.
 
 Expected service line:
-ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/scripts/start_raspberry_executor.sh
+ExecStart=/bin/bash /home/pi/Desktop/SignalMaker/run.sh device
 
-The service script then starts:
-python -m raspberry_executor.run_all_v2
+Startup chain:
+systemd -> ./run.sh device -> scripts/start_api.sh -> /healthz -> python -m raspberry_executor.run_all_v2
 
 Settings persistence:
 - Admin saves are written to .env and SQLite settings table.

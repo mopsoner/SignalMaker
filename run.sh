@@ -7,7 +7,7 @@ usage() {
 Usage: ./run.sh [command]
 
 Commands:
-  device          Historical Raspberry device mode: remote candle feed + remote executor loops + local monitoring UI
+  device          Official Raspberry device mode: local API/UI + health wait + run_all_v2 executor bundle
   candle-feed     Start only the Raspberry -> remote SignalMaker candle feed loop
   backfill        Run the historical Raspberry -> remote SignalMaker candle backfill once
   executor        Start only the remote SignalMaker trade/momentum executor loop
@@ -21,7 +21,7 @@ Commands:
   scheduler-loop  Start the local scheduler worker loop
   all             Alias for device (historical default)
 
-If no command is provided, historical Raspberry device mode is started.
+If no command is provided, the official Raspberry device mode is started.
 USAGE
 }
 

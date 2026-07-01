@@ -4,8 +4,10 @@ This branch runs the Raspberry Executor device connected to a remote SignalMaker
 
 Run modes:
 
+`./run.sh device` is the single official Raspberry Executor starter. It starts the local API, waits for `/healthz`, then starts the internal `raspberry_executor.run_all_v2` engine.
+
 ```bash
-./run.sh device       # historical device mode: candle feed + executor + supporting loops
+./run.sh device       # official device mode: local API + health wait + run_all_v2 executor bundle
 ./run.sh candle-feed  # only exchange -> remote SignalMaker candle sync
 ./run.sh backfill     # historical 4h exchange -> remote SignalMaker backfill
 ./run.sh executor     # only remote SignalMaker -> local exchange execution
