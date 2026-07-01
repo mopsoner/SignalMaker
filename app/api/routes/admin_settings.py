@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_operator_key
 from app.services.database_reset_service import reset_database_preserving_config
 from app.services.notifier_service import NotifierService
 from app.services.runtime_settings import load_admin_settings, load_runtime_settings, persist_runtime_settings
@@ -31,14 +31,14 @@ class SettingsPayload(BaseModel):
     momentum: dict[str, Any] = {}
 
 
-@router.get('/admin/settings')
+@router.get('/admin/settings', dependencies=[Depends(require_operator_key)])
 def get_admin_settings(
     include_sources: bool = Query(False), db: Session = Depends(get_db)
 ) -> dict[str, dict[str, Any]] | dict[str, dict[str, dict[str, Any]]]:
     return load_admin_settings(db, include_sources=include_sources)
 
 
-@router.put('/admin/settings')
+@router.put('/admin/settings', dependencies=[Depends(require_operator_key)])
 def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
     persist_runtime_settings(db, payload.model_dump())
     return load_admin_settings(db)
@@ -49,23 +49,23 @@ def get_worker_status() -> dict:
     return WorkerControlService().status()
 
 
-@router.post('/admin/workers/{worker_name}/start')
+@router.post('/admin/workers/{worker_name}/start', dependencies=[Depends(require_operator_key)])
 def start_worker(worker_name: str) -> dict:
     return WorkerControlService().start(worker_name)
 
 
-@router.post('/admin/workers/{worker_name}/stop')
+@router.post('/admin/workers/{worker_name}/stop', dependencies=[Depends(require_operator_key)])
 def stop_worker(worker_name: str) -> dict:
     return WorkerControlService().stop(worker_name)
 
 
-@router.post('/admin/reset-database')
+@router.post('/admin/reset-database', dependencies=[Depends(require_operator_key)])
 def reset_database(db: Session = Depends(get_db)) -> dict:
     return reset_database_preserving_config(db)
 
 
 
-@router.post('/admin/test/kraken')
+@router.post('/admin/test/kraken', dependencies=[Depends(require_operator_key)])
 def test_kraken(db: Session = Depends(get_db)) -> dict:
     runtime = load_runtime_settings(db)['kraken']
     base = (runtime.get('kraken_base_url') or 'https://api.kraken.com').rstrip('/')
@@ -143,7 +143,7 @@ def get_worker_logs(worker_name: str, lines: int = 200) -> dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post('/admin/test/notifications')
+@router.post('/admin/test/notifications', dependencies=[Depends(require_operator_key)])
 def test_notifications(db: Session = Depends(get_db)) -> dict:
     runtime = load_runtime_settings(db)['notifications']
     return NotifierService().test(
