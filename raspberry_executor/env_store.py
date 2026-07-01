@@ -15,7 +15,7 @@ DEFAULTS = {
     "DRY_RUN": "false",
     "QUOTE_ASSETS": "USD,USDC",
     "ORDER_QUOTE_AMOUNT": "50",
-    "MAX_CANDIDATE_AGE_SECONDS": "900",
+    "MAX_CANDIDATE_AGE_SECONDS": "1200",
     "EXECUTION_EXCHANGE": "kraken",
     "KRAKEN_BASE_URL": "https://api.kraken.com",
     "KRAKEN_API_KEY": "",
