@@ -47,24 +47,31 @@ class MarketDataService:
 
     def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
         if latest:
-            filters = "WHERE 1=1"
-            params: dict = {}
+            filters = []
             if symbol:
-                filters += " AND symbol = :symbol"
-                params["symbol"] = symbol.upper()
+                filters.append(MarketCandle.symbol == symbol.upper())
             if interval:
-                filters += " AND interval = :interval"
-                params["interval"] = interval
-            sql = text(f"""
-                SELECT DISTINCT ON (symbol, interval) *
-                FROM market_candles
-                {filters}
-                ORDER BY symbol, interval, ingested_at DESC
-                LIMIT :limit
-            """)
-            params["limit"] = limit
-            rows = self.db.execute(sql, params).mappings().all()
-            return [MarketCandle(**dict(r)) for r in rows]
+                filters.append(MarketCandle.interval == interval)
+
+            row_number = func.row_number().over(
+                partition_by=(MarketCandle.symbol, MarketCandle.interval),
+                order_by=MarketCandle.close_time.desc(),
+            ).label("row_number")
+            ranked = select(MarketCandle, row_number)
+            if filters:
+                ranked = ranked.where(*filters)
+            ranked = ranked.subquery()
+
+            stmt = (
+                select(MarketCandle)
+                .from_statement(
+                    select(ranked)
+                    .where(ranked.c.row_number == 1)
+                    .order_by(ranked.c.symbol, ranked.c.interval)
+                    .limit(limit)
+                )
+            )
+            return list(self.db.scalars(stmt).all())
 
         stmt = select(MarketCandle)
         if symbol:
