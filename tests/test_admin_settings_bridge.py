@@ -3,7 +3,7 @@ import os
 from raspberry_executor import admin_settings_bridge
 
 
-def test_admin_settings_bridge_reports_kraken_secret_presence_without_masked_env(monkeypatch):
+def test_admin_settings_bridge_ignores_masked_kraken_credentials(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):
             pass
@@ -26,13 +26,13 @@ def test_admin_settings_bridge_reports_kraken_secret_presence_without_masked_env
 
     assert result["kraken_api_key_in_admin_payload"] is True
     assert result["kraken_secret_key_in_admin_payload"] is True
-    assert result["kraken_api_key_applied_to_env"] is False
-    assert result["kraken_secret_key_applied_to_env"] is False
+    assert result["kraken_credentials_source"] == ".env"
+    assert result["kraken_admin_credentials_ignored"] is True
     assert "KRAKEN_API_KEY" not in os.environ
     assert "KRAKEN_SECRET_KEY" not in os.environ
 
 
-def test_admin_settings_bridge_applies_unmasked_kraken_credentials(monkeypatch):
+def test_admin_settings_bridge_ignores_unmasked_kraken_credentials(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):
             pass
@@ -53,7 +53,7 @@ def test_admin_settings_bridge_applies_unmasked_kraken_credentials(monkeypatch):
 
     result = admin_settings_bridge.apply_admin_settings_to_environ("https://signalmaker.test")
 
-    assert result["kraken_api_key_applied_to_env"] is True
-    assert result["kraken_secret_key_applied_to_env"] is True
-    assert os.environ["KRAKEN_API_KEY"] == "key"
-    assert os.environ["KRAKEN_SECRET_KEY"] == "secret"
+    assert result["kraken_credentials_source"] == ".env"
+    assert result["kraken_admin_credentials_ignored"] is True
+    assert "KRAKEN_API_KEY" not in os.environ
+    assert "KRAKEN_SECRET_KEY" not in os.environ

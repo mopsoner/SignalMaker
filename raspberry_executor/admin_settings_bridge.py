@@ -14,11 +14,6 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _secret_present(value: Any) -> bool:
-    if value in (None, ""):
-        return False
-    return str(value).strip() not in {"********", "******", "***"}
-
 
 def _settings_url(base_url: str) -> str:
     base = str(base_url or "").rstrip("/")
@@ -80,7 +75,6 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
     live = payload.get("live") or {}
     executor = payload.get("executor") or {}
     kraken = payload.get("kraken") or {}
-    kraken = payload.get("kraken") or {}
     market_data = payload.get("market_data") or {}
 
     if "live_trading_enabled" in live:
@@ -105,10 +99,9 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL")).rstrip("/")
     kraken_api_key = kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY")
     kraken_secret_key = kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY")
-    if _secret_present(kraken_api_key):
-        os.environ["KRAKEN_API_KEY"] = str(kraken_api_key)
-    if _secret_present(kraken_secret_key):
-        os.environ["KRAKEN_SECRET_KEY"] = str(kraken_secret_key)
+    # Kraken credentials must only come from the local .env/process environment.
+    # Runtime/admin payloads may include masked or legacy credential fields, but
+    # they are intentionally ignored here to avoid copying secrets into env.
 
     if _bool(live.get("kraken_use_testnet"), default=False) and live.get("kraken_testnet_rest_base"):
         os.environ["KRAKEN_BASE_URL"] = str(live.get("kraken_testnet_rest_base")).rstrip("/")
@@ -129,11 +122,10 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         "shorts_enabled": os.environ.get("SHORTS_ENABLED"),
         "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
         "execution_exchange": os.environ.get("EXECUTION_EXCHANGE"),
-        "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
         "kraken_api_key_in_admin_payload": bool(kraken_api_key),
         "kraken_secret_key_in_admin_payload": bool(kraken_secret_key),
-        "kraken_api_key_applied_to_env": _secret_present(kraken_api_key),
-        "kraken_secret_key_applied_to_env": _secret_present(kraken_secret_key),
+        "kraken_credentials_source": ".env",
+        "kraken_admin_credentials_ignored": bool(kraken_api_key or kraken_secret_key),
         "selected_source": "local_runtime_db" if local_payload else "admin_api",
         "admin_settings_checked": admin_checked,
         "admin_settings_error": admin_error,
