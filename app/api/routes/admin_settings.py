@@ -118,7 +118,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 
 
 @router.get('/admin/logs/{worker_name}', dependencies=[Depends(require_operator_key)])
-def get_worker_logs(worker_name: str, lines: int = 200) -> dict:
+def get_worker_logs(worker_name: str, lines: int = Query(200, ge=1, le=1000)) -> dict:
     if worker_name not in _ALLOWED_WORKERS:
         raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
     candidates = [

@@ -108,3 +108,14 @@ def test_valid_operator_key_allows_worker_status_and_logs(monkeypatch):
         response = client.get(path, headers={"x-operator-key": "valid-token"})
 
         assert response.status_code == 200, path
+
+
+def test_worker_logs_rejects_too_many_lines(monkeypatch):
+    client, _ = _client(monkeypatch)
+
+    response = client.get(
+        "/api/v1/admin/logs/pipeline?lines=1001",
+        headers={"x-operator-key": "valid-token"},
+    )
+
+    assert response.status_code == 422
