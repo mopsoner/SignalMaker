@@ -5,8 +5,16 @@ def test_kraken_admin_test_requires_credentials(monkeypatch):
     monkeypatch.setattr(
         admin_settings,
         "load_runtime_settings",
-        lambda db: {"kraken": {"kraken_base_url": "https://api.kraken.com", "kraken_api_key": "", "kraken_secret_key": ""}},
+        lambda db: {
+            "kraken": {
+                "kraken_base_url": "https://api.kraken.com",
+                "kraken_api_key": "db-key",
+                "kraken_secret_key": "db-secret",
+            }
+        },
     )
+    monkeypatch.setattr(admin_settings.settings, "kraken_api_key", "")
+    monkeypatch.setattr(admin_settings.settings, "kraken_secret_key", "")
 
     payload = admin_settings.test_kraken(db=None)
 
@@ -41,11 +49,13 @@ def test_kraken_admin_test_uses_private_account_credentials(monkeypatch):
         lambda db: {
             "kraken": {
                 "kraken_base_url": "https://api.kraken.com/",
-                "kraken_api_key": "kraken-key",
-                "kraken_secret_key": "kraken-secret",
+                "kraken_api_key": "db-key",
+                "kraken_secret_key": "db-secret",
             }
         },
     )
+    monkeypatch.setattr(admin_settings.settings, "kraken_api_key", "kraken-key")
+    monkeypatch.setattr(admin_settings.settings, "kraken_secret_key", "kraken-secret")
 
     payload = admin_settings.test_kraken(db=None)
 
