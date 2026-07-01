@@ -65,24 +65,33 @@ class MarketDataService:
 
     def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
         if latest:
-            filters = "WHERE 1=1"
-            params: dict = {}
+            ranked_candles = select(
+                MarketCandle.candle_id,
+                func.row_number()
+                .over(
+                    partition_by=(MarketCandle.symbol, MarketCandle.interval),
+                    order_by=(
+                        MarketCandle.close_time.desc(),
+                        MarketCandle.open_time.desc(),
+                        MarketCandle.ingested_at.desc(),
+                    ),
+                )
+                .label("rank"),
+            )
             if symbol:
-                filters += " AND symbol = :symbol"
-                params["symbol"] = symbol.upper()
+                ranked_candles = ranked_candles.where(MarketCandle.symbol == symbol.upper())
             if interval:
-                filters += " AND interval = :interval"
-                params["interval"] = interval
-            sql = text(f"""
-                SELECT DISTINCT ON (symbol, interval) *
-                FROM market_candles
-                {filters}
-                ORDER BY symbol, interval, ingested_at DESC
-                LIMIT :limit
-            """)
-            params["limit"] = limit
-            rows = self.db.execute(sql, params).mappings().all()
-            return [MarketCandle(**dict(r)) for r in rows]
+                ranked_candles = ranked_candles.where(MarketCandle.interval == interval)
+
+            ranked_candles_subquery = ranked_candles.subquery()
+            stmt = (
+                select(MarketCandle)
+                .join(ranked_candles_subquery, MarketCandle.candle_id == ranked_candles_subquery.c.candle_id)
+                .where(ranked_candles_subquery.c.rank == 1)
+                .order_by(MarketCandle.symbol, MarketCandle.interval)
+                .limit(limit)
+            )
+            return list(self.db.scalars(stmt).all())
 
         stmt = select(MarketCandle)
         if symbol:
