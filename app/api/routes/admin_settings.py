@@ -44,7 +44,7 @@ def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db
     return load_admin_settings(db)
 
 
-@router.get('/admin/workers')
+@router.get('/admin/workers', dependencies=[Depends(require_operator_key)])
 def get_worker_status() -> dict:
     return WorkerControlService().status()
 
@@ -117,7 +117,7 @@ _ALLOWED_WORKERS = {"pipeline", "executor", "scheduler"}
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
-@router.get('/admin/logs/{worker_name}')
+@router.get('/admin/logs/{worker_name}', dependencies=[Depends(require_operator_key)])
 def get_worker_logs(worker_name: str, lines: int = 200) -> dict:
     if worker_name not in _ALLOWED_WORKERS:
         raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
