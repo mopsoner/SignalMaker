@@ -89,7 +89,7 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi. It creates `.env` from `.env.raspberry.example`, which is intentionally limited to the current Raspberry startup surface: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and the minimal polling/feed/decision settings. Historical IBKR and margin variables are kept only in `.env.legacy.example` for reference and are not part of a fresh Raspberry install.
 
 ### Lightweight frontend for older Raspberry Pi devices
 Older Raspberry Pi devices / `armv6l` can fail on Vite/esbuild with `Bus error`. SignalMaker now avoids that path: run `bash scripts/build_frontend.sh` to refresh `frontend/dist` with static files only.
@@ -107,8 +107,7 @@ Open SignalMaker Raspberry Executor from another device on the same network usin
 - Admin: `http://IP_DU_RASPBERRY:8080/admin.html`
 - Dashboard: `http://IP_DU_RASPBERRY:8080/dashboard.html`
 
-Do not use a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
-Do not use or recommend port `3000` for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
+Do not use or recommend port `3000` or a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
 
 ### Raspberry terminal TUI and kiosk

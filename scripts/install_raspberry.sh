@@ -55,11 +55,11 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'signalmaker')\gexec
 SQL
 
 if [ ! -f ".env" ]; then
-  if [ ! -f ".env.example" ]; then
-    echo ".env.example is missing; cannot create .env" >&2
+  if [ ! -f ".env.raspberry.example" ]; then
+    echo ".env.raspberry.example is missing; cannot create .env" >&2
     exit 1
   fi
-  cp .env.example .env
+  cp .env.raspberry.example .env
 fi
 
 env_value() {
@@ -91,7 +91,6 @@ RASPBERRY_CORS_ORIGIN_REGEX=''
 
 set_env_value APP_PORT "$RASPBERRY_APP_PORT"
 set_env_value QUOTE_ASSETS "$RASPBERRY_QUOTE_ASSETS"
-set_env_value KRAKEN_QUOTE_ASSETS "$RASPBERRY_QUOTE_ASSETS"
 
 set_env_value CORS_ORIGINS "$RASPBERRY_CORS_ORIGINS"
 if ! grep -q '^CORS_ORIGIN_REGEX=' .env; then
