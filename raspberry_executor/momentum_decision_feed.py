@@ -633,8 +633,8 @@ def _candidate_rsi_1h(row: dict[str, Any]) -> float | None:
 
 
 def _rsi_buy_range() -> tuple[float, float]:
-    lower = _float_env("MOMENTUM_BUYABLE_RSI_1H_MIN", 45.0)
-    upper = _float_env("MOMENTUM_BUYABLE_RSI_1H_MAX", 55.0)
+    lower = _float_env("MOMENTUM_BUYABLE_RSI_1H_MIN", 50.0)
+    upper = _float_env("MOMENTUM_BUYABLE_RSI_1H_MAX", 65.0)
     return (min(lower, upper), max(lower, upper))
 
 
@@ -737,7 +737,7 @@ def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: 
     if not buy_symbol:
         action = "WAIT"
         should_trade = False
-        reason = "no_buyable_momentum_candidates_rsi_1h_45_55"
+        reason = "no_buyable_momentum_candidates_rsi_1h_50_65"
     elif not held_symbol:
         action = "BUY"
         should_trade = True

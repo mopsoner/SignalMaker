@@ -492,7 +492,7 @@ def test_build_decision_buys_best_rsi_buyable_candidate(tmp_path, monkeypatch):
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
 
     decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 61},
+        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 66},
         {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
     ])
 
@@ -510,7 +510,7 @@ def test_build_decision_holds_when_held_rank_beats_buyable_candidate(tmp_path, m
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
 
     decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 61},
+        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 66},
         {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
     ])
 
@@ -675,7 +675,7 @@ def test_build_decision_waits_when_no_candidate_rsi_is_buyable(tmp_path, monkeyp
     assert decision["should_trade"] is False
     assert decision["buy_symbol"] is None
     assert decision["buy_candidates"] == []
-    assert decision["reason"] == "no_buyable_momentum_candidates_rsi_1h_45_55"
+    assert decision["reason"] == "no_buyable_momentum_candidates_rsi_1h_50_65"
     assert [row["symbol"] for row in decision["skipped_candidates"]] == ["BANKUSDC", "ALLUSDC", "LOWUSDC"]
 
 
