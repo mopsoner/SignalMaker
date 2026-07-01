@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.core.config import settings
 from app.services.database_reset_service import reset_database_preserving_config
 from app.services.notifier_service import NotifierService
 from app.services.runtime_settings import load_admin_settings, load_runtime_settings, persist_runtime_settings
@@ -71,8 +72,8 @@ def test_kraken(db: Session = Depends(get_db)) -> dict:
     base = (runtime.get('kraken_base_url') or 'https://api.kraken.com').rstrip('/')
     client = KrakenClient(
         base,
-        str(runtime.get('kraken_api_key') or ''),
-        str(runtime.get('kraken_secret_key') or ''),
+        str(settings.kraken_api_key or ''),
+        str(settings.kraken_secret_key or ''),
         dry_run=True,
     )
     credentials_loaded = client.is_configured()
