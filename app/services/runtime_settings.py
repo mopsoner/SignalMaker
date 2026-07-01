@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,9 +11,12 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as base_settings
-from app.core.config import settings_env_file_keys
+from app.core.config import settings_env_file_keys, settings_env_file_values
 from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
+
+
+logger = logging.getLogger(__name__)
 
 
 # Canonical runtime source-of-truth policy:
@@ -101,6 +105,16 @@ LEGACY_RASPBERRY_SETTING_ALIASES: dict[str, tuple[str, str]] = {
     "CANDLE_FEED_QUOTES": ("executor", "quote_assets"),
     "CANDLE_FEED_QUOTE_ASSETS": ("executor", "quote_assets"),
 }
+
+# Exhaustive seed mapping from BaseSettings .env keys to canonical DEFAULT_SETTINGS
+# entries. Keys without an .env counterpart are intentionally default-only.
+APP_SETTINGS_SEED_ENV_ALIASES: dict[str, tuple[tuple[str, str], ...]] = {
+    **{env_key: (target,) for env_key, target in BOOTSTRAP_ENV_ALIASES.items()},
+    "KRAKEN_QUOTE_ASSETS": (("executor", "quote_assets"), ("market_data", "kraken_quote_assets")),
+}
+APP_SETTINGS_SEED_DEFAULT_ONLY_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {("kraken", "kraken_exchange_name")}
+)
 
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
@@ -299,6 +313,110 @@ CRITICAL_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
 
 def _has_value(value: Any) -> bool:
     return value is not None and str(value) != ""
+
+
+def _masked_seed_value(section: str, key: str, value: Any) -> Any:
+    if (section, key) in SENSITIVE_ADMIN_FIELDS and _has_value(value):
+        return "***"
+    return value
+
+
+def _seed_target_env_keys() -> dict[tuple[str, str], tuple[str, ...]]:
+    target_env_keys: dict[tuple[str, str], list[str]] = {}
+    for env_key, targets in APP_SETTINGS_SEED_ENV_ALIASES.items():
+        for target in targets:
+            target_env_keys.setdefault(target, []).append(env_key)
+    return {target: tuple(env_keys) for target, env_keys in target_env_keys.items()}
+
+
+def _validate_seed_mapping_is_exhaustive() -> None:
+    mapped_targets = set(_seed_target_env_keys()) | set(APP_SETTINGS_SEED_DEFAULT_ONLY_KEYS)
+    default_targets = {(section, key) for section, values in DEFAULT_SETTINGS.items() for key in values}
+    missing = sorted(default_targets - mapped_targets)
+    extra = sorted(mapped_targets - default_targets)
+    if missing or extra:
+        raise RuntimeError(
+            "APP_SETTINGS_SEED_ENV_ALIASES must cover DEFAULT_SETTINGS exactly; "
+            f"missing={missing}, extra={extra}"
+        )
+
+
+def seed_app_settings_from_env(db: Session, overwrite_empty_only: bool = True) -> dict[str, Any]:
+    """Seed canonical app_settings rows from .env, falling back to defaults.
+
+    The .env file is parsed through the same python-dotenv parser configured for
+    BaseSettings. Existing non-empty DB rows remain authoritative unless
+    overwrite_empty_only=False is passed explicitly for a controlled resync.
+    """
+    _validate_seed_mapping_is_exhaustive()
+    env_values = settings_env_file_values()
+    target_env_keys = _seed_target_env_keys()
+    rows = db.execute(select(AppSetting)).scalars().all()
+    by_location = {(row.category, row.key): row for row in rows}
+    summary: dict[str, Any] = {
+        "created": [],
+        "filled_empty": [],
+        "overwritten": [],
+        "kept_db": [],
+        "defaults": [],
+        "env": [],
+    }
+
+    for section, defaults in DEFAULT_SETTINGS.items():
+        for key, default_value in defaults.items():
+            target = (section, key)
+            env_key_used = None
+            seed_value = default_value
+            source = "default"
+            for env_key in target_env_keys.get(target, ()):
+                env_value = env_values.get(env_key)
+                if _has_value(env_value):
+                    env_key_used = env_key
+                    seed_value = env_value
+                    source = ".env"
+                    break
+
+            row = by_location.get(target)
+            item = {
+                "setting": f"{section}.{key}",
+                "source": source,
+                "env_key": env_key_used,
+                "value": _masked_seed_value(section, key, seed_value),
+            }
+            if source == ".env":
+                summary["env"].append(item.copy())
+            elif row is None or not _has_value(row.value):
+                summary["defaults"].append(item.copy())
+
+            if row is None:
+                db.add(AppSetting(category=section, key=key, value=seed_value))
+                summary["created"].append(item)
+            elif not _has_value(row.value):
+                row.value = seed_value
+                summary["filled_empty"].append(item)
+            elif overwrite_empty_only:
+                summary["kept_db"].append(
+                    {
+                        "setting": f"{section}.{key}",
+                        "source": "db",
+                        "value": _masked_seed_value(section, key, row.value),
+                    }
+                )
+            else:
+                row.value = seed_value
+                summary["overwritten"].append(item)
+
+    db.commit()
+    logger.info(
+        "app_settings seed summary: created=%s filled_empty=%s overwritten=%s kept_db=%s env=%s defaults=%s",
+        len(summary["created"]),
+        len(summary["filled_empty"]),
+        len(summary["overwritten"]),
+        len(summary["kept_db"]),
+        len(summary["env"]),
+        len(summary["defaults"]),
+    )
+    return summary
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:

@@ -170,6 +170,18 @@ def _settings_env_files() -> tuple[Path, ...]:
 
 
 @lru_cache
+def settings_env_file_values() -> dict[str, str]:
+    """Return .env values parsed with the same dotenv parser used by BaseSettings."""
+    provided: dict[str, str] = {}
+    for env_file in _settings_env_files():
+        if not env_file.exists():
+            continue
+        values = dotenv_values(env_file)
+        provided.update({key: value for key, value in values.items() if key and value is not None})
+    return provided
+
+
+@lru_cache
 def settings_env_file_keys() -> frozenset[str]:
     """Return keys explicitly provided by the BaseSettings env file(s)."""
     provided: set[str] = set()

@@ -601,3 +601,49 @@ def test_signal_execution_interval_uses_runtime_value():
 
     assert payload["strategy"]["signal_execution_interval"] == "1h"
     assert config["execution_interval"] == "1h"
+
+
+def test_seed_app_settings_from_env_creates_missing_and_keeps_existing(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("KRAKEN_BASE_URL=https://env.kraken\nKRAKEN_QUOTE_ASSETS=EUR,USD\n")
+    monkeypatch.chdir(tmp_path)
+    runtime_settings.settings_env_file_values.cache_clear()
+    runtime_settings.settings_env_file_keys.cache_clear()
+
+    existing = runtime_settings.AppSetting(category="kraken", key="kraken_base_url", value="https://db.kraken")
+    added = []
+
+    class FakeScalars:
+        def all(self):
+            return [existing]
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def add(self, row):
+            added.append(row)
+
+        def commit(self):
+            pass
+
+        def execute(self, statement):
+            return FakeResult()
+
+    try:
+        summary = runtime_settings.seed_app_settings_from_env(FakeDb())
+    finally:
+        runtime_settings.settings_env_file_values.cache_clear()
+        runtime_settings.settings_env_file_keys.cache_clear()
+
+    values = {(row.category, row.key): row.value for row in added}
+    assert existing.value == "https://db.kraken"
+    assert values[("executor", "quote_assets")] == "EUR,USD"
+    assert values[("market_data", "kraken_quote_assets")] == "EUR,USD"
+    assert any(item["setting"] == "kraken.kraken_base_url" for item in summary["kept_db"])
+    assert any(item["source"] == ".env" for item in summary["env"])
+
+
+def test_seed_mapping_covers_all_default_settings():
+    runtime_settings._validate_seed_mapping_is_exhaustive()
