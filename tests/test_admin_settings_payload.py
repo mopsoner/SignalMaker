@@ -397,6 +397,55 @@ def test_admin_settings_sources_prefer_canonical_db_over_bootstrap_env(monkeypat
     assert payload["sources"]["kraken"]["kraken_base_url"] == "db"
 
 
+def test_load_admin_settings_sources_mark_base_settings_dotenv_keys(monkeypatch, tmp_path):
+    env_keys = {
+        "KRAKEN_MAX_SYMBOLS": "15",
+        "KRAKEN_BASE_URL": "https://dotenv.kraken.test",
+        "LIVE_TRADING_ENABLED": "true",
+        "LIVE_MAX_OPEN_POSITIONS": "3",
+        "BOT_PIPELINE_ENABLED": "false",
+        "BOT_EXECUTOR_LIMIT": "7",
+        "SIGNAL_RSI_PERIOD": "21",
+        "SIGNAL_OVERBOUGHT": "75",
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KRAKEN_MAX_SYMBOLS", raising=False)
+    monkeypatch.delenv("KRAKEN_BASE_URL", raising=False)
+    monkeypatch.delenv("LIVE_TRADING_ENABLED", raising=False)
+    monkeypatch.delenv("LIVE_MAX_OPEN_POSITIONS", raising=False)
+    monkeypatch.delenv("BOT_PIPELINE_ENABLED", raising=False)
+    monkeypatch.delenv("BOT_EXECUTOR_LIMIT", raising=False)
+    monkeypatch.delenv("SIGNAL_RSI_PERIOD", raising=False)
+    monkeypatch.delenv("SIGNAL_OVERBOUGHT", raising=False)
+    (tmp_path / ".env").write_text("\n".join(f"{key}={value}" for key, value in env_keys.items()) + "\n")
+    runtime_settings.settings_env_file_keys.cache_clear()
+
+    class FakeScalars:
+        def all(self):
+            return []
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def execute(self, statement):
+            return FakeResult()
+
+    try:
+        payload = runtime_settings.load_admin_settings(FakeDb(), include_sources=True)
+    finally:
+        runtime_settings.settings_env_file_keys.cache_clear()
+
+    assert payload["sources"]["market_data"]["kraken_max_symbols"] == ".env/bootstrap"
+    assert payload["sources"]["kraken"]["kraken_base_url"] == ".env/bootstrap"
+    assert payload["sources"]["live"]["live_trading_enabled"] == ".env/bootstrap"
+    assert payload["sources"]["live"]["live_max_open_positions"] == ".env/bootstrap"
+    assert payload["sources"]["bot"]["bot_pipeline_enabled"] == ".env/bootstrap"
+    assert payload["sources"]["bot"]["bot_executor_limit"] == ".env/bootstrap"
+    assert payload["sources"]["strategy"]["signal_rsi_period"] == ".env/bootstrap"
+    assert payload["sources"]["strategy"]["signal_overbought"] == ".env/bootstrap"
+
 def test_load_admin_settings_masks_sensitive_values(monkeypatch):
     def fake_runtime_settings(db=None):
         return {

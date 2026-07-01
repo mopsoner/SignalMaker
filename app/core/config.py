@@ -1,6 +1,8 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import ClassVar
 
+from dotenv import dotenv_values
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -154,6 +156,29 @@ class Settings(BaseSettings):
                 "price_near_extreme_pct": self.signal_price_near_extreme_pct,
             },
         }
+
+
+def _settings_env_files() -> tuple[Path, ...]:
+    env_file = Settings.model_config.get("env_file")
+    if env_file is None:
+        return ()
+    if isinstance(env_file, (str, Path)):
+        env_files = (env_file,)
+    else:
+        env_files = tuple(env_file)
+    return tuple(Path(item) for item in env_files)
+
+
+@lru_cache
+def settings_env_file_keys() -> frozenset[str]:
+    """Return keys explicitly provided by the BaseSettings env file(s)."""
+    provided: set[str] = set()
+    for env_file in _settings_env_files():
+        if not env_file.exists():
+            continue
+        values = dotenv_values(env_file)
+        provided.update(key for key, value in values.items() if key and value is not None)
+    return frozenset(provided)
 
 
 @lru_cache
