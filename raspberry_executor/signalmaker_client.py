@@ -192,6 +192,17 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker latest candle response: {type(data).__name__}")
         return data[0] if data else None
 
+    def first_candle(self, symbol: str, interval: str) -> dict | None:
+        response = self.session.get(
+            self._url("/api/v1/market-data/candles"),
+            params={"symbol": symbol.upper(), "interval": interval, "limit": 1, "first": "true"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected SignalMaker first candle response: {type(data).__name__}")
+        return data[0] if data else None
 
     def list_momentum(self, limit: int = 50) -> list[dict]:
         response = self.session.get(

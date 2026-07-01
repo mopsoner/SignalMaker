@@ -55,13 +55,13 @@ def _start_ms_for_days(days: int) -> int:
     return _utc_ms(datetime.now(timezone.utc) - timedelta(days=max(1, int(days))))
 
 
-def _latest_main_close_time(client: SignalMakerClient, symbol: str, interval: str = INTERVAL) -> int | None:
+def _first_main_open_time(client: SignalMakerClient, symbol: str, interval: str = INTERVAL) -> int | None:
     try:
-        latest = client.latest_candle(symbol, interval)
-        if latest and latest.get("close_time") is not None:
-            return int(latest["close_time"])
+        first = client.first_candle(symbol, interval)
+        if first and first.get("open_time") is not None:
+            return int(first["open_time"])
     except Exception as exc:
-        logger.warning("remote latest candle lookup failed symbol=%s interval=%s error=%s", symbol, interval, str(exc))
+        logger.warning("remote first candle lookup failed symbol=%s interval=%s error=%s", symbol, interval, str(exc))
     return None
 
 
@@ -69,26 +69,61 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
     symbol = symbol.upper()
     symbols_state = state.setdefault("symbols", {})
     symbol_state = symbols_state.setdefault(symbol, {})
-    from_ms = _start_ms_for_days(days)
+    target_start_ms = _start_ms_for_days(days)
     now_ms = _utc_ms(datetime.now(timezone.utc))
-    latest_main = _latest_main_close_time(client, symbol)
-    cursor = max(from_ms, int(symbol_state.get("next_start_time") or 0), int(latest_main + 1) if latest_main is not None and latest_main >= from_ms else from_ms)
-    if cursor >= now_ms - FOUR_HOURS_MS:
-        symbol_state.update({"status": "complete", "last_checked_at": datetime.now(timezone.utc).isoformat(), "latest_main_close_time": latest_main})
+    first_remote_open_time = _first_main_open_time(client, symbol)
+
+    if first_remote_open_time is not None and first_remote_open_time <= target_start_ms:
+        symbol_state.update({
+            "status": "complete",
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+            "first_remote_open_time": first_remote_open_time,
+            "target_start_time": target_start_ms,
+        })
         _save_state(state)
-        return {"symbol": symbol, "status": "skipped", "reason": "already_has_required_4h_history", "latest_main_close_time": latest_main}
+        return {
+            "symbol": symbol,
+            "interval": INTERVAL,
+            "status": "skipped",
+            "reason": "already_has_required_4h_history",
+            "first_remote_open_time": first_remote_open_time,
+            "target_start_time": target_start_ms,
+        }
+
+    historical_end_ms = first_remote_open_time - 1 if first_remote_open_time is not None else now_ms - FOUR_HOURS_MS
+    cursor = max(target_start_ms, int(symbol_state.get("next_start_time") or 0))
+    if cursor > historical_end_ms:
+        symbol_state.update({
+            "status": "complete",
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+            "first_remote_open_time": first_remote_open_time,
+            "target_start_time": target_start_ms,
+        })
+        _save_state(state)
+        return {
+            "symbol": symbol,
+            "interval": INTERVAL,
+            "status": "skipped",
+            "reason": "already_has_required_4h_history",
+            "first_remote_open_time": first_remote_open_time,
+            "target_start_time": target_start_ms,
+        }
 
     pushed = 0
     upserted = 0
     chunks = 0
     errors: list[dict[str, Any]] = []
-    while cursor < now_ms - FOUR_HOURS_MS and chunks < max_chunks:
+    while cursor <= historical_end_ms and chunks < max_chunks:
         try:
             limiter.wait()
             candles = fetch_exchange_klines(getattr(settings, "exchange", "kraken"), settings.kraken_base_url if str(getattr(settings, "exchange", "kraken")).lower() in {"kraken", "kraken_pro"} else settings.kraken_base_url, symbol, INTERVAL, chunk_limit, start_time=cursor)
-            candles = [candle for candle in candles if int(candle.get("open_time", 0)) >= cursor]
+            candles = [
+                candle
+                for candle in candles
+                if cursor <= int(candle.get("open_time", 0)) <= historical_end_ms
+            ]
             if not candles:
-                symbol_state.update({"status": "complete_or_no_more_exchange_data", "next_start_time": cursor, "last_checked_at": datetime.now(timezone.utc).isoformat()})
+                symbol_state.update({"status": "complete_or_no_more_exchange_data", "next_start_time": cursor, "last_checked_at": datetime.now(timezone.utc).isoformat(), "first_remote_open_time": first_remote_open_time, "target_start_time": target_start_ms})
                 _save_state(state)
                 break
             response = client.post_candles(symbol, INTERVAL, candles, source=f"{settings.gateway_id}-backfill-4h-365d")
@@ -97,7 +132,7 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
             chunks += 1
             last_close = max(int(candle["close_time"]) for candle in candles)
             cursor = last_close + 1
-            symbol_state.update({"status": "in_progress", "next_start_time": cursor, "last_close_time_sent": last_close, "last_response": response, "last_sent_at": datetime.now(timezone.utc).isoformat(), "days_target": days})
+            symbol_state.update({"status": "in_progress", "next_start_time": cursor, "last_close_time_sent": last_close, "last_response": response, "last_sent_at": datetime.now(timezone.utc).isoformat(), "days_target": days, "first_remote_open_time": first_remote_open_time, "target_start_time": target_start_ms})
             _save_state(state)
             if post_sleep > 0:
                 time.sleep(post_sleep)
@@ -105,10 +140,10 @@ def backfill_symbol(settings, client: SignalMakerClient, limiter: RateLimiter, s
                 break
         except Exception as exc:
             errors.append({"symbol": symbol, "cursor": cursor, "error": str(exc)})
-            symbol_state.update({"status": "error", "next_start_time": cursor, "last_error": str(exc), "last_error_at": datetime.now(timezone.utc).isoformat()})
+            symbol_state.update({"status": "error", "next_start_time": cursor, "last_error": str(exc), "last_error_at": datetime.now(timezone.utc).isoformat(), "first_remote_open_time": first_remote_open_time, "target_start_time": target_start_ms})
             _save_state(state)
             break
-    return {"symbol": symbol, "interval": INTERVAL, "status": "done" if not errors else "error", "fetched_missing": pushed, "posted": pushed, "upserted": upserted, "pushed": pushed, "chunks": chunks, "next_start_time": cursor, "errors": errors}
+    return {"symbol": symbol, "interval": INTERVAL, "status": "done" if not errors else "error", "fetched_missing": pushed, "posted": pushed, "upserted": upserted, "pushed": pushed, "chunks": chunks, "next_start_time": cursor, "first_remote_open_time": first_remote_open_time, "target_start_time": target_start_ms, "historical_end_time": historical_end_ms, "errors": errors}
 
 
 def run_once(days: int | None = None, max_symbols: int | None = None, max_chunks_per_symbol: int | None = None, enabled_override: bool = False) -> dict[str, Any]:
