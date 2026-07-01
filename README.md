@@ -10,7 +10,6 @@ Run modes:
 ./run.sh backfill     # historical 4h exchange -> remote SignalMaker backfill
 ./run.sh executor     # only remote SignalMaker -> local exchange execution
 ./run.sh local-api    # only local Raspberry Executor monitoring UI/API
-./run.sh all-local    # explicit local API + local pipeline + local executor + scheduler
 ```
 
 
