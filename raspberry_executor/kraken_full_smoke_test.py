@@ -27,12 +27,24 @@ from raspberry_executor.signalmaker_client import SignalMakerClient
 
 
 def _runtime_settings_payload() -> dict[str, Any]:
+    full_runtime_error: Exception | None = None
     try:
         from app.services.runtime_settings import load_runtime_settings
 
         return load_runtime_settings()
     except Exception as exc:
-        return {"_error": str(exc)}
+        full_runtime_error = exc
+
+    try:
+        from raspberry_executor.runtime_db_settings import load_runtime_settings_lightweight
+
+        payload, _meta = load_runtime_settings_lightweight()
+    except Exception as exc:
+        return {"_error": str(exc), "_full_runtime_error": str(full_runtime_error)}
+
+    if isinstance(payload, dict):
+        return {**payload, "_full_runtime_error": str(full_runtime_error)}
+    return {"_error": "invalid_lightweight_runtime_payload", "_full_runtime_error": str(full_runtime_error)}
 
 
 def _value_status(value: Any) -> dict[str, Any]:
