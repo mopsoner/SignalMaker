@@ -21,8 +21,8 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
     assert payload["executor"] == {"execution_exchange": "kraken", "quote_assets": "USDC"}
     assert payload["kraken"] == {
         "kraken_base_url": "https://api.kraken.com",
-        "kraken_api_key": "kraken-key",
-        "kraken_secret_key": "kraken-secret",
+        "kraken_api_key": {"configured": True},
+        "kraken_secret_key": {"configured": True},
     }
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
@@ -129,13 +129,13 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
     assert payload["general"] == {"admin_token": "secret"}
     assert "app_name" not in payload["general"]
     assert payload["executor"]["quote_assets"] == "USDC"
-    assert payload["kraken"]["kraken_api_key"] == "key"
-    assert payload["kraken"]["kraken_secret_key"] == ""
+    assert payload["kraken"]["kraken_api_key"] == {"configured": True}
+    assert payload["kraken"]["kraken_secret_key"] == {"configured": False}
     assert payload["market_data"]["kraken_max_symbols"] == 25
     assert payload["market_data"]["kraken_quote_assets"] == runtime_settings.DEFAULT_SETTINGS["market_data"]["kraken_quote_assets"]
     assert payload["strategy"]["planner_min_score"] == 4
     assert payload["notifications"]["telegram_chat_id"] == "chat-1"
-    assert payload["notifications"]["telegram_secret"] == ""
+    assert payload["notifications"]["telegram_secret"] == {"configured": False}
     assert payload["bot"]["bot_executor_interval_sec"] == 45
     assert payload["live"]["kraken_use_testnet"] is False
     assert payload["live"]["live_reconcile_enabled"] is True
@@ -329,3 +329,86 @@ def test_admin_settings_sources_prefer_canonical_db_over_bootstrap_env(monkeypat
 
     assert payload["settings"]["kraken"]["kraken_base_url"] == "https://db.kraken"
     assert payload["sources"]["kraken"]["kraken_base_url"] == "db"
+
+
+def test_load_admin_settings_masks_sensitive_values(monkeypatch):
+    def fake_runtime_settings(db=None):
+        return {
+            "kraken": {"kraken_api_key": "kraken-key", "kraken_secret_key": "kraken-secret"},
+            "notifications": {"telegram_secret": "telegram-token", "discord_url": "https://discord.test/hook"},
+        }
+
+    monkeypatch.setattr(runtime_settings, "load_runtime_settings", fake_runtime_settings)
+
+    payload = runtime_settings.load_admin_settings()
+
+    assert payload["kraken"]["kraken_api_key"] == {"configured": True}
+    assert payload["kraken"]["kraken_secret_key"] == {"configured": True}
+    assert payload["notifications"]["telegram_secret"] == {"configured": True}
+    assert payload["notifications"]["discord_url"] == {"configured": True}
+    assert "kraken-key" not in str(payload)
+    assert "kraken-secret" not in str(payload)
+    assert "telegram-token" not in str(payload)
+    assert "discord.test" not in str(payload)
+
+
+def test_persist_runtime_settings_keeps_existing_secrets_for_empty_or_masked_payloads(monkeypatch):
+    rows = {
+        ("kraken", "kraken_api_key"): runtime_settings.AppSetting(category="kraken", key="kraken_api_key", value="existing-key"),
+        ("kraken", "kraken_secret_key"): runtime_settings.AppSetting(category="kraken", key="kraken_secret_key", value="existing-secret"),
+        ("notifications", "telegram_secret"): runtime_settings.AppSetting(category="notifications", key="telegram_secret", value="existing-telegram"),
+        ("notifications", "discord_url"): runtime_settings.AppSetting(category="notifications", key="discord_url", value="existing-discord"),
+    }
+    added = []
+
+    class FakeResult:
+        def __init__(self, row=None):
+            self.row = row
+
+        def scalar_one_or_none(self):
+            return self.row
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return list(rows.values()) + added
+
+    class FakeDb:
+        def execute(self, statement):
+            try:
+                criteria = statement.whereclause
+                category = criteria.left.value if criteria.left.name == "category" else criteria.right.value
+                key_clause = criteria.right
+                key = key_clause.right.value if hasattr(key_clause, "right") else None
+                if key is None:
+                    text_statement = str(statement)
+                    return FakeResult()
+                return FakeResult(rows.get((category, key)))
+            except Exception:
+                return FakeResult()
+
+        def add(self, row):
+            added.append(row)
+            rows[(row.category, row.key)] = row
+
+        def commit(self):
+            pass
+
+        def delete(self, row):
+            pass
+
+    monkeypatch.setattr(runtime_settings, "load_runtime_settings", lambda db: {"ok": {}})
+
+    runtime_settings.persist_runtime_settings(
+        FakeDb(),
+        {
+            "kraken": {"kraken_api_key": "", "kraken_secret_key": "********"},
+            "notifications": {"telegram_secret": {"configured": True}, "discord_url": "••••••••"},
+        },
+    )
+
+    assert rows[("kraken", "kraken_api_key")].value == "existing-key"
+    assert rows[("kraken", "kraken_secret_key")].value == "existing-secret"
+    assert rows[("notifications", "telegram_secret")].value == "existing-telegram"
+    assert rows[("notifications", "discord_url")].value == "existing-discord"
