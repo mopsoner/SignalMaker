@@ -8,6 +8,7 @@ from app.models.base import Base
 from raspberry_executor.reset_positions_db import reset_positions_db
 
 PRESERVED_TABLES = {"app_settings", "config", "alembic_version"}
+PRESERVED_APP_SETTING_KEYS = {("kraken", "kraken_api_key"), ("kraken", "kraken_secret_key")}
 PRESERVED_PREFIXES = {"sqlite_"}
 ROOT = Path(__file__).resolve().parents[2]
 LOG_DIRS = (ROOT / "logs", ROOT / ".runtime")
@@ -34,6 +35,34 @@ def _runtime_tables(db: Session) -> list[str]:
         and name not in PRESERVED_TABLES
         and not any(name.startswith(prefix) for prefix in PRESERVED_PREFIXES)
     ]
+
+
+def _reset_app_settings_except_secrets(db: Session) -> dict[str, int | None]:
+    """Delete resettable app settings while preserving Kraken API credentials."""
+    before = _table_count(db, "app_settings")
+    kraken_keys = {key for category, key in PRESERVED_APP_SETTING_KEYS if category == "kraken"}
+    if {"kraken_api_key", "kraken_secret_key"} - kraken_keys:
+        raise RuntimeError("Kraken API secret preserve list is incomplete")
+    db.execute(
+        text(
+            """
+            DELETE FROM app_settings
+            WHERE NOT (
+                category = :kraken_category
+                AND key IN (:api_key, :secret_key)
+            )
+            """
+        ),
+        {
+            "kraken_category": "kraken",
+            "api_key": "kraken_api_key",
+            "secret_key": "kraken_secret_key",
+        },
+    )
+    after = _table_count(db, "app_settings")
+    if before is None or after is None:
+        return {"deleted": None, "preserved": after}
+    return {"deleted": before - after, "preserved": after}
 
 
 def _clear_log_files() -> dict[str, Any]:
@@ -65,7 +94,8 @@ def reset_database_preserving_config(db: Session) -> dict[str, Any]:
     The website reset button is also the operator reset for the Raspberry TUI.
     Clear both the application database runtime tables and the local Raspberry
     SQLite runtime tables so old Last Activity / error events do not reappear.
-    Settings/config tables are preserved; log files are truncated explicitly.
+    Configuration tables are preserved, but resettable app_settings rows are
+    removed so defaults are reloaded; log files are truncated explicitly.
     """
     deleted: dict[str, int | None] = {}
     errors: dict[str, str] = {}
@@ -81,8 +111,21 @@ def reset_database_preserving_config(db: Session) -> dict[str, Any]:
 
     inspector = inspect(db.connection())
     existing_tables = set(inspector.get_table_names())
+    if "app_settings" in existing_tables:
+        try:
+            app_settings_reset = _reset_app_settings_except_secrets(db)
+            deleted["app_settings"] = app_settings_reset["deleted"]
+        except Exception as exc:
+            app_settings_reset = {"deleted": None, "preserved": None}
+            deleted["app_settings"] = None
+            errors["app_settings"] = str(exc)
+    else:
+        app_settings_reset = {"deleted": None, "preserved": None}
+
     for table_name in sorted(PRESERVED_TABLES & existing_tables):
-        preserved[table_name] = _table_count(db, table_name)
+        preserved[table_name] = (
+            app_settings_reset["preserved"] if table_name == "app_settings" else _table_count(db, table_name)
+        )
 
     if errors:
         db.rollback()
@@ -103,7 +146,7 @@ def reset_database_preserving_config(db: Session) -> dict[str, Any]:
 
     return {
         "status": "ok" if not all_errors else "error",
-        "mode": "delete_all_except_settings_and_clear_logs",
+        "mode": "delete_runtime_data_reset_settings_except_api_secrets_and_clear_logs",
         "deleted": deleted,
         "preserved": preserved,
         "raspberry_executor": raspberry_reset,
