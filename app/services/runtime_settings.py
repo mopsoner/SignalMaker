@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # - .env/BaseSettings are bootstrap defaults only and may seed missing app_settings rows.
 # - Raspberry local SQLite settings are legacy fallback input only during migration.
 BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
-    "ADMIN_TOKEN": ("general", "admin_token"),
     "APP_NAME": ("general", "app_name"),
     "APP_ENV": ("general", "app_env"),
     "CORS_ORIGINS": ("general", "cors_origins"),
@@ -118,7 +117,6 @@ APP_SETTINGS_SEED_DEFAULT_ONLY_KEYS: frozenset[tuple[str, str]] = frozenset(
 
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
-        "admin_token": base_settings.admin_token,
         "app_name": base_settings.app_name,
         "app_env": base_settings.app_env,
         "cors_origins": base_settings.cors_origins,
@@ -207,7 +205,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
 }
 
 ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
-    "general": {"ADMIN_TOKEN": "admin_token"},
     "executor": {
         "EXECUTION_EXCHANGE": "execution_exchange",
         "QUOTE_ASSETS": "quote_assets",
@@ -240,7 +237,6 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
         "MOMENTUM_CANDIDATES_LIMIT": "momentum_candidates_limit",
         "MOMENTUM_CANDIDATES_MIN_SCORE": "momentum_candidates_min_score",
     },
-    "admin/security": {"ADMIN_TOKEN": "admin_token"},
 }
 
 
@@ -276,7 +272,6 @@ DEFAULT_SETTINGS_KEY_AUDIT: dict[str, dict[str, str]] = {
 
 LEGACY_READ_ONLY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     {
-        ("admin/security", "ADMIN_TOKEN"),
         ("kraken", "EXECUTION_EXCHANGE"),
         ("kraken", "kraken_rest_base"),
         ("kraken", "KRAKEN_BASE_URL"),
@@ -286,8 +281,16 @@ LEGACY_READ_ONLY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("general", "admin_token"),
+        ("admin/security", "ADMIN_TOKEN"),
+    }
+)
+
 REMOVABLE_LEGACY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     LEGACY_READ_ONLY_APP_SETTING_KEYS
+    | OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS
     | {
         (section, display_key)
         for section, aliases in ADMIN_FIELD_ALIASES.items()
@@ -297,7 +300,6 @@ REMOVABLE_LEGACY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
 
 CRITICAL_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
     {
-        ("general", "admin_token"),
         ("executor", "execution_exchange"),
         ("executor", "quote_assets"),
         ("kraken", "kraken_base_url"),
@@ -679,7 +681,6 @@ def _is_secret_placeholder(value: Any) -> bool:
     return False
 
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
-    "general": ("admin_token",),
     "executor": ("execution_exchange", "quote_assets"),
     "kraken": ("kraken_base_url", "kraken_api_key", "kraken_secret_key"),
     "market_data": tuple(DEFAULT_SETTINGS["market_data"]),
@@ -770,6 +771,8 @@ def load_runtime_settings(db: Session | None = None, *, include_sources: bool = 
         seen_canonical: set[tuple[str, str]] = set()
         for row in rows:
             original = (row.category, row.key)
+            if original in OBSOLETE_ADMIN_TOKEN_APP_SETTING_KEYS:
+                continue
             category, key = _canonical_admin_field(row.category, row.key)
             target = (category, key)
             is_alias = original != target or original in LEGACY_ADMIN_SETTING_ALIASES

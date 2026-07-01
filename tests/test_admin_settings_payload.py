@@ -4,7 +4,7 @@ from app.services import runtime_settings
 def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
     def fake_runtime_settings(db=None):
         return {
-            "general": {"admin_token": "token"},
+            "general": {"app_name": "SignalMaker"},
             "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
             "kraken": {"kraken_api_key": "kraken-key", "kraken_secret_key": "kraken-secret"},
             "kraken": {
@@ -42,7 +42,8 @@ def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
                 FakeRow("kraken", "EXECUTION_EXCHANGE", "kraken"),
                 FakeRow("kraken", "KRAKEN_BASE_URL", "https://kraken.test"),
                 FakeRow("kraken", "KRAKEN_API_KEY", "kraken-alias-key"),
-                FakeRow("admin/security", "ADMIN_TOKEN", "admin-alias-token"),
+                FakeRow("general", "admin_token", "ignored-token"),
+                FakeRow("admin/security", "ADMIN_TOKEN", "ignored-token"),
             ]
 
     class FakeResult:
@@ -58,7 +59,7 @@ def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
     assert payload["executor"]["execution_exchange"] == "kraken"
     assert payload["kraken"]["kraken_base_url"] == "https://kraken.test"
     assert payload["kraken"]["kraken_api_key"] == "kraken-alias-key"
-    assert payload["general"]["admin_token"] == "admin-alias-token"
+    assert "admin_token" not in payload.get("general", {})
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
     assert "KRAKEN_API_KEY" not in payload["kraken"]
@@ -108,7 +109,7 @@ def test_legacy_alias_rows_do_not_override_canonical_values():
 def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkeypatch):
     def fake_runtime_settings(db=None):
         return {
-            "general": {"app_name": "SignalMaker", "admin_token": "secret"},
+            "general": {"app_name": "SignalMaker"},
             "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
             "kraken": {"kraken_base_url": "https://api.kraken.com", "kraken_api_key": "key", "kraken_secret_key": None},
             "market_data": {"kraken_max_symbols": 25},
@@ -126,8 +127,7 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
     for section, keys in runtime_settings.ADMIN_EDITABLE_FIELDS.items():
         assert set(payload[section]) == set(keys)
 
-    assert payload["general"] == {"admin_token": "secret"}
-    assert "app_name" not in payload["general"]
+    assert "general" not in payload or payload["general"] == {}
     assert payload["executor"]["quote_assets"] == "USDC"
     assert payload["kraken"]["kraken_api_key"] == {"configured": True}
     assert payload["kraken"]["kraken_secret_key"] == {"configured": False}

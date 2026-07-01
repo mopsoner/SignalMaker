@@ -4,17 +4,16 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SignalMaker Raspberry Executor - Settings / Logs</title>
-    <meta name="description" content="Réglages, token operator, workers, services, diagnostics et logs executor.">
+    <meta name="description" content="Réglages, workers, services, diagnostics et logs executor.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <h1>Settings / Logs</h1>
-      <p>Réglages runtime, token operator, workers, services, diagnostics et logs.</p>
+      <p>Réglages runtime, workers, services, diagnostics et logs.</p>
       <nav data-main-nav></nav>
     </header>
     <main>
-      <section class="card"><h2>Token admin / operator key</h2><input id="operator-key-input" type="password" autocomplete="current-password" placeholder="Coller le token admin"><button data-action="save-operator-token">Sauvegarder token local</button><p id="operator-key-result" class="muted"></p></section>
       <section class="card"><h2>Settings runtime</h2><p class="muted">Après migration, la base <code>app_settings</code> est prioritaire. Modifier <code>.env</code> ne change pas une valeur déjà enregistrée en base.</p><datalist id="settings-suggestions"><option value="kraken"><option value="dry-run"><option value="live"><option value="BTCUSDT"><option value="ETHUSDT"><option value="https://"></datalist><div id="admin-settings-content" class="muted">Chargement...</div><p id="admin-save-result" class="muted"></p><button data-action="save-admin-settings">Sauvegarder</button> <button data-action="refresh">Rafraîchir</button></section>
       <section class="card"><h2>API / executor</h2><p id="health" class="muted">Chargement...</p><button data-action="run-executor">Run executor une fois</button><p id="executor-run-result" class="muted"></p></section>
       <section class="card"><h2>Workers contrôlables</h2><div id="ops-action-result" class="muted"></div><div id="workers-content" class="muted">Chargement...</div></section>
