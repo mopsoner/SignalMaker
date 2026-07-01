@@ -14,6 +14,7 @@
   function asRows(p) { if (Array.isArray(p)) return p; if (!p) return []; if (Array.isArray(p.rows)) return p.rows; if (Array.isArray(p.candidates)) return p.candidates; if (Array.isArray(p.items)) return p.items; if (Array.isArray(p.data)) return p.data; return Object.keys(p).map(function (k) { var v = p[k] || {}; if (typeof v === 'object' && !Array.isArray(v)) { v.name = v.name || k; return v; } return { name:k, value:v }; }); }
   function table(rows, columns) { rows = rows || []; if (!rows.length) return '<p class="muted">Aucune donnée.</p>'; return '<div class="scroll"><table><thead><tr>' + columns.map(function (c) { return '<th>'+text(c.label)+'</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + columns.map(function (c) { var v = typeof c.value === 'function' ? c.value(r) : r[c.key]; return '<td>'+(c.html ? String(v) : text(v))+'</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>'; }
   function badge(v) { var s=String(v); var cls = (v === true || ['ok','open','running','executed','filled','live'].indexOf(s.toLowerCase()) >= 0) ? 'ok' : (v === false || ['error','failed','stopped'].indexOf(s.toLowerCase()) >= 0 ? 'bad' : 'warn'); return '<span class="badge '+cls+'">'+text(v)+'</span>'; }
+  function toBool(value) { if (value === true || value === false) return value; if (typeof value === 'string') { var s = value.trim().toLowerCase(); if (s === 'true' || s === '1') return true; if (s === 'false' || s === '0') return false; } return value; }
   function countBy(rows, key) { return rows.reduce(function (a, r) { var v = r[key] || '-'; a[v] = (a[v] || 0) + 1; return a; }, {}); }
   function statCards(items) { return '<div class="stats">' + items.map(function (i) { return '<div class="stat"><strong>'+text(i.value)+'</strong><span>'+text(i.label)+'</span></div>'; }).join('') + '</div>'; }
   function byHour(row) { var d = new Date(row.received_at || row.created_at || row.updated_at || Date.now()); if (isNaN(d.getTime())) return '-'; d.setMinutes(0,0,0); return d.toLocaleString(); }
@@ -38,12 +39,16 @@
   function hasPath(obj, key){ var parts=key.split('.'), v=obj; for(var i=0;i<parts.length && v;i++) v=v[parts[i]]; return v!==undefined && v!==null && v!==''; }
   function renderSettingsSummary(p){
     if(!document.getElementById('device-settings-summary')) return;
+    var liveTradingEnabled = toBool(pick(p,['live.live_trading_enabled']));
     var items = [
       {label:'SignalMaker distant',value:pick(p,['momentum.signalmaker_base_url'])},
       {label:'Exchange',value:pick(p,['executor.execution_exchange'])},
-      {label:'Mode',value:pick(p,['live.live_trading_enabled'])===true?'live':'dry-run'}
+      {label:'Mode',value:liveTradingEnabled===true?'live':'dry-run'}
     ];
-    if(hasPath(p,'market_data.kraken_collector_enabled')) items.push({label:'Candle feed',value:pick(p,['market_data.kraken_collector_enabled'])});
+    if(hasPath(p,'market_data.kraken_collector_enabled')) {
+      var candleFeedEnabled = toBool(pick(p,['market_data.kraken_collector_enabled']));
+      items.push({label:'Candle feed',value:candleFeedEnabled===true?'enabled':(candleFeedEnabled===false?'disabled':candleFeedEnabled)});
+    }
     setHtml('device-settings-summary', statCards(items));
   }
 

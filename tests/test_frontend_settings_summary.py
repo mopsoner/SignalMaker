@@ -48,5 +48,19 @@ def test_settings_summary_uses_admin_editable_paths() -> None:
     }.isdisjoint(paths)
 
 
+def test_settings_summary_normalizes_string_booleans() -> None:
+    source = Path("frontend/app.js").read_text()
+    match = SUMMARY_FUNCTION_RE.search(source)
+    assert match, "renderSettingsSummary() should be present and followed by loadHealth()."
+    body = match.group("body")
+
+    assert "function toBool(value)" in source
+    assert "s === 'true' || s === '1'" in source
+    assert "s === 'false' || s === '0'" in source
+    assert "toBool(pick(p,['live.live_trading_enabled']))" in body
+    assert "toBool(pick(p,['market_data.kraken_collector_enabled']))" in body
+    assert "candleFeedEnabled===true?'enabled':(candleFeedEnabled===false?'disabled':candleFeedEnabled)" in body
+
+
 def test_versioned_static_build_matches_frontend_source() -> None:
     assert Path("frontend/dist/app.js").read_text() == Path("frontend/app.js").read_text()
