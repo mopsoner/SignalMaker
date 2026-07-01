@@ -13,9 +13,8 @@ from app.services.runtime_settings import load_runtime_settings
 
 logger = logging.getLogger(__name__)
 
-KRAKEN_WEIGHT_LIMIT = 1200
-WEIGHT_SAFETY_THRESHOLD = 1000
-KLINES_WEIGHT = 2
+KRAKEN_REQUEST_LIMIT = 60
+REQUEST_SAFETY_THRESHOLD = 55
 INTERVAL_MS = {
     "1m": 60_000,
     "5m": 300_000,
@@ -28,30 +27,40 @@ DUE_BASED_INTERVALS = {"1h", "4h"}
 
 
 class RateLimiter:
-    """Tracks Kraken rolling-minute weight and pauses when approaching the limit."""
+    """Small neutral request limiter for Kraken public REST calls.
+
+    Kraken public endpoints do not expose Binance-style minute weight headers.
+    We therefore count local requests in a rolling minute and still honor HTTP
+    429 ``Retry-After`` when Kraken returns one.
+    """
 
     def __init__(self) -> None:
-        self._used_weight: int = 0
+        self._request_count: int = 0
         self._window_start: float = time.monotonic()
 
-    def record(self, used_weight: int) -> None:
+    def record_request(self) -> None:
         now = time.monotonic()
         if now - self._window_start >= 60:
-            self._used_weight = 0
+            self._request_count = 0
             self._window_start = now
-        self._used_weight = used_weight
+        self._request_count += 1
 
     def wait_if_needed(self) -> None:
-        if self._used_weight >= WEIGHT_SAFETY_THRESHOLD:
-            elapsed = time.monotonic() - self._window_start
+        now = time.monotonic()
+        if now - self._window_start >= 60:
+            self._request_count = 0
+            self._window_start = now
+            return
+        if self._request_count >= REQUEST_SAFETY_THRESHOLD:
+            elapsed = now - self._window_start
             wait = max(0.0, 61.0 - elapsed)
             if wait > 0:
                 logger.warning(
-                    "Kraken weight %d/%d — pause %.1fs avant reset",
-                    self._used_weight, KRAKEN_WEIGHT_LIMIT, wait,
+                    "Kraken request throttle %d/%d — pause %.1fs avant reset",
+                    self._request_count, KRAKEN_REQUEST_LIMIT, wait,
                 )
                 time.sleep(wait)
-                self._used_weight = 0
+                self._request_count = 0
                 self._window_start = time.monotonic()
 
 
@@ -78,6 +87,8 @@ class CollectorService:
         if not self.collector_enabled:
             raise RuntimeError('Kraken collector is disabled; use POST /api/v1/market-data/candles to ingest candles')
         self._rate.wait_if_needed()
+        if path.startswith('/api/' + 'v3/'):
+            raise RuntimeError(f"Binance endpoint is not supported by Kraken collector: {path}")
         url = f"{self.base_url}{path}"
         for attempt in range(3):
             try:
@@ -88,9 +99,7 @@ class CollectorService:
                     continue
                 raise
 
-            used = res.headers.get('X-MBX-USED-WEIGHT-1M')
-            if used is not None:
-                self._rate.record(int(used))
+            self._rate.record_request()
 
             if res.status_code == 418:
                 retry_after = int(res.headers.get('Retry-After', 120))
@@ -112,7 +121,10 @@ class CollectorService:
                 continue
 
             res.raise_for_status()
-            return res.json()
+            data = res.json()
+            if isinstance(data, dict) and data.get('error'):
+                raise RuntimeError(f"Kraken GET {path} failed errors={data.get('error')}")
+            return data
 
         raise RuntimeError(f"Kraken: échec après 3 tentatives sur {path}")
 
@@ -133,6 +145,38 @@ class CollectorService:
             if item.strip()
         ]
 
+    @staticmethod
+    def _asset_name(asset: str) -> str:
+        value = str(asset or '').upper()
+        if value in {'XBT', 'XXBT'}:
+            return 'BTC'
+        return value.lstrip('XZ')
+
+    @staticmethod
+    def _symbol_name(base_asset: str, quote_asset: str) -> str:
+        return f"{base_asset}{quote_asset}".upper().replace('/', '')
+
+    @staticmethod
+    def _kraken_status_allowed(row_status: str, configured_status: str) -> bool:
+        wanted = str(configured_status or '').upper()
+        actual = str(row_status or 'online').lower()
+        if wanted in {'', 'TRADING', 'ONLINE'}:
+            return actual == 'online'
+        return actual == wanted.lower()
+
+    @staticmethod
+    def _kraken_interval_minutes(interval: str) -> int:
+        value = str(interval).strip().lower()
+        if value.endswith('m'):
+            return int(value[:-1])
+        if value.endswith('h'):
+            return int(value[:-1]) * 60
+        if value.endswith('d'):
+            return int(value[:-1]) * 1440
+        if value.endswith('w'):
+            return int(value[:-1]) * 10080
+        return int(value)
+
     def discover_symbols(self, limit: int | None = None) -> list[str]:
         if not self.collector_enabled:
             symbols = self._stored_symbols(limit=limit)
@@ -142,24 +186,28 @@ class CollectorService:
             )
             return symbols
 
-        info = self._get('/api/v3/exchangeInfo')
+        info = self._get('/0/public/AssetPairs', {'assetVersion': 1})
         allowed_quotes = self._runtime_csv('kraken_quote_assets')
         excluded_bases = set(self._runtime_csv('kraken_excluded_base_assets'))
         status_name = self.runtime.get('market_data', self.runtime['kraken'])['kraken_symbol_status']
         max_symbols = int(limit or self.runtime.get('market_data', self.runtime['kraken'])['kraken_max_symbols'])
 
         symbols: list[str] = []
-        for row in info.get('symbols', []):
-            symbol = str(row.get('symbol', '')).upper()
-            base_asset = str(row.get('baseAsset', '')).upper()
-            quote_asset = str(row.get('quoteAsset', '')).upper()
-            if row.get('status') != status_name:
+        for key, row in (info.get('result') or {}).items():
+            base_asset = self._asset_name(str(row.get('base') or ''))
+            quote_asset = self._asset_name(str(row.get('quote') or ''))
+            if not base_asset or not quote_asset:
+                wsname = str(row.get('wsname') or '')
+                if '/' in wsname:
+                    base_asset, quote_asset = [self._asset_name(part) for part in wsname.split('/', 1)]
+            symbol = self._symbol_name(base_asset, quote_asset)
+            if not self._kraken_status_allowed(str(row.get('status') or 'online'), status_name):
                 continue
             if quote_asset not in allowed_quotes:
                 continue
             if base_asset in excluded_bases:
                 continue
-            if not row.get('isSpotTradingAllowed', False):
+            if str(key).endswith('.d') or row.get('darkpool') is True:
                 continue
             symbols.append(symbol)
 
@@ -175,28 +223,42 @@ class CollectorService:
             return []
         if limit <= 0:
             return []
-        params: dict[str, Any] = {'symbol': symbol, 'interval': interval, 'limit': limit}
+        interval_minutes = self._kraken_interval_minutes(interval)
+        params: dict[str, Any] = {'pair': symbol.upper(), 'interval': interval_minutes}
         if start_time is not None:
-            params['startTime'] = start_time
-        raw = self._get('/api/v3/klines', params)
+            params['since'] = int(start_time) // 1000
+        raw = self._get('/0/public/OHLC', params)
+        result = raw.get('result') or {}
+        rows: list[Any] = []
+        for key, value in result.items():
+            if key != 'last':
+                rows = value or []
+                break
+        rows = rows[-limit:]
+        width_ms = interval_minutes * 60 * 1000
         now_ms = int(time.time() * 1000)
-        return [
-            {
-                'open_time': int(r[0]),
+        candles = []
+        for r in rows:
+            open_time = int(float(r[0]) * 1000)
+            close_time = open_time + width_ms - 1
+            close = float(r[4])
+            volume = float(r[6])
+            if close_time > now_ms:
+                continue
+            candles.append({
+                'open_time': open_time,
                 'open': float(r[1]),
                 'high': float(r[2]),
                 'low': float(r[3]),
-                'close': float(r[4]),
-                'volume': float(r[5]),
-                'close_time': int(r[6]),
-                'quote_volume': float(r[7]),
-                'number_of_trades': int(r[8]),
-                'taker_buy_base_volume': float(r[9]),
-                'taker_buy_quote_volume': float(r[10]),
-            }
-            for r in raw
-            if int(r[6]) <= now_ms
-        ]
+                'close': close,
+                'volume': volume,
+                'close_time': close_time,
+                'quote_volume': volume * close,
+                'number_of_trades': int(r[7]),
+                'taker_buy_base_volume': 0.0,
+                'taker_buy_quote_volume': 0.0,
+            })
+        return candles
 
     def _full_lookback(self, interval: str) -> int:
         return int(self.runtime.get('market_data', self.runtime['kraken'])[f'kraken_lookback_{interval}'])
