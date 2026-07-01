@@ -64,10 +64,6 @@ def _runtime_overrides() -> dict[str, str]:
     executor = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
     if kraken.get("kraken_base_url"):
         overrides["KRAKEN_BASE_URL"] = str(kraken["kraken_base_url"])
-    if kraken.get("kraken_api_key"):
-        overrides["KRAKEN_API_KEY"] = str(kraken["kraken_api_key"])
-    if kraken.get("kraken_secret_key"):
-        overrides["KRAKEN_SECRET_KEY"] = str(kraken["kraken_secret_key"])
     if executor.get("execution_exchange"):
         overrides["EXECUTION_EXCHANGE"] = str(executor["execution_exchange"])
     if executor.get("quote_assets"):
@@ -78,9 +74,15 @@ def _runtime_overrides() -> dict[str, str]:
 
 def load_settings() -> Settings:
     # app_settings, loaded through _runtime_overrides(), are the runtime source
-    # of truth. The local .env is bootstrap/fallback only for Raspberry-only
-    # fields or when the API database is not reachable during startup.
-    values = {**read_env(), **_runtime_overrides()}
+    # of truth for non-secret runtime knobs. Kraken credentials must remain
+    # local-only and are loaded exclusively by read_env() from .env.
+    env_values = read_env()
+    runtime_values = {
+        key: value
+        for key, value in _runtime_overrides().items()
+        if key not in {"KRAKEN_API_KEY", "KRAKEN_SECRET_KEY"}
+    }
+    values = {**env_values, **runtime_values}
     quote_assets = _csv(values.get("QUOTE_ASSETS", "USD,USDC"))
     return Settings(
         signalmaker_base_url=str(values.get("SIGNALMAKER_BASE_URL", "")).rstrip("/"),

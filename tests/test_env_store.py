@@ -54,3 +54,60 @@ def test_migrate_env_to_minimal_preserves_supported_and_maps_quote_alias(tmp_pat
     assert "EXECUTOR_DASHBOARD_PORT" not in text
     assert "CANDLE_FEED_QUOTES" not in text
     assert env_store.read_env()["QUOTE_ASSETS"] == "EUR,USD"
+
+
+def test_runtime_overrides_do_not_include_kraken_credentials(monkeypatch):
+    import sys
+    import types
+
+    runtime_settings = types.ModuleType("app.services.runtime_settings")
+    runtime_settings.load_runtime_settings = lambda: {
+        "kraken": {
+            "kraken_base_url": "https://runtime.kraken.test",
+            "kraken_api_key": "runtime-key",
+            "kraken_secret_key": "runtime-secret",
+        },
+        "executor": {"execution_exchange": "kraken_pro", "quote_assets": ["eur", "usd"]},
+    }
+    monkeypatch.setitem(sys.modules, "app.services.runtime_settings", runtime_settings)
+
+    overrides = config._runtime_overrides()
+
+    assert overrides["KRAKEN_BASE_URL"] == "https://runtime.kraken.test"
+    assert overrides["EXECUTION_EXCHANGE"] == "kraken_pro"
+    assert overrides["QUOTE_ASSETS"] == "eur,usd"
+    assert "KRAKEN_API_KEY" not in overrides
+    assert "KRAKEN_SECRET_KEY" not in overrides
+
+
+def test_load_settings_keeps_kraken_credentials_from_read_env(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "read_env",
+        lambda: {
+            "KRAKEN_API_KEY": "env-key",
+            "KRAKEN_SECRET_KEY": "env-secret",
+            "KRAKEN_BASE_URL": "https://env.kraken.test",
+            "EXECUTION_EXCHANGE": "kraken",
+            "QUOTE_ASSETS": "USD,USDC",
+        },
+    )
+    monkeypatch.setattr(
+        config,
+        "_runtime_overrides",
+        lambda: {
+            "KRAKEN_API_KEY": "runtime-key",
+            "KRAKEN_SECRET_KEY": "runtime-secret",
+            "KRAKEN_BASE_URL": "https://runtime.kraken.test",
+            "EXECUTION_EXCHANGE": "kraken_pro",
+            "QUOTE_ASSETS": "EUR,USD",
+        },
+    )
+
+    settings = config.load_settings()
+
+    assert settings.kraken_api_key == "env-key"
+    assert settings.kraken_secret_key == "env-secret"
+    assert settings.kraken_base_url == "https://runtime.kraken.test"
+    assert settings.exchange == "kraken_pro"
+    assert settings.quote_assets == ["EUR", "USD"]
