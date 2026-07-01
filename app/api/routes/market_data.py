@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -14,8 +14,17 @@ def candle_summary(symbol: str | None = Query(default=None), db: Session = Depen
 
 
 @router.get("/candles", response_model=list[MarketCandleRead])
-def list_candles(symbol: str | None = Query(default=None), interval: str | None = Query(default=None), limit: int = Query(default=200, ge=1, le=2000), latest: bool = Query(default=False), db: Session = Depends(get_db)) -> list[MarketCandleRead]:
-    return MarketDataService(db).list_candles(symbol=symbol, interval=interval, limit=limit, latest=latest)
+def list_candles(
+    symbol: str | None = Query(default=None),
+    interval: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=2000),
+    latest: bool = Query(default=False),
+    first: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> list[MarketCandleRead]:
+    if latest and first:
+        raise HTTPException(status_code=400, detail="latest and first cannot both be true")
+    return MarketDataService(db).list_candles(symbol=symbol, interval=interval, limit=limit, latest=latest, first=first)
 
 
 @router.post("/candles", response_model=CandleIngestResponse)

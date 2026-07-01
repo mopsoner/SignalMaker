@@ -45,8 +45,16 @@ class MarketDataService:
             stmt = stmt.limit(limit)
         return [str(symbol).upper() for symbol in self.db.scalars(stmt).all()]
 
-    def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
-        if latest:
+    def list_candles(
+        self,
+        *,
+        symbol: str | None = None,
+        interval: str | None = None,
+        limit: int = 200,
+        latest: bool = False,
+        first: bool = False,
+    ) -> list[MarketCandle]:
+        if latest or first:
             filters = []
             if symbol:
                 filters.append(MarketCandle.symbol == symbol.upper())
@@ -55,7 +63,7 @@ class MarketDataService:
 
             row_number = func.row_number().over(
                 partition_by=(MarketCandle.symbol, MarketCandle.interval),
-                order_by=MarketCandle.close_time.desc(),
+                order_by=MarketCandle.close_time.desc() if latest else MarketCandle.open_time.asc(),
             ).label("row_number")
             ranked = select(MarketCandle, row_number)
             if filters:
