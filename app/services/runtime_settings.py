@@ -10,6 +10,45 @@ from app.core.config import settings as base_settings
 from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
 
+
+# Canonical runtime source-of-truth policy:
+# - app_settings rows loaded by this module are authoritative for API/admin UI runtime settings.
+# - .env/BaseSettings are bootstrap defaults only and may seed missing app_settings rows.
+# - Raspberry local SQLite settings are legacy fallback input only during migration.
+BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
+    "ADMIN_TOKEN": ("general", "admin_token"),
+    "APP_NAME": ("general", "app_name"),
+    "APP_ENV": ("general", "app_env"),
+    "CORS_ORIGINS": ("general", "cors_origins"),
+    "CREATE_TABLES_ON_BOOT": ("general", "create_tables_on_boot"),
+    "EXECUTION_EXCHANGE": ("executor", "execution_exchange"),
+    "QUOTE_ASSETS": ("executor", "quote_assets"),
+    "KRAKEN_QUOTE_ASSETS": ("executor", "quote_assets"),
+    "KRAKEN_BASE_URL": ("kraken", "kraken_base_url"),
+    "KRAKEN_REST_BASE": ("kraken", "kraken_base_url"),
+    "KRAKEN_API_KEY": ("kraken", "kraken_api_key"),
+    "KRAKEN_SECRET_KEY": ("kraken", "kraken_secret_key"),
+    "TELEGRAM_BOT_TOKEN": ("notifications", "telegram_secret"),
+    "TELEGRAM_CHAT_ID": ("notifications", "telegram_chat_id"),
+    "DISCORD_WEBHOOK_URL": ("notifications", "discord_url"),
+    "LIVE_TRADING_ENABLED": ("live", "live_trading_enabled"),
+    "KRAKEN_USE_TESTNET": ("live", "kraken_use_testnet"),
+    "LIVE_MAX_OPEN_POSITIONS": ("live", "live_max_open_positions"),
+    "LIVE_MAX_NOTIONAL_PER_TRADE": ("live", "live_max_notional_per_trade"),
+    "SIGNALMAKER_BASE_URL": ("momentum", "signalmaker_base_url"),
+    "MOMENTUM_CANDIDATES_SYNC_ENABLED": ("momentum", "momentum_candidates_sync_enabled"),
+    "MOMENTUM_CANDIDATES_LIMIT": ("momentum", "momentum_candidates_limit"),
+    "MOMENTUM_CANDIDATES_MIN_SCORE": ("momentum", "momentum_candidates_min_score"),
+}
+
+LEGACY_RASPBERRY_SETTING_ALIASES: dict[str, tuple[str, str]] = {
+    **BOOTSTRAP_ENV_ALIASES,
+    "ALLOWED_SYMBOLS": ("executor", "quote_assets"),
+    "EXECUTION_QUOTE_ASSET": ("executor", "quote_assets"),
+    "CANDLE_FEED_QUOTES": ("executor", "quote_assets"),
+    "CANDLE_FEED_QUOTE_ASSETS": ("executor", "quote_assets"),
+}
+
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "general": {
         "admin_token": base_settings.admin_token,
@@ -185,6 +224,62 @@ def _migrate_legacy_admin_setting_rows(db: Session, rows: list[AppSetting]) -> l
     return rows
 
 
+def _legacy_bootstrap_values() -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    try:
+        from raspberry_executor.env_store import ENV_PATH
+
+        if ENV_PATH.exists():
+            for raw in ENV_PATH.read_text().splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    except Exception:
+        pass
+    values.update({key: os.environ[key] for key in LEGACY_RASPBERRY_SETTING_ALIASES if key in os.environ})
+    try:
+        from raspberry_executor.sqlite_db import DB_PATH
+        from raspberry_executor.settings_store import read_settings
+
+        if DB_PATH.exists():
+            values.update(read_settings())
+    except Exception:
+        pass
+    return values
+
+
+def migrate_bootstrap_settings_to_app_settings(db: Session, rows: list[AppSetting]) -> list[AppSetting]:
+    """Copy useful legacy .env/SQLite settings into canonical app_settings rows.
+
+    This is intentionally non-destructive: canonical app_settings values always win.
+    The bootstrap stores are read only to fill missing or empty canonical rows before
+    they can be fully retired from runtime writes.
+    """
+    by_location = {(row.category, row.key): row for row in rows}
+    bootstrap_values = _legacy_bootstrap_values()
+    changed = False
+    for source_key, target in LEGACY_RASPBERRY_SETTING_ALIASES.items():
+        source_value = bootstrap_values.get(source_key)
+        if not _has_value(source_value):
+            continue
+        target_row = by_location.get(target)
+        if target_row is None:
+            target_row = AppSetting(category=target[0], key=target[1], value=source_value)
+            db.add(target_row)
+            by_location[target] = target_row
+            rows.append(target_row)
+            changed = True
+        elif not _has_value(target_row.value):
+            target_row.value = source_value
+            changed = True
+    if changed:
+        db.commit()
+        rows = db.execute(select(AppSetting)).scalars().all()
+    return rows
+
+
 def _apply_legacy_admin_setting_locations(payload: dict[str, dict[str, Any]]) -> None:
     """Keep old persisted admin rows working after splitting executor/market data settings."""
     kraken = payload.setdefault("kraken", {})
@@ -307,6 +402,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         rows = db.execute(select(AppSetting)).scalars().all()
         if all(hasattr(db, attr) for attr in ("add", "delete", "commit")):
             rows = _migrate_legacy_admin_setting_rows(db, rows)
+            rows = migrate_bootstrap_settings_to_app_settings(db, rows)
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
         seen_canonical: set[tuple[str, str]] = set()
         for row in rows:

@@ -37,13 +37,11 @@ def _apply_dry_run_default_false_once(values: dict[str, str]) -> tuple[dict[str,
 
 
 def bootstrap_settings() -> dict:
-    """Keep local .env and SQLite settings in sync.
+    """Compatibility bootstrap for the deprecated local settings table.
 
-    Rules:
-    - If SQLite settings already exist, they restore .env at startup.
-    - If SQLite settings is empty, current .env seeds the settings table.
-    - DRY_RUN is migrated once to false because live trading is now the default.
-    - Admin saves should write both .env and SQLite settings.
+    Runtime settings are now canonical in app_settings. This function only keeps
+    older Raspberry installs bootable long enough for their local .env/SQLite
+    values to be migrated into app_settings by app.services.runtime_settings.
     """
     env_values = read_env()
     stored_values = read_settings()

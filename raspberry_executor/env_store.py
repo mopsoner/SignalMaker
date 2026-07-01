@@ -4,6 +4,9 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 EXAMPLE_PATH = ROOT / ".env.raspberry.example"
 
+# Bootstrap defaults for the Raspberry process. Admin/runtime-managed values
+# should be migrated to app_settings and read through the API/runtime settings;
+# this file remains only as startup fallback and for Raspberry-local fields.
 DEFAULTS = {
     "SIGNALMAKER_BASE_URL": "https://mysginalmaker.replit.app",
     "GATEWAY_ID": "raspberry-fr-1",
