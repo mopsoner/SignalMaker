@@ -63,48 +63,32 @@ class MarketDataService:
             stmt = stmt.limit(limit)
         return [str(symbol).upper() for symbol in self.db.scalars(stmt).all()]
 
-    def list_candles(
-        self,
-        *,
-        symbol: str | None = None,
-        interval: str | None = None,
-        limit: int = 200,
-        latest: bool = False,
-        first: bool = False,
-    ) -> list[MarketCandle]:
-        filters = []
-        if symbol:
-            filters.append(MarketCandle.symbol == symbol.upper())
-        if interval:
-            filters.append(MarketCandle.interval == interval)
-
-        if latest or first:
-            order_column = MarketCandle.open_time.asc() if first else MarketCandle.close_time.desc()
-            ranked = (
-                select(
-                    MarketCandle.candle_id,
-                    func.row_number()
-                    .over(
-                        partition_by=(MarketCandle.symbol, MarketCandle.interval),
-                        order_by=order_column,
-                    )
-                    .label("rank"),
-                )
-                .where(*filters)
-                .subquery()
-            )
-            stmt = (
-                select(MarketCandle)
-                .join(ranked, MarketCandle.candle_id == ranked.c.candle_id)
-                .where(ranked.c.rank == 1)
-                .order_by(MarketCandle.symbol, MarketCandle.interval)
-                .limit(limit)
-            )
-            return list(self.db.scalars(stmt).all())
+    def list_candles(self, *, symbol: str | None = None, interval: str | None = None, limit: int = 200, latest: bool = False) -> list[MarketCandle]:
+        if latest:
+            filters = "WHERE 1=1"
+            params: dict = {}
+            if symbol:
+                filters += " AND symbol = :symbol"
+                params["symbol"] = symbol.upper()
+            if interval:
+                filters += " AND interval = :interval"
+                params["interval"] = interval
+            sql = text(f"""
+                SELECT DISTINCT ON (symbol, interval) *
+                FROM market_candles
+                {filters}
+                ORDER BY symbol, interval, ingested_at DESC
+                LIMIT :limit
+            """)
+            params["limit"] = limit
+            rows = self.db.execute(sql, params).mappings().all()
+            return [MarketCandle(**dict(r)) for r in rows]
 
         stmt = select(MarketCandle)
-        if filters:
-            stmt = stmt.where(*filters)
+        if symbol:
+            stmt = stmt.where(MarketCandle.symbol == symbol.upper())
+        if interval:
+            stmt = stmt.where(MarketCandle.interval == interval)
         stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
