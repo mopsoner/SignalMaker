@@ -178,6 +178,40 @@ def test_migrate_bootstrap_settings_to_app_settings_fills_missing_canonical_rows
     assert values[("executor", "quote_assets")] == "USD,EUR"
 
 
+def test_bootstrap_env_aliases_cover_runtime_default_fields():
+    expected_aliases = {
+        "KRAKEN_COLLECTOR_ENABLED": ("market_data", "kraken_collector_enabled"),
+        "KRAKEN_SYMBOL_STATUS": ("market_data", "kraken_symbol_status"),
+        "KRAKEN_MAX_SYMBOLS": ("market_data", "kraken_max_symbols"),
+        "KRAKEN_COLLECT_MAX_WORKERS": ("market_data", "kraken_collect_max_workers"),
+        "KRAKEN_INCREMENTAL_FETCH_ENABLED": ("market_data", "kraken_incremental_fetch_enabled"),
+        "KRAKEN_INCREMENTAL_MIN_1M": ("market_data", "kraken_incremental_min_1m"),
+        "KRAKEN_LOOKBACK_4H": ("market_data", "kraken_lookback_4h"),
+        "LIVE_REQUIRE_TP_SL": ("live", "live_require_tp_sl"),
+        "LIVE_RECONCILE_ENABLED": ("live", "live_reconcile_enabled"),
+        "MOMENTUM_CANDIDATES_MIN_RR": ("momentum", "momentum_candidates_min_rr"),
+        "MOMENTUM_CANDIDATES_REQUIRE_WYCKOFF_CONTEXT": (
+            "momentum",
+            "momentum_candidates_require_wyckoff_context",
+        ),
+        "MOMENTUM_CANDIDATES_HTTP_TIMEOUT_SEC": ("momentum", "momentum_candidates_http_timeout_sec"),
+        "MOMENTUM_CANDIDATES_SOURCE_PATH": ("momentum", "momentum_candidates_source_path"),
+        "MOMENTUM_CANDIDATES_TARGET_PCT": ("momentum", "momentum_candidates_target_pct"),
+        "SIGNAL_RSI_PERIOD": ("strategy", "signal_rsi_period"),
+        "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED": ("strategy", "signal_session_confirm_filter_enabled"),
+        "PLANNER_MIN_SCORE": ("strategy", "planner_min_score"),
+        "PLANNER_MIN_RR": ("strategy", "planner_min_rr"),
+        "BOT_EXECUTOR_LIMIT": ("bot", "bot_executor_limit"),
+        "BOT_EXECUTOR_QUANTITY": ("bot", "bot_executor_quantity"),
+    }
+
+    for env_key, target in expected_aliases.items():
+        assert runtime_settings.BOOTSTRAP_ENV_ALIASES[env_key] == target
+        assert runtime_settings.LEGACY_RASPBERRY_SETTING_ALIASES[env_key] == target
+
+    assert runtime_settings.BOOTSTRAP_ENV_ALIASES["KRAKEN_QUOTE_ASSETS"] == ("executor", "quote_assets")
+
+
 def test_migrate_bootstrap_settings_to_app_settings_does_not_overwrite_canonical(monkeypatch):
     canonical = runtime_settings.AppSetting(category="kraken", key="kraken_base_url", value="https://canonical.kraken")
 
@@ -197,6 +231,38 @@ def test_migrate_bootstrap_settings_to_app_settings_does_not_overwrite_canonical
     rows = runtime_settings.migrate_bootstrap_settings_to_app_settings(FakeDb(), [canonical])
 
     assert rows[0].value == "https://canonical.kraken"
+
+
+def test_migrate_bootstrap_settings_to_app_settings_fills_empty_canonical_rows(monkeypatch):
+    canonical = runtime_settings.AppSetting(category="live", key="live_require_tp_sl", value="")
+
+    class FakeScalars:
+        def all(self):
+            return [canonical]
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def add(self, row):
+            raise AssertionError("empty canonical row should be updated, not recreated")
+
+        def commit(self):
+            pass
+
+        def execute(self, statement):
+            return FakeResult()
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_legacy_bootstrap_values",
+        lambda: {"LIVE_REQUIRE_TP_SL": "false"},
+    )
+
+    rows = runtime_settings.migrate_bootstrap_settings_to_app_settings(FakeDb(), [canonical])
+
+    assert rows[0].value == "false"
 
 
 def test_migrate_legacy_kraken_base_url_rows_renames_and_deletes_old_key():
