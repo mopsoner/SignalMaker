@@ -104,11 +104,11 @@ class SignalMakerClient:
             rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
         return rows
 
-    def check_candle_ingest_endpoint(self) -> dict:
+    def check_candle_ingest_endpoint(self, symbol: str | None = None, interval: str | None = None) -> dict:
         probe = {
             "source": f"{self.gateway_id}-probe",
-            "symbol": "BTCUSDT",
-            "interval": "15m",
+            "symbol": (symbol or "BTCUSDT").upper(),
+            "interval": interval or "15m",
             "candles": [],
         }
         url = self._url("/api/v1/market-data/candles")
