@@ -4,9 +4,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 EXAMPLE_PATH = ROOT / ".env.raspberry.example"
 
-# Bootstrap defaults for the Raspberry process. Admin/runtime-managed values
-# should be migrated to app_settings and read through the API/runtime settings;
-# this file remains only as startup fallback and for Raspberry-local fields.
+# Minimal Raspberry bootstrap defaults for the code paths that still read the
+# local .env directly (config.py, momentum_decision_feed.py, executor modules,
+# candle feed started by run_all_v2, and startup scripts). Runtime/admin-managed
+# settings should live in app_settings and are intentionally not rewritten here.
 DEFAULTS = {
     "SIGNALMAKER_BASE_URL": "https://mysginalmaker.replit.app",
     "GATEWAY_ID": "raspberry-fr-1",
@@ -35,56 +36,64 @@ DEFAULTS = {
     "MOMENTUM_DECISION_LIMIT": "25",
     "MOMENTUM_CANDIDATES_PATH": "/api/v1/momentum",
     "MOMENTUM_DECISION_CANDIDATES_FALLBACK_ENABLED": "true",
-    "MOMENTUM_DECISION_FALLBACK_LIMIT": "50",
     "MOMENTUM_DECISION_CADENCE_HOURS": "4",
-    "MOMENTUM_DECISION_STARTING_CAPITAL": "1000",
     "MOMENTUM_DECISION_MIN_SCORE": "0",
     "MOMENTUM_BUYABLE_RSI_1H_MIN": "45",
     "MOMENTUM_BUYABLE_RSI_1H_MAX": "55",
     "APP_PORT": "8080",
     "EXECUTOR_API_PORT": "8080",
-    "EXECUTOR_DASHBOARD_PORT": "8080",
     "WEB_HOST": "0.0.0.0",
-    "ADMIN_PASSWORD": "",
     "DATABASE_URL": "postgresql+psycopg://postgres:postgres@localhost:5432/signalmaker",
 }
 
 LEGACY_KEYS = {
-    "EXECUTION_QUOTE_ASSET",
+    "ADMIN_PASSWORD",
     "ALLOWED_SYMBOLS",
-    "CANDLE_FEED_QUOTES",
-    "CANDLE_FEED_QUOTE_ASSETS",
-    "CANDLE_FEED_SYMBOLS",
     "ALLOW_SHORTS",
+    "CANDLE_FEED_QUOTE_ASSETS",
+    "CANDLE_FEED_QUOTES",
+    "CANDLE_FEED_SYMBOLS",
+    "EXECUTION_QUOTE_ASSET",
+    "EXECUTOR_DASHBOARD_PORT",
+    "MOMENTUM_DECISION_FALLBACK_LIMIT",
+    "MOMENTUM_DECISION_STARTING_CAPITAL",
 }
 
-SECRET_KEYS = {"KRAKEN_API_KEY", "KRAKEN_SECRET_KEY", "ADMIN_PASSWORD"}
+SECRET_KEYS = {"KRAKEN_API_KEY", "KRAKEN_SECRET_KEY"}
 
 
 def _normalize_quotes(value: str | None) -> str:
     return ",".join(item.strip().upper() for item in (value or "").split(",") if item.strip())
 
 
+def _parse_env_text(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
 def ensure_env() -> None:
     if ENV_PATH.exists():
+        migrate_env_to_minimal()
         return
     if EXAMPLE_PATH.exists():
         ENV_PATH.write_text(EXAMPLE_PATH.read_text())
+        migrate_env_to_minimal()
     else:
         write_env(DEFAULTS)
 
 
 def read_env() -> dict[str, str]:
     ensure_env()
+    raw_values = _parse_env_text(ENV_PATH.read_text())
     values = DEFAULTS.copy()
     legacy_values: dict[str, str] = {}
-    for line in ENV_PATH.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
+    for key, value in raw_values.items():
         if key in DEFAULTS:
             values[key] = value
         elif key in LEGACY_KEYS:
@@ -100,6 +109,25 @@ def read_env() -> dict[str, str]:
         )
     values["QUOTE_ASSETS"] = _normalize_quotes(values.get("QUOTE_ASSETS")) or DEFAULTS["QUOTE_ASSETS"]
     return values
+
+
+def migrate_env_to_minimal() -> bool:
+    """Rewrite an existing .env with only supported keys, preserving useful values."""
+    if not ENV_PATH.exists():
+        return False
+    raw_values = _parse_env_text(ENV_PATH.read_text())
+    supported = {key: value for key, value in raw_values.items() if key in DEFAULTS}
+    if not supported.get("QUOTE_ASSETS"):
+        for legacy_key in ("CANDLE_FEED_QUOTES", "CANDLE_FEED_QUOTE_ASSETS", "ALLOWED_SYMBOLS", "EXECUTION_QUOTE_ASSET"):
+            if raw_values.get(legacy_key):
+                supported["QUOTE_ASSETS"] = raw_values[legacy_key]
+                break
+    minimal_before = {key: raw_values.get(key) for key in DEFAULTS if key in raw_values}
+    has_legacy = any(key not in DEFAULTS for key in raw_values)
+    if not has_legacy and supported == minimal_before:
+        return False
+    write_env(supported)
+    return True
 
 
 def write_env(values: dict[str, str]) -> None:
@@ -137,18 +165,14 @@ def write_env(values: dict[str, str]) -> None:
         f"MOMENTUM_DECISION_LIMIT={merged['MOMENTUM_DECISION_LIMIT']}",
         f"MOMENTUM_CANDIDATES_PATH={merged['MOMENTUM_CANDIDATES_PATH']}",
         f"MOMENTUM_DECISION_CANDIDATES_FALLBACK_ENABLED={merged['MOMENTUM_DECISION_CANDIDATES_FALLBACK_ENABLED']}",
-        f"MOMENTUM_DECISION_FALLBACK_LIMIT={merged['MOMENTUM_DECISION_FALLBACK_LIMIT']}",
         f"MOMENTUM_DECISION_CADENCE_HOURS={merged['MOMENTUM_DECISION_CADENCE_HOURS']}",
-        f"MOMENTUM_DECISION_STARTING_CAPITAL={merged['MOMENTUM_DECISION_STARTING_CAPITAL']}",
         f"MOMENTUM_DECISION_MIN_SCORE={merged['MOMENTUM_DECISION_MIN_SCORE']}",
         f"MOMENTUM_BUYABLE_RSI_1H_MIN={merged['MOMENTUM_BUYABLE_RSI_1H_MIN']}",
         f"MOMENTUM_BUYABLE_RSI_1H_MAX={merged['MOMENTUM_BUYABLE_RSI_1H_MAX']}",
         "",
         f"APP_PORT={merged['APP_PORT']}",
         f"EXECUTOR_API_PORT={merged['EXECUTOR_API_PORT']}",
-        f"EXECUTOR_DASHBOARD_PORT={merged['EXECUTOR_DASHBOARD_PORT']}",
         f"WEB_HOST={merged['WEB_HOST']}",
-        f"ADMIN_PASSWORD={merged['ADMIN_PASSWORD']}",
         "",
         f"DATABASE_URL={merged['DATABASE_URL']}",
         "",
