@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
@@ -457,21 +457,62 @@ def _admin_editable_payload(payload: dict[str, dict[str, Any]]) -> dict[str, dic
     return admin_payload
 
 
-def load_admin_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
-    return _admin_editable_payload(load_runtime_settings(db))
+SettingSource = Literal["db", ".env/bootstrap", "default", "legacy_migration"]
 
 
-def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
+def _default_sources() -> dict[str, dict[str, SettingSource]]:
+    sources: dict[str, dict[str, SettingSource]] = {
+        section: {key: "default" for key in values} for section, values in DEFAULT_SETTINGS.items()
+    }
+    for env_key, (section, key) in BOOTSTRAP_ENV_ALIASES.items():
+        if env_key in os.environ:
+            sources.setdefault(section, {})[key] = ".env/bootstrap"
+    return sources
+
+
+def _bootstrap_migration_targets(rows: list[AppSetting]) -> set[tuple[str, str]]:
+    by_location = {(row.category, row.key): row for row in rows}
+    bootstrap_values = _legacy_bootstrap_values()
+    targets: set[tuple[str, str]] = set()
+    for source_key, target in LEGACY_RASPBERRY_SETTING_ALIASES.items():
+        if not _has_value(bootstrap_values.get(source_key)):
+            continue
+        target_row = by_location.get(target)
+        if target_row is None or not _has_value(target_row.value):
+            targets.add(target)
+    return targets
+
+
+def _admin_editable_sources(sources: dict[str, dict[str, SettingSource]]) -> dict[str, dict[str, SettingSource]]:
+    return {
+        section: {key: sources.get(section, {}).get(key, "default") for key in keys}
+        for section, keys in ADMIN_EDITABLE_FIELDS.items()
+    }
+
+
+def load_admin_settings(db: Session | None = None, *, include_sources: bool = False) -> dict[str, dict[str, Any]] | dict[str, dict[str, dict[str, Any]]]:
+    if not include_sources:
+        return _admin_editable_payload(load_runtime_settings(db))
+    runtime = load_runtime_settings(db, include_sources=True)
+    return {
+        "settings": _admin_editable_payload(runtime["settings"]),
+        "sources": _admin_editable_sources(runtime["sources"]),
+    }
+
+
+def load_runtime_settings(db: Session | None = None, *, include_sources: bool = False) -> dict[str, dict[str, Any]] | dict[str, dict[str, dict[str, Any]]]:
     owns_session = db is None
     if db is None:
         db = SessionLocal()
     try:
         rows = db.execute(select(AppSetting)).scalars().all()
+        bootstrap_migrated = _bootstrap_migration_targets(rows) if include_sources else set()
         if all(hasattr(db, attr) for attr in ("add", "delete", "commit")):
             rows = _migrate_legacy_kraken_base_url_rows(db, rows)
             rows = _migrate_legacy_admin_setting_rows(db, rows)
             rows = migrate_bootstrap_settings_to_app_settings(db, rows)
         payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
+        sources = _default_sources()
         seen_canonical: set[tuple[str, str]] = set()
         for row in rows:
             original = (row.category, row.key)
@@ -481,9 +522,11 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             if is_alias and target in seen_canonical and _has_value(payload.get(category, {}).get(key)):
                 continue
             payload.setdefault(category, {})[key] = row.value
+            sources.setdefault(category, {})[key] = "legacy_migration" if target in bootstrap_migrated else "db"
             if not is_alias:
                 seen_canonical.add(target)
         payload.setdefault("strategy", {})["signal_execution_interval"] = "15m"
+        sources.setdefault("strategy", {})["signal_execution_interval"] = "default"
         payload.setdefault("market_data", {})["kraken_collector_enabled"] = bool(payload.get("market_data", {}).get("kraken_collector_enabled", True))
         _apply_legacy_admin_setting_locations(payload)
         kraken = payload.setdefault("kraken", {})
@@ -492,6 +535,8 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         kraken.pop("kraken_rest_base", None)
         payload.setdefault("momentum", {})["momentum_candidates_sync_enabled"] = bool(payload.get("momentum", {}).get("momentum_candidates_sync_enabled", False))
         payload.setdefault("momentum", {})["momentum_candidates_require_wyckoff_context"] = bool(payload.get("momentum", {}).get("momentum_candidates_require_wyckoff_context", True))
+        if include_sources:
+            return {"settings": payload, "sources": sources}
         return payload
     finally:
         if owns_session:
