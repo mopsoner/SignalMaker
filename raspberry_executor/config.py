@@ -90,7 +90,7 @@ def load_settings() -> Settings:
         quote_assets=quote_assets,
         allowed_symbols=quote_assets,
         order_quote_amount=_float(values, "ORDER_QUOTE_AMOUNT", "20"),
-        max_candidate_age_seconds=_int(values, "MAX_CANDIDATE_AGE_SECONDS", "900"),
+        max_candidate_age_seconds=_int(values, "MAX_CANDIDATE_AGE_SECONDS", "1200"),
         kraken_base_url=str(values.get("KRAKEN_BASE_URL", "https://api.kraken.com")).rstrip("/"),
         kraken_api_key=str(values.get("KRAKEN_API_KEY", "")),
         kraken_secret_key=str(values.get("KRAKEN_SECRET_KEY", "")),
