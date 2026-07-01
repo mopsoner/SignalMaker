@@ -46,8 +46,7 @@ This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ea
 - `momentum-candidates.html`: Momentum candidate sync plus buy/sell tracking fields.
 - `positions.html`: open/closed positions with entry, mark, TP, PnL.
 - `orders.html`: entry, TP, stop orders and fills.
-- `settings.html` / `admin.html`: runtime settings, SignalMaker URL, Kraken/Kraken credentials, live/paper, Momentum settings.
-- `logs.html`: workers and executor logs.
+- `ops.html`: official Settings / Logs / Admin page for runtime settings, SignalMaker URL, Kraken credentials, live/paper controls, Momentum settings, workers, and executor logs.
 
 ## New architecture kept
 

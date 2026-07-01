@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
@@ -49,8 +49,12 @@ if _FRONTEND_DIST.is_dir():
 
     @app.get("/admin", include_in_schema=False)
     @app.get("/admin/", include_in_schema=False)
-    def serve_admin_frontend() -> FileResponse:
-        return FileResponse(_FRONTEND_DIST / "admin.html")
+    @app.get("/admin.html", include_in_schema=False)
+    @app.get("/settings.html", include_in_schema=False)
+    @app.get("/logs.html", include_in_schema=False)
+    @app.get("/feed.html", include_in_schema=False)
+    def redirect_legacy_frontend() -> RedirectResponse:
+        return RedirectResponse(url="/ops.html", status_code=307)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_static_frontend(full_path: str) -> FileResponse:
