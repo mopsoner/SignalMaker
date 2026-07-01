@@ -66,7 +66,7 @@ def reset_database(db: Session = Depends(get_db)) -> dict:
 @router.post('/admin/test/kraken')
 def test_kraken(db: Session = Depends(get_db)) -> dict:
     runtime = load_runtime_settings(db)['kraken']
-    base = (runtime.get('kraken_rest_base') or runtime.get('kraken_base_url') or 'https://api.kraken.com').rstrip('/')
+    base = (runtime.get('kraken_base_url') or 'https://api.kraken.com').rstrip('/')
     client = KrakenClient(
         base,
         str(runtime.get('kraken_api_key') or ''),

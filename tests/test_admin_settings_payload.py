@@ -183,3 +183,70 @@ def test_migrate_bootstrap_settings_to_app_settings_does_not_overwrite_canonical
     rows = runtime_settings.migrate_bootstrap_settings_to_app_settings(FakeDb(), [canonical])
 
     assert rows[0].value == "https://canonical.kraken"
+
+
+def test_migrate_legacy_kraken_base_url_rows_renames_and_deletes_old_key():
+    legacy = runtime_settings.AppSetting(category="kraken", key="kraken_rest_base", value="https://legacy.kraken")
+    added = []
+    deleted = []
+
+    class FakeScalars:
+        def all(self):
+            return added
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def add(self, row):
+            added.append(row)
+
+        def delete(self, row):
+            deleted.append(row)
+
+        def commit(self):
+            pass
+
+        def execute(self, statement):
+            return FakeResult()
+
+    rows = runtime_settings._migrate_legacy_kraken_base_url_rows(FakeDb(), [legacy])
+
+    assert [(row.category, row.key, row.value) for row in rows] == [
+        ("kraken", "kraken_base_url", "https://legacy.kraken")
+    ]
+    assert deleted == [legacy]
+
+
+def test_migrate_legacy_kraken_base_url_rows_keeps_existing_canonical_value():
+    canonical = runtime_settings.AppSetting(category="kraken", key="kraken_base_url", value="https://canonical.kraken")
+    legacy = runtime_settings.AppSetting(category="kraken", key="kraken_rest_base", value="https://legacy.kraken")
+    deleted = []
+
+    class FakeScalars:
+        def all(self):
+            return [canonical]
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def add(self, row):
+            raise AssertionError("canonical row should not be recreated")
+
+        def delete(self, row):
+            deleted.append(row)
+
+        def commit(self):
+            pass
+
+        def execute(self, statement):
+            return FakeResult()
+
+    rows = runtime_settings._migrate_legacy_kraken_base_url_rows(FakeDb(), [canonical, legacy])
+
+    assert rows == [canonical]
+    assert canonical.value == "https://canonical.kraken"
+    assert deleted == [legacy]

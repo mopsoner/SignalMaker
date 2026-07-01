@@ -59,7 +59,7 @@ class CollectorService:
     def __init__(self) -> None:
         runtime = load_runtime_settings()
         self.runtime = runtime
-        self.base_url = runtime['kraken']['kraken_rest_base'].rstrip('/')
+        self.base_url = runtime['kraken']['kraken_base_url'].rstrip('/')
         self.collector_enabled = bool(runtime.get('market_data', runtime['kraken']).get('kraken_collector_enabled', False))
         self.session = requests.Session()
         self._rate = RateLimiter()
