@@ -1,4 +1,6 @@
-from types import SimpleNamespace
+import builtins
+import sys
+from types import ModuleType, SimpleNamespace
 
 from raspberry_executor import kraken_full_smoke_test
 from raspberry_executor.config import Settings
@@ -42,6 +44,44 @@ def _settings(**overrides):
     )
     base.update(overrides)
     return Settings(**base)
+
+
+def test_runtime_settings_payload_falls_back_to_lightweight_loader(monkeypatch):
+    lightweight = ModuleType("raspberry_executor.runtime_db_settings")
+
+    def load_runtime_settings_lightweight():
+        return (
+            {
+                "kraken": {
+                    "kraken_api_key": "db-key",
+                    "kraken_secret_key": "db-secret",
+                    "kraken_base_url": "https://db.kraken/",
+                },
+                "executor": {"execution_exchange": "kraken", "quote_assets": "USD,USDC"},
+            },
+            {"database_url_loaded": True},
+        )
+
+    lightweight.load_runtime_settings_lightweight = load_runtime_settings_lightweight
+    monkeypatch.setitem(sys.modules, "raspberry_executor.runtime_db_settings", lightweight)
+
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "app.services.runtime_settings":
+            raise RuntimeError("full runtime unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    runtime = kraken_full_smoke_test._runtime_settings_payload()
+    settings = kraken_full_smoke_test._settings_with_runtime_overrides(_settings(), runtime)
+
+    assert runtime["kraken"]["kraken_api_key"] == "db-key"
+    assert runtime["kraken"]["kraken_secret_key"] == "db-secret"
+    assert runtime["_full_runtime_error"] == "full runtime unavailable"
+    assert settings.kraken_api_key == "db-key"
+    assert settings.kraken_secret_key == "db-secret"
 
 
 def test_runtime_overrides_apply_admin_kraken_credentials(monkeypatch):
