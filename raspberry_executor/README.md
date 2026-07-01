@@ -8,7 +8,7 @@ The Raspberry does not analyse markets. SignalMaker creates the trade candidates
 
 Clone this repository on the Raspberry using the `main` branch.
 
-Then create a Python virtual environment, install `requirements-raspberry.txt`, copy `.env.raspberry.example` to `.env`, and edit the values.
+Then create a Python virtual environment, install `requirements-raspberry.txt`, copy `.env.raspberry.example` to `.env`, and edit the values. The current Raspberry example only contains the supported startup variables: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and minimal polling/feed/decision settings. Legacy IBKR and margin variables are preserved separately in `.env.legacy.example` for historical reference only.
 
 Keep `DRY_RUN=true` for the first tests.
 
