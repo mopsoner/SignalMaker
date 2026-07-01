@@ -17,10 +17,12 @@ SignalMaker now uses one explicit runtime source of truth:
 ## Runtime load flow
 
 1. `app.core.config.Settings` reads environment variables and `.env` for bootstrap defaults.
-2. `app.services.runtime_settings.load_runtime_settings()` starts with those defaults.
-3. Existing canonical `app_settings` rows override bootstrap defaults.
-4. Legacy admin rows and legacy Raspberry keys are migrated into canonical `app_settings` keys only when the canonical row is missing or empty.
-5. The returned runtime payload is the authoritative settings payload for API services, the admin UI, and Raspberry runtime overrides.
+2. `app.services.runtime_settings.seed_app_settings_from_env()` parses `.env` with the same BaseSettings dotenv parser, applies the exhaustive `.env` -> `DEFAULT_SETTINGS` map, creates missing canonical `app_settings` rows, and fills empty rows.
+3. `.env` is prioritized only during that initial seed (or during an explicit resync with `python -m scripts.seed_app_settings --overwrite`).
+4. After installation, existing canonical `app_settings` rows override bootstrap defaults and are the admin/runtime source of truth.
+5. Editing `.env` after installation requires a controlled resync command or deleting the intended `app_settings` rows before rerunning `python -m scripts.seed_app_settings`; otherwise populated DB rows are kept.
+6. Legacy admin rows and legacy Raspberry keys are migrated into canonical `app_settings` keys only when the canonical row is missing or empty.
+7. The returned runtime payload is the authoritative settings payload for API services, the admin UI, and Raspberry runtime overrides.
 
 ## Migration rules
 
@@ -53,3 +55,21 @@ Legacy uppercase admin rows are also canonicalized and deleted after their value
 2. Confirm Raspberry executors receive API/runtime overrides for exchange, quote assets, Kraken credentials, and notifier settings.
 3. Stop calling `write_settings()` from Raspberry admin surfaces.
 4. Remove `raspberry_executor/settings_store.py` and the SQLite `settings` table once no deployed executor depends on them.
+
+## Initial seed and controlled resync
+
+Run the seed explicitly after creating or editing `.env` during installation:
+
+```bash
+python -m scripts.seed_app_settings
+```
+
+The default seed creates missing `app_settings` rows and fills empty values only; it does not overwrite rows already configured by the admin UI or runtime DB. The command prints a JSON summary showing which settings came from `.env`, which remained from the DB, and which fell back to `DEFAULT_SETTINGS`.
+
+For an intentional post-install resync from `.env`, use:
+
+```bash
+python -m scripts.seed_app_settings --overwrite
+```
+
+Use `--overwrite` carefully because it replaces populated DB rows with `.env`/default values. Without `--overwrite`, modify `.env` after installation only as a bootstrap fallback, then delete selected `app_settings` rows if you want the next seed to recreate them from `.env`.
