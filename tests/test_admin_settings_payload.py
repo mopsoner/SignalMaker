@@ -20,7 +20,6 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
 
     assert payload["executor"] == {"execution_exchange": "kraken", "quote_assets": "USDC"}
     assert payload["kraken"] == {
-        "kraken_exchange_name": "kraken",
         "kraken_base_url": "https://api.kraken.com",
         "kraken_api_key": "kraken-key",
         "kraken_secret_key": "kraken-secret",
@@ -121,9 +120,10 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
 
     payload = runtime_settings.load_admin_settings()
 
-    assert payload["market_data"]["kraken_max_symbols"] == 25
-    assert payload["strategy"]["planner_min_score"] == 4
-    assert "admin_token" not in payload["general"]
+    assert set(payload) == {"kraken", "executor", "live", "momentum"}
+    assert "market_data" not in payload
+    assert "strategy" not in payload
+    assert "general" not in payload
     assert "kraken_quote_assets" not in payload["kraken"]
     assert payload["executor"]["quote_assets"] == "USDC"
     assert payload["kraken"]["kraken_api_key"] == "key"

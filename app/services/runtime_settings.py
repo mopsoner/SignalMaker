@@ -429,29 +429,12 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
 
 
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
-    "general": ("app_name", "app_env", "cors_origins", "create_tables_on_boot"),
-    "executor": tuple(DEFAULT_SETTINGS["executor"].keys()),
-    "kraken": ("kraken_exchange_name", "kraken_base_url", "kraken_api_key", "kraken_secret_key"),
-    "market_data": tuple(DEFAULT_SETTINGS["market_data"].keys()),
-    "strategy": tuple(DEFAULT_SETTINGS["strategy"].keys()),
-    "notifications": tuple(DEFAULT_SETTINGS["notifications"].keys()),
-    "bot": (
-        "bot_pipeline_enabled",
-        "bot_executor_enabled",
-        "bot_scheduler_enabled",
-        "bot_pipeline_interval_sec",
-        "bot_executor_interval_sec",
-        "bot_scheduler_interval_sec",
-        "bot_executor_limit",
-        "bot_executor_quantity",
-    ),
+    "kraken": ("kraken_base_url", "kraken_api_key", "kraken_secret_key"),
+    "executor": ("execution_exchange", "quote_assets"),
     "live": (
         "live_trading_enabled",
-        "live_spot_allow_shorts",
         "live_max_open_positions",
         "live_max_notional_per_trade",
-        "live_require_tp_sl",
-        "live_reconcile_enabled",
     ),
     "momentum": (
         "signalmaker_base_url",
