@@ -110,24 +110,38 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
         return {
             "general": {"app_name": "SignalMaker", "admin_token": "secret"},
             "executor": {"execution_exchange": "kraken", "quote_assets": "USDC"},
-            "kraken": {"kraken_rest_base": "https://kraken.test", "kraken_quote_assets": "USDT"},
             "kraken": {"kraken_base_url": "https://api.kraken.com", "kraken_api_key": "key", "kraken_secret_key": None},
             "market_data": {"kraken_max_symbols": 25},
             "strategy": {"planner_min_score": 4},
+            "notifications": {"telegram_chat_id": "chat-1", "telegram_secret": None},
+            "bot": {"bot_executor_interval_sec": 45},
+            "live": {"kraken_use_testnet": False, "live_reconcile_enabled": True},
         }
 
     monkeypatch.setattr(runtime_settings, "load_runtime_settings", fake_runtime_settings)
 
     payload = runtime_settings.load_admin_settings()
 
-    assert set(payload) == {"kraken", "executor", "live", "momentum"}
-    assert "market_data" not in payload
-    assert "strategy" not in payload
-    assert "general" not in payload
-    assert "kraken_quote_assets" not in payload["kraken"]
+    assert set(payload) == set(runtime_settings.ADMIN_EDITABLE_FIELDS)
+    for section, keys in runtime_settings.ADMIN_EDITABLE_FIELDS.items():
+        assert set(payload[section]) == set(keys)
+
+    assert payload["general"] == {"admin_token": "secret"}
+    assert "app_name" not in payload["general"]
     assert payload["executor"]["quote_assets"] == "USDC"
     assert payload["kraken"]["kraken_api_key"] == "key"
     assert payload["kraken"]["kraken_secret_key"] == ""
+    assert payload["market_data"]["kraken_max_symbols"] == 25
+    assert payload["market_data"]["kraken_quote_assets"] == runtime_settings.DEFAULT_SETTINGS["market_data"]["kraken_quote_assets"]
+    assert payload["strategy"]["planner_min_score"] == 4
+    assert payload["notifications"]["telegram_chat_id"] == "chat-1"
+    assert payload["notifications"]["telegram_secret"] == ""
+    assert payload["bot"]["bot_executor_interval_sec"] == 45
+    assert payload["live"]["kraken_use_testnet"] is False
+    assert payload["live"]["live_reconcile_enabled"] is True
+    assert "kraken_quote_assets" not in payload["kraken"]
+    assert "EXECUTION_EXCHANGE" not in payload["executor"]
+    assert "KRAKEN_BASE_URL" not in payload["kraken"]
 
 
 def test_migrate_bootstrap_settings_to_app_settings_fills_missing_canonical_rows(monkeypatch):
