@@ -18,7 +18,7 @@ from raspberry_executor.candle_push_once import fetch_exchange_klines, fetch_kra
 from raspberry_executor.admin_settings_bridge import apply_admin_settings_to_environ
 from raspberry_executor.candle_backfill_4h import run_once as run_backfill_once
 from raspberry_executor.config import Settings, load_settings
-from raspberry_executor.env_store import ensure_env
+from raspberry_executor.env_store import ensure_env, read_env
 from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.kraken_margin_client import KrakenMarginClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
@@ -681,8 +681,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
                 spot_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "validate": True}
                 margin_x5_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "leverage": "5", "validate": True}
                 margin_x3_payload = {"pair": pair, "type": "buy", "ordertype": "market", "volume": qty, "leverage": "3", "validate": True}
-                tp_payload = {"pair": pair, "type": "sell", "ordertype": "limit", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 1.02), "reduce_only": True, "validate": True}
-                sl_payload = {"pair": pair, "type": "sell", "ordertype": "stop-loss", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 0.98), "reduce_only": True, "validate": True}
+                tp_payload = {"pair": pair, "type": "sell", "ordertype": "limit", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 1.02), "leverage": "5", "reduce_only": True, "validate": True}
+                sl_payload = {"pair": pair, "type": "sell", "ordertype": "stop-loss", "volume": qty, "price": rules.normalize_exit_price(symbol, price * 0.98), "leverage": "5", "reduce_only": True, "validate": True}
                 return {
                     "quantity": qty,
                     "spot_validate_only": live_client._signed("POST", "/0/private/AddOrder", spot_payload),
@@ -701,7 +701,8 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
             if not args.live_order_test:
                 return {"skipped": True, "reason": "use --live-order-test and KRAKEN_SMOKE_LIVE_ORDER=YES to enable"}
-            if os.environ.get("KRAKEN_SMOKE_LIVE_ORDER") != "YES":
+            live_order_guard = os.environ.get("KRAKEN_SMOKE_LIVE_ORDER") or read_env().get("KRAKEN_SMOKE_LIVE_ORDER")
+            if live_order_guard != "YES":
                 return {"skipped": True, "reason": "missing_guard_env_KRAKEN_SMOKE_LIVE_ORDER_YES"}
             quote = min(float(args.live_order_quote), float(args.order_quote), 10.0)
             price = client.current_price(symbol)
