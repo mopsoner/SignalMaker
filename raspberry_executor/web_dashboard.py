@@ -121,7 +121,7 @@ def momentum_summary_box(momentum):
       <p><b>Next check:</b> {c(momentum.get('next_check_at'))}</p>
       <p><b>Reason:</b> {c(momentum.get('reason'))}</p>
       <p><b>Target rank / score / RSI 1H:</b> {c(target.get('rank'))} / {c(target.get('momentum_score') or target.get('score'))} / {c(target.get('rsi_1h'))}</p>
-      <p><b>Buyable candidates:</b> {c(momentum.get('buy_candidates_count'))} · RSI 1H range 45-55</p>
+      <p><b>Buyable candidates:</b> {c(momentum.get('buy_candidates_count'))} · RSI 1H range 50-65</p>
       <p><a href='/momentum-decision'>Open momentum details</a></p>
     </div>
     """

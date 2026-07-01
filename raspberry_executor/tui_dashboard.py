@@ -115,7 +115,7 @@ def momentum_buyable_text(row: dict) -> str:
         rsi = float(candidate_rsi_1h(row))
     except Exception:
         return "no-rsi"
-    return "buy" if 45 <= rsi <= 55 else "blocked"
+    return "buy" if 50 <= rsi <= 65 else "blocked"
 
 
 

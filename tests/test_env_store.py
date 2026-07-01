@@ -1,6 +1,27 @@
 from __future__ import annotations
 
-from raspberry_executor import env_store
+from raspberry_executor import config, env_store
+
+
+def test_default_order_quote_amount_is_50(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(env_store, "ENV_PATH", env_path)
+    monkeypatch.setattr(env_store, "EXAMPLE_PATH", tmp_path / ".env.example")
+
+    env_store.write_env({})
+
+    text = env_path.read_text()
+    assert "ORDER_QUOTE_AMOUNT=50" in text
+    assert env_store.read_env()["ORDER_QUOTE_AMOUNT"] == "50"
+
+
+def test_config_fallback_order_quote_amount_is_50(monkeypatch):
+    monkeypatch.setattr(config, "read_env", lambda: {})
+    monkeypatch.setattr(config, "_runtime_overrides", lambda: {})
+
+    settings = config.load_settings()
+
+    assert settings.order_quote_amount == 50.0
 
 
 def test_momentum_rsi_bounds_are_read_and_written(tmp_path, monkeypatch):
