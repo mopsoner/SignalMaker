@@ -105,10 +105,9 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_base_url") or kraken.get("KRAKEN_BASE_URL")).rstrip("/")
     kraken_api_key = kraken.get("kraken_api_key") or kraken.get("KRAKEN_API_KEY")
     kraken_secret_key = kraken.get("kraken_secret_key") or kraken.get("KRAKEN_SECRET_KEY")
-    if _secret_present(kraken_api_key):
-        os.environ["KRAKEN_API_KEY"] = str(kraken_api_key)
-    if _secret_present(kraken_secret_key):
-        os.environ["KRAKEN_SECRET_KEY"] = str(kraken_secret_key)
+    # Kraken credentials intentionally come only from the local .env/process
+    # environment. Admin/runtime DB payloads may report their presence for
+    # diagnostics, but must not populate or replace KRAKEN_API_KEY/SECRET_KEY.
 
     if _bool(live.get("kraken_use_testnet"), default=False) and live.get("kraken_testnet_rest_base"):
         os.environ["KRAKEN_BASE_URL"] = str(live.get("kraken_testnet_rest_base")).rstrip("/")
@@ -132,8 +131,8 @@ def apply_admin_settings_to_environ(base_url: str | None = None, timeout: float 
         "kraken_base_url": os.environ.get("KRAKEN_BASE_URL"),
         "kraken_api_key_in_admin_payload": bool(kraken_api_key),
         "kraken_secret_key_in_admin_payload": bool(kraken_secret_key),
-        "kraken_api_key_applied_to_env": _secret_present(kraken_api_key),
-        "kraken_secret_key_applied_to_env": _secret_present(kraken_secret_key),
+        "kraken_api_key_applied_to_env": False,
+        "kraken_secret_key_applied_to_env": False,
         "selected_source": "local_runtime_db" if local_payload else "admin_api",
         "admin_settings_checked": admin_checked,
         "admin_settings_error": admin_error,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Protocol
 
 from app.services.runtime_settings import _coerce_bool, load_runtime_settings
@@ -36,8 +37,8 @@ class KrakenExchangeAdapter:
         live = runtime.get("live", {}) if isinstance(runtime.get("live"), dict) else {}
         self.client = KrakenClient(
             str(kraken.get("kraken_base_url") or ""),
-            str(kraken.get("kraken_api_key") or ""),
-            str(kraken.get("kraken_secret_key") or ""),
+            str(os.environ.get("KRAKEN_API_KEY") or ""),
+            str(os.environ.get("KRAKEN_SECRET_KEY") or ""),
             dry_run=not _coerce_bool(live.get("live_trading_enabled"), default=False),
         )
 

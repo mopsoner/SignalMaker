@@ -64,10 +64,8 @@ def _runtime_overrides() -> dict[str, str]:
     executor = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
     if kraken.get("kraken_base_url"):
         overrides["KRAKEN_BASE_URL"] = str(kraken["kraken_base_url"])
-    if kraken.get("kraken_api_key"):
-        overrides["KRAKEN_API_KEY"] = str(kraken["kraken_api_key"])
-    if kraken.get("kraken_secret_key"):
-        overrides["KRAKEN_SECRET_KEY"] = str(kraken["kraken_secret_key"])
+    # Kraken credentials are loaded from the local .env/process environment only.
+    # Runtime DB values are diagnostic/admin state and must not override them.
     if executor.get("execution_exchange"):
         overrides["EXECUTION_EXCHANGE"] = str(executor["execution_exchange"])
     if executor.get("quote_assets"):
