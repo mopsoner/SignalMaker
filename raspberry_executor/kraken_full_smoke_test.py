@@ -153,13 +153,11 @@ def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) 
 
 
 def _settings_with_runtime_overrides(settings: Settings, runtime: dict[str, Any] | None = None) -> Settings:
-    """Return settings with DB runtime values first, then env overrides when present.
+    """Return settings with runtime values and env-sourced Kraken credentials.
 
     The full Kraken smoke test is also used from the Raspberry UI/debug flow,
-    where Kraken keys may live in SignalMaker Admin settings instead of the
-    local .env.  This helper applies non-empty DB runtime values first, then
-    non-empty environment values, to the immutable Settings object used by the
-    smoke test.
+    where non-secret settings may live in SignalMaker Admin/runtime DB. Kraken
+    private credentials still come only from the local .env/process environment.
     """
     import os
 
@@ -169,10 +167,9 @@ def _settings_with_runtime_overrides(settings: Settings, runtime: dict[str, Any]
     executor_runtime = runtime.get("executor", {}) if isinstance(runtime.get("executor"), dict) else {}
     if kraken_runtime.get("kraken_base_url"):
         overrides["kraken_base_url"] = str(kraken_runtime["kraken_base_url"]).rstrip("/")
-    if kraken_runtime.get("kraken_api_key"):
-        overrides["kraken_api_key"] = str(kraken_runtime["kraken_api_key"])
-    if kraken_runtime.get("kraken_secret_key"):
-        overrides["kraken_secret_key"] = str(kraken_runtime["kraken_secret_key"])
+    # Kraken private credentials are intentionally sourced only from the
+    # local .env/process environment. Runtime DB/Admin payloads may contain
+    # legacy or masked credential fields, but they must not override local env.
     if executor_runtime.get("execution_exchange"):
         overrides["exchange"] = str(executor_runtime["execution_exchange"]).strip().lower()
     if executor_runtime.get("quote_assets"):
@@ -223,9 +220,7 @@ def _credential_sources(settings: Settings, admin_bridge: dict[str, Any], admin_
     env_secret = os.environ.get("KRAKEN_SECRET_KEY")
     file_api = settings_file.kraken_api_key
     file_secret = settings_file.kraken_secret_key
-    if db_api and db_secret:
-        selected = "database canonical lowercase"
-    elif env_api and env_secret:
+    if env_api and env_secret:
         selected = "environment"
     elif file_api and file_secret:
         selected = "settings file"

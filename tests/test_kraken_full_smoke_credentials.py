@@ -80,11 +80,11 @@ def test_runtime_settings_payload_falls_back_to_lightweight_loader(monkeypatch):
     assert runtime["kraken"]["kraken_api_key"] == "db-key"
     assert runtime["kraken"]["kraken_secret_key"] == "db-secret"
     assert runtime["_full_runtime_error"] == "full runtime unavailable"
-    assert settings.kraken_api_key == "db-key"
-    assert settings.kraken_secret_key == "db-secret"
+    assert settings.kraken_api_key == ""
+    assert settings.kraken_secret_key == ""
 
 
-def test_runtime_overrides_apply_admin_kraken_credentials(monkeypatch):
+def test_runtime_overrides_apply_env_kraken_credentials(monkeypatch):
     monkeypatch.setenv("KRAKEN_API_KEY", "admin-key")
     monkeypatch.setenv("KRAKEN_SECRET_KEY", "admin-secret")
     monkeypatch.setenv("KRAKEN_BASE_URL", "https://kraken.test/")
@@ -98,16 +98,17 @@ def test_runtime_overrides_apply_admin_kraken_credentials(monkeypatch):
     assert settings.quote_assets == ["USDC", "EUR"]
 
 
-def test_run_smoke_uses_admin_bridge_credentials_for_private_checks(monkeypatch):
+def test_run_smoke_uses_env_credentials_for_private_checks(monkeypatch):
     file_settings = _settings()
     monkeypatch.setattr(kraken_full_smoke_test, "ensure_env", lambda: None)
     monkeypatch.setattr(kraken_full_smoke_test, "load_settings", lambda: file_settings)
 
+    monkeypatch.setenv("KRAKEN_API_KEY", "env-key")
+    monkeypatch.setenv("KRAKEN_SECRET_KEY", "env-secret")
+
     def fake_bridge(base_url):
         assert base_url == "https://signalmaker.test"
-        monkeypatch.setenv("KRAKEN_API_KEY", "admin-key")
-        monkeypatch.setenv("KRAKEN_SECRET_KEY", "admin-secret")
-        return {"applied": True, "kraken_base_url": "https://api.kraken.com"}
+        return {"applied": True, "kraken_base_url": "https://api.kraken.com", "kraken_credentials_source": ".env"}
 
     monkeypatch.setattr(kraken_full_smoke_test, "apply_admin_settings_to_environ", fake_bridge)
     monkeypatch.setattr(
@@ -304,29 +305,33 @@ def test_missing_local_credentials_reports_when_admin_has_credentials(monkeypatc
     )
 
 
-def test_settings_with_runtime_db_credentials_override_env(monkeypatch):
+def test_settings_with_runtime_db_credentials_do_not_override_env(monkeypatch):
     monkeypatch.setenv("KRAKEN_API_KEY", "env-key")
     monkeypatch.setenv("KRAKEN_SECRET_KEY", "env-secret")
     runtime = {"kraken": {"kraken_api_key": "db-key", "kraken_secret_key": "db-secret", "kraken_base_url": "https://db.kraken/"}}
 
     settings = kraken_full_smoke_test._settings_with_runtime_overrides(_settings(), runtime)
 
-    assert settings.kraken_api_key == "db-key"
-    assert settings.kraken_secret_key == "db-secret"
+    assert settings.kraken_api_key == "env-key"
+    assert settings.kraken_secret_key == "env-secret"
     assert settings.kraken_base_url == "https://db.kraken"
 
 
-def test_credential_sources_reports_selected_database(monkeypatch):
+def test_credential_sources_reports_selected_environment_over_database(monkeypatch):
+    monkeypatch.setenv("KRAKEN_API_KEY", "env-key")
+    monkeypatch.setenv("KRAKEN_SECRET_KEY", "env-secret")
     monkeypatch.setattr(kraken_full_smoke_test, "load_settings", lambda: _settings(kraken_api_key="file-key", kraken_secret_key="file-secret"))
     runtime = {"kraken": {"kraken_api_key": "db-key", "kraken_secret_key": "db-secret"}}
 
     sources = kraken_full_smoke_test._credential_sources(
-        _settings(kraken_api_key="db-key", kraken_secret_key="db-secret"), {}, {}, runtime
+        _settings(kraken_api_key="env-key", kraken_secret_key="env-secret"), {}, {}, runtime
     )
 
     assert sources["db_kraken_api_key_loaded"] == {"loaded": True, "length": 6}
     assert sources["db_kraken_secret_key_loaded"] == {"loaded": True, "length": 9}
-    assert sources["selected_source"] == "database canonical lowercase"
+    assert sources["env_kraken_api_key_loaded"] == {"loaded": True, "length": 7}
+    assert sources["env_kraken_secret_key_loaded"] == {"loaded": True, "length": 10}
+    assert sources["selected_source"] == "environment"
 
 
 def test_admin_kraken_status_falls_back_to_get_on_405(monkeypatch):

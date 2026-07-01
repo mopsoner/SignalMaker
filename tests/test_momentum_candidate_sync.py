@@ -349,9 +349,11 @@ def test_risk_service_uses_live_runtime_app_settings(db_session):
         )
 
 
-def test_exchange_adapter_dry_run_uses_live_runtime_app_setting(db_session, monkeypatch):
+def test_exchange_adapter_uses_env_credentials_not_runtime_app_setting(db_session, monkeypatch):
     from app.services import exchange_adapter
 
+    monkeypatch.setenv("KRAKEN_API_KEY", "env-key")
+    monkeypatch.setenv("KRAKEN_SECRET_KEY", "env-secret")
     db_session.add_all(
         [
             AppSetting(category="kraken", key="kraken_base_url", value="https://runtime.kraken"),
@@ -377,8 +379,8 @@ def test_exchange_adapter_dry_run_uses_live_runtime_app_setting(db_session, monk
 
     assert captured == {
         "base_url": "https://runtime.kraken",
-        "api_key": "runtime-key",
-        "secret_key": "runtime-secret",
+        "api_key": "env-key",
+        "secret_key": "env-secret",
         "dry_run": False,
     }
 
