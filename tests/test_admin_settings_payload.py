@@ -19,11 +19,7 @@ def test_load_admin_settings_omits_display_alias_duplicates(monkeypatch):
     payload = runtime_settings.load_admin_settings()
 
     assert payload["executor"] == {"execution_exchange": "kraken", "quote_assets": "USDC"}
-    assert payload["kraken"] == {
-        "kraken_base_url": "https://api.kraken.com",
-        "kraken_api_key": {"configured": True},
-        "kraken_secret_key": {"configured": True},
-    }
+    assert payload["kraken"] == {"kraken_base_url": "https://api.kraken.com"}
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
     assert "KRAKEN_API_KEY" not in payload["kraken"]
@@ -58,7 +54,7 @@ def test_load_runtime_settings_canonicalizes_stored_alias_rows(monkeypatch):
 
     assert payload["executor"]["execution_exchange"] == "kraken"
     assert payload["kraken"]["kraken_base_url"] == "https://kraken.test"
-    assert payload["kraken"]["kraken_api_key"] == "kraken-alias-key"
+    assert "kraken_api_key" not in payload["kraken"]
     assert "admin_token" not in payload.get("general", {})
     assert "EXECUTION_EXCHANGE" not in payload["kraken"]
     assert "KRAKEN_BASE_URL" not in payload["kraken"]
@@ -70,8 +66,8 @@ def test_normalize_admin_payload_uppercase_kraken_keys():
         {"kraken": {"KRAKEN_API_KEY": "key", "KRAKEN_SECRET_KEY": "secret", "KRAKEN_BASE_URL": "https://k"}}
     )
 
-    assert payload["kraken"]["kraken_api_key"] == "key"
-    assert payload["kraken"]["kraken_secret_key"] == "secret"
+    assert "kraken_api_key" not in payload["kraken"]
+    assert "kraken_secret_key" not in payload["kraken"]
     assert payload["kraken"]["kraken_base_url"] == "https://k"
     assert "KRAKEN_API_KEY" not in payload["kraken"]
 
@@ -102,8 +98,8 @@ def test_legacy_alias_rows_do_not_override_canonical_values():
 
     payload = runtime_settings.load_runtime_settings(FakeDb())
 
-    assert payload["kraken"]["kraken_api_key"] == "real-api-key"
-    assert payload["kraken"]["kraken_secret_key"] == "real-secret-key"
+    assert "kraken_api_key" not in payload["kraken"]
+    assert "kraken_secret_key" not in payload["kraken"]
 
 
 def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkeypatch):
@@ -129,8 +125,7 @@ def test_load_admin_settings_returns_curated_sections_with_empty_defaults(monkey
 
     assert "general" not in payload or payload["general"] == {}
     assert payload["executor"]["quote_assets"] == "USDC"
-    assert payload["kraken"]["kraken_api_key"] == {"configured": True}
-    assert payload["kraken"]["kraken_secret_key"] == {"configured": False}
+    assert payload["kraken"] == {"kraken_base_url": "https://api.kraken.com"}
     assert payload["market_data"]["kraken_max_symbols"] == 25
     assert payload["market_data"]["kraken_quote_assets"] == runtime_settings.DEFAULT_SETTINGS["market_data"]["kraken_quote_assets"]
     assert payload["strategy"]["planner_min_score"] == 4
@@ -457,8 +452,8 @@ def test_load_admin_settings_masks_sensitive_values(monkeypatch):
 
     payload = runtime_settings.load_admin_settings()
 
-    assert payload["kraken"]["kraken_api_key"] == {"configured": True}
-    assert payload["kraken"]["kraken_secret_key"] == {"configured": True}
+    assert "kraken_api_key" not in payload["kraken"]
+    assert "kraken_secret_key" not in payload["kraken"]
     assert payload["notifications"]["telegram_secret"] == {"configured": True}
     assert payload["notifications"]["discord_url"] == {"configured": True}
     assert "kraken-key" not in str(payload)
