@@ -250,3 +250,39 @@ def test_migrate_legacy_kraken_base_url_rows_keeps_existing_canonical_value():
     assert rows == [canonical]
     assert canonical.value == "https://canonical.kraken"
     assert deleted == [legacy]
+
+
+def test_cleanup_legacy_app_settings_backs_up_then_deletes_legacy_rows(tmp_path):
+    canonical = runtime_settings.AppSetting(category="kraken", key="kraken_base_url", value="https://canonical.kraken")
+    legacy = runtime_settings.AppSetting(category="kraken", key="kraken_rest_base", value="https://legacy.kraken")
+    alias = runtime_settings.AppSetting(category="kraken", key="KRAKEN_API_KEY", value="legacy-key")
+    rows = [canonical, legacy, alias]
+    deleted = []
+
+    class FakeScalars:
+        def all(self):
+            return rows
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def execute(self, statement):
+            return FakeResult()
+
+        def delete(self, row):
+            deleted.append(row)
+            rows.remove(row)
+
+        def commit(self):
+            pass
+
+    result = runtime_settings.cleanup_legacy_app_settings(FakeDb(), tmp_path / "backup.json")
+
+    assert result["deleted_count"] == 2
+    assert result["deleted_keys"] == ["kraken.KRAKEN_API_KEY", "kraken.kraken_rest_base"]
+    assert deleted == [alias, legacy] or deleted == [legacy, alias]
+    assert rows == [canonical]
+    assert '"critical_rows"' in (tmp_path / "backup.json").read_text()
+    assert "https://legacy.kraken" in (tmp_path / "backup.json").read_text()

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select, delete
@@ -184,6 +187,64 @@ LEGACY_ADMIN_SETTING_ALIASES: dict[tuple[str, str], tuple[str, str]] = {
     for display_key, runtime_key in aliases.items()
 }
 LEGACY_ADMIN_SETTING_ALIASES[("kraken", "EXECUTION_EXCHANGE")] = ("executor", "execution_exchange")
+
+
+# DEFAULT_SETTINGS audit (Raspberry/Kraken runtime):
+# - active: read by API/services/loops in the current backend runtime.
+# - legacy_read_only: accepted from existing app_settings/bootstrap rows for compatibility,
+#   but intentionally hidden from /api/v1/admin/settings.
+# - removable: obsolete persisted aliases/rows that can be backed up and deleted.
+DEFAULT_SETTINGS_SECTION_AUDIT: dict[str, str] = {
+    "general": "active",
+    "executor": "active",
+    "kraken": "active",
+    "market_data": "active",
+    "strategy": "active",
+    "notifications": "active",
+    "bot": "active",
+    "live": "active",
+    "momentum": "active",
+}
+DEFAULT_SETTINGS_KEY_AUDIT: dict[str, dict[str, str]] = {
+    section: {key: DEFAULT_SETTINGS_SECTION_AUDIT.get(section, "legacy_read_only") for key in values}
+    for section, values in DEFAULT_SETTINGS.items()
+}
+
+LEGACY_READ_ONLY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("admin/security", "ADMIN_TOKEN"),
+        ("kraken", "EXECUTION_EXCHANGE"),
+        ("kraken", "kraken_rest_base"),
+        ("kraken", "KRAKEN_BASE_URL"),
+        ("kraken", "KRAKEN_API_KEY"),
+        ("kraken", "KRAKEN_SECRET_KEY"),
+        ("kraken", "KRAKEN_USE_TESTNET"),
+    }
+)
+
+REMOVABLE_LEGACY_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
+    LEGACY_READ_ONLY_APP_SETTING_KEYS
+    | {
+        (section, display_key)
+        for section, aliases in ADMIN_FIELD_ALIASES.items()
+        for display_key in aliases
+    }
+)
+
+CRITICAL_APP_SETTING_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("general", "admin_token"),
+        ("executor", "execution_exchange"),
+        ("executor", "quote_assets"),
+        ("kraken", "kraken_base_url"),
+        ("kraken", "kraken_api_key"),
+        ("kraken", "kraken_secret_key"),
+        ("notifications", "telegram_chat_id"),
+        ("notifications", "telegram_secret"),
+        ("notifications", "discord_url"),
+        ("live", "live_trading_enabled"),
+    }
+)
 
 
 def _has_value(value: Any) -> bool:
@@ -461,6 +522,71 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
     finally:
         if owns_session:
             db.close()
+
+
+def cleanup_legacy_app_settings(
+    db: Session,
+    backup_path: str | Path | None = None,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Back up app_settings then delete obsolete legacy rows.
+
+    Canonical rows and active runtime keys are preserved.  Legacy rows remain
+    readable through load_runtime_settings migrations until this explicit cleanup
+    command is run.
+    """
+    rows = db.execute(select(AppSetting)).scalars().all()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if backup_path is None:
+        backup = Path("backups") / f"app_settings_before_legacy_cleanup_{timestamp}.json"
+    else:
+        backup = Path(backup_path)
+        if backup.is_dir():
+            backup = backup / f"app_settings_before_legacy_cleanup_{timestamp}.json"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+
+    serialized_rows = [
+        {"category": row.category, "key": row.key, "value": row.value}
+        for row in sorted(rows, key=lambda row: (row.category, row.key))
+    ]
+    critical_rows = [
+        row for row in serialized_rows if (row["category"], row["key"]) in CRITICAL_APP_SETTING_KEYS
+    ]
+    legacy_rows = [
+        row for row in rows if (row.category, row.key) in REMOVABLE_LEGACY_APP_SETTING_KEYS
+    ]
+    backup.write_text(
+        json.dumps(
+            {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "dry_run": dry_run,
+                "critical_keys": sorted([f"{section}.{key}" for section, key in CRITICAL_APP_SETTING_KEYS]),
+                "critical_rows": critical_rows,
+                "rows": serialized_rows,
+                "legacy_rows_to_delete": [
+                    {"category": row.category, "key": row.key, "value": row.value}
+                    for row in sorted(legacy_rows, key=lambda row: (row.category, row.key))
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+    if not dry_run:
+        for row in legacy_rows:
+            db.delete(row)
+        db.commit()
+
+    return {
+        "backup_path": str(backup),
+        "dry_run": dry_run,
+        "deleted_count": 0 if dry_run else len(legacy_rows),
+        "matched_legacy_count": len(legacy_rows),
+        "deleted_keys": sorted({f"{row.category}.{row.key}" for row in legacy_rows}),
+    }
 
 
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
