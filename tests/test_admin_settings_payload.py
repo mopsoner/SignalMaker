@@ -530,3 +530,25 @@ def test_load_runtime_settings_coerces_boolean_fields_from_db_values():
     assert payload["bot"]["bot_pipeline_enabled"] is False
     assert payload["bot"]["bot_executor_enabled"] is True
     assert payload["bot"]["bot_scheduler_enabled"] is False
+
+
+def test_signal_execution_interval_uses_runtime_value():
+    rows = [runtime_settings.AppSetting(category="strategy", key="signal_execution_interval", value="1h")]
+
+    class FakeScalars:
+        def all(self):
+            return rows
+
+    class FakeResult:
+        def scalars(self):
+            return FakeScalars()
+
+    class FakeDb:
+        def execute(self, statement):
+            return FakeResult()
+
+    payload = runtime_settings.load_runtime_settings(FakeDb())
+    config = runtime_settings.get_runtime_signal_config(FakeDb())
+
+    assert payload["strategy"]["signal_execution_interval"] == "1h"
+    assert config["execution_interval"] == "1h"

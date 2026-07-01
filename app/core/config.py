@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import ClassVar
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,8 @@ class Settings(BaseSettings):
     app.services.runtime_settings. This class remains the bootstrap fallback for
     defaults needed before the database-backed runtime settings are available.
     """
+
+    SUPPORTED_SIGNAL_EXECUTION_INTERVALS: ClassVar[set[str]] = {"1m", "5m", "15m", "1h", "4h"}
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -26,8 +29,17 @@ class Settings(BaseSettings):
 
     @field_validator("signal_execution_interval", mode="before")
     @classmethod
-    def validate_execution_interval(cls, v: str) -> str:
-        return "15m"
+    def validate_execution_interval(cls, v: str | None) -> str:
+        if v is None:
+            return "15m"
+        if isinstance(v, str):
+            interval = v.strip().lower()
+            if not interval:
+                return "15m"
+            if interval in cls.SUPPORTED_SIGNAL_EXECUTION_INTERVALS:
+                return interval
+        supported = ", ".join(sorted(cls.SUPPORTED_SIGNAL_EXECUTION_INTERVALS))
+        raise ValueError(f"Unsupported signal execution interval {v!r}. Supported intervals: {supported}.")
 
     @field_validator("momentum_candidates_min_rr", mode="before")
     @classmethod
@@ -130,7 +142,7 @@ class Settings(BaseSettings):
 
     def signal_config(self) -> dict:
         return {
-            "execution_interval": "15m",
+            "execution_interval": self.signal_execution_interval,
             "rsi_period": self.signal_rsi_period,
             "swing_window": self.signal_swing_window,
             "equal_level_tolerance_pct": self.signal_equal_level_tolerance_pct,
