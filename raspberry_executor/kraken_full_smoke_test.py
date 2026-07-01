@@ -104,6 +104,7 @@ def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) 
     url = _admin_kraken_test_url(base_url)
     if not url:
         return {"checked": False, "reason": "missing_signalmaker_base_url"}
+    response = None
     try:
         response = requests.post(url, timeout=timeout)
         if getattr(response, "status_code", None) == 405:
@@ -111,7 +112,21 @@ def _fetch_admin_kraken_credential_status(base_url: str, timeout: float = 10.0) 
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
-        return {"checked": False, "reason": "admin_kraken_test_unavailable", "error": str(exc)}
+        details: dict[str, Any] = {
+            "checked": False,
+            "reason": "admin_kraken_test_unavailable",
+            "error": str(exc),
+            "url": url,
+        }
+        if response is not None:
+            details.update(
+                {
+                    "status_code": getattr(response, "status_code", None),
+                    "content_type": response.headers.get("content-type"),
+                    "response_text_excerpt": response.text[:300],
+                }
+            )
+        return details
     if not isinstance(payload, dict):
         return {"checked": False, "reason": "invalid_admin_kraken_test_payload"}
     return {
