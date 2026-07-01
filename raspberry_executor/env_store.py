@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
-EXAMPLE_PATH = ROOT / ".env.raspberry.example"
+EXAMPLE_PATH = ROOT / ".env.example"
 
 # Minimal Raspberry bootstrap defaults for the code paths that still read the
 # local .env directly (config.py, momentum_decision_feed.py, executor modules,

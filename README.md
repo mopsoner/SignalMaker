@@ -88,7 +88,7 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi. It creates `.env` from `.env.raspberry.example`, which is intentionally limited to the current Raspberry startup surface: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and the minimal polling/feed/decision settings. Historical IBKR and margin variables are kept only in `.env.legacy.example` for reference and are not part of a fresh Raspberry install.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi. It creates `.env` from `.env.example`, the single supported template for current deployments. The template is intentionally limited to the current Raspberry startup surface: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and the minimal polling/feed/decision settings.
 
 ### Lightweight frontend for older Raspberry Pi devices
 Older Raspberry Pi devices / `armv6l` can fail on Vite/esbuild with `Bus error`. SignalMaker now avoids that path: run `bash scripts/build_frontend.sh` to refresh `frontend/dist` with static files only.
@@ -234,7 +234,7 @@ bash scripts/start_scheduler_worker.sh
 
 ## Production env
 ```bash
-cp .env.production.example .env
+cp .env.example .env
 ```
 Then edit the database URL and runtime values.
 
