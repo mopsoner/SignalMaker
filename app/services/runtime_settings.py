@@ -428,6 +428,35 @@ def _normalize_admin_payload(payload: dict[str, dict[str, Any]]) -> dict[str, di
     return normalized
 
 
+
+SENSITIVE_ADMIN_FIELDS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("kraken", "kraken_api_key"),
+        ("kraken", "kraken_secret_key"),
+        ("notifications", "telegram_secret"),
+        ("notifications", "discord_url"),
+    }
+)
+MASKED_SECRET_PLACEHOLDERS: frozenset[str] = frozenset({"", "********", "••••••••", "configured", "__configured__"})
+
+
+def _is_sensitive_admin_field(section: str, key: str) -> bool:
+    return (section, key) in SENSITIVE_ADMIN_FIELDS
+
+
+def _secret_status(value: Any) -> dict[str, bool]:
+    return {"configured": _has_value(value)}
+
+
+def _is_secret_placeholder(value: Any) -> bool:
+    if isinstance(value, dict) and set(value).issubset({"configured"}):
+        return True
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() in MASKED_SECRET_PLACEHOLDERS
+    return False
+
 ADMIN_EDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
     "general": ("admin_token",),
     "executor": ("execution_exchange", "quote_assets"),
@@ -450,6 +479,9 @@ def _admin_editable_payload(payload: dict[str, dict[str, Any]]) -> dict[str, dic
         section_payload: dict[str, Any] = {}
         for key in keys:
             value = values.get(key, defaults.get(key, ""))
+            if _is_sensitive_admin_field(section, key):
+                section_payload[key] = _secret_status(value)
+                continue
             if value is None:
                 value = ""
             section_payload[key] = value
@@ -625,6 +657,8 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
         if not isinstance(values, dict):
             continue
         for key, value in values.items():
+            if _is_sensitive_admin_field(category, key) and _is_secret_placeholder(value):
+                continue
             row = db.execute(
                 select(AppSetting).where(AppSetting.category == category, AppSetting.key == key)
             ).scalar_one_or_none()
