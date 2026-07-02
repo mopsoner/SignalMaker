@@ -60,6 +60,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "bot_executor_enabled": base_settings.bot_executor_enabled,
         "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
         "bot_momentum_engine_enabled": True,
+        "bot_pipeline_symbol_limit": "all",
         "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
         "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
         "bot_scheduler_interval_sec": base_settings.bot_scheduler_interval_sec,
