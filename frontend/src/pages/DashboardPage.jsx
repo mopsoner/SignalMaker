@@ -183,5 +183,5 @@ export default function DashboardPage() {
     {loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}
     <FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" />
     <details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {sortedFilteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={sortedFilteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={sortedFilteredAssets} /></details>
-    </div>
-  } 
+  </div>
+}
