@@ -89,7 +89,7 @@ def test_buy_symbol_keeps_confirmed_quote_when_next_account_read_is_stale(tmp_pa
 
     result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
 
-    assert result == "bought:ALLUSDC:qty=12.00000000:notional=12.0000"
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
 
 
@@ -117,7 +117,7 @@ def test_spot_buy_confirms_order_before_recording_open_position(tmp_path, monkey
 
     result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert result == "bought:ALLUSDC:qty=35.00000000:notional=35.0000"
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert calls == ["get_order", "add_open_position"]
     position = state.open_positions()["momentum-ALLUSDC"]
     assert position["entry_confirmed"] is True
@@ -130,7 +130,7 @@ def test_spot_buy_confirms_order_before_recording_open_position(tmp_path, monkey
     assert event["payload"]["entry_confirm_payload"]["orderId"] == 1
 
 
-def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
+def test_buy_symbol_keeps_order_quote_when_more_quote_is_available(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
@@ -139,14 +139,14 @@ def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
 
     result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert result == "bought:ALLUSDC:qty=35.00000000:notional=35.0000"
-    assert kraken.orders[0]["executedQty"] == "35.00000000"
-    assert state.open_positions()["momentum-ALLUSDC"]["notional_used"] == 35.0
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert kraken.orders[0]["executedQty"] == "10.00000000"
+    assert state.open_positions()["momentum-ALLUSDC"]["notional_used"] == 10.0
 
 
-def test_buy_symbol_can_keep_fixed_order_quote_when_full_quote_disabled(tmp_path, monkeypatch):
+def test_buy_symbol_ignores_full_quote_env_and_keeps_order_quote(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "false")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     state = StateStore()
@@ -322,7 +322,7 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
     assert sold_event["payload"]["mode"] == "cross_margin"
 
 
-def test_rotate_sells_cross_margin_position_before_forced_cross_margin_buy(tmp_path, monkeypatch):
+def test_rotate_sells_cross_margin_position_before_restarting_buy_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
@@ -349,8 +349,8 @@ def test_rotate_sells_cross_margin_position_before_forced_cross_margin_buy(tmp_p
 
     assert result.startswith("rotate:sell_confirmed_cross_margin:BANKUSDC"), result
     assert calls == [
-        ("sell", "BANKUSDC", True, ["momentum-BANKUSDC"]),
-        ("buy", "ALLUSDC", True, []),
+        ("sell", "BANKUSDC", False, ["momentum-BANKUSDC"]),
+        ("buy", "ALLUSDC", False, []),
     ]
 
 
@@ -390,7 +390,7 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
 
     def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
         calls.append(("buy", decision.get("buy_symbol"), decision["action"], decision["order_sequence"], list(store.open_positions())))
-        return "fallback_buy:ALLUSDC:bought:ALLUSDC:qty=25.00000000:notional=25.0000"
+        return "fallback_buy:ALLUSDC:bought:ALLUSDC:qty=10.00000000:notional=10.0000"
 
     monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
     monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
@@ -473,9 +473,9 @@ def test_rotation_sell_then_buy_uses_quote_balance_after_sale(tmp_path, monkeypa
     buy_result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "ROTATE"})
 
     assert sell_result.startswith("sell_confirmed:BANKUSDC"), sell_result
-    assert buy_result == "bought:ALLUSDC:qty=25.00000000:notional=25.0000"
+    assert buy_result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert [order["symbol"] for order in kraken.orders] == ["BANKUSDC", "ALLUSDC"]
-    assert kraken.orders[1]["executedQty"] == "25.00000000"
+    assert kraken.orders[1]["executedQty"] == "10.00000000"
 
 
 def test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monkeypatch):
@@ -773,8 +773,9 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
     ]
 
 
-def test_kraken_buy_attempts_margin_5_then_3_before_spot_fallback(tmp_path, monkeypatch):
+def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)

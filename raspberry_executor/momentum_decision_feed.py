@@ -498,11 +498,7 @@ def _buy_symbol_cross_margin(
         effective_leverage = margin_multiplier()
 
     desired_notional = float(settings.order_quote_amount)
-    use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "false"), default=False)
-    if use_full_available_quote:
-        quote_amount, _free_quote = _safe_margin_quote_notional(margin, symbol, quote, desired_notional, use_full_available=True)
-    else:
-        quote_amount = desired_notional
+    quote_amount = desired_notional
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
     manager = MarginOrderManager(kraken, margin, rules)
     try:
@@ -533,27 +529,27 @@ def _buy_symbol_cross_margin(
 def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], quote: str, *, use_available_quote: bool = True) -> str:
     cid = _candidate_id(symbol)
     desired_notional = float(settings.order_quote_amount)
-    use_full_available_quote = use_available_quote and _bool(_env("MOMENTUM_DECISION_BUY_WITH_FULL_QUOTE", "true"), default=True)
-    notional, free_quote = _safe_quote_notional(settings, kraken, quote, desired_notional, use_full_available=use_full_available_quote) if use_available_quote else (desired_notional, desired_notional)
+    available_notional, free_quote = _safe_quote_notional(settings, kraken, quote, desired_notional) if use_available_quote else (desired_notional, desired_notional)
+    notional = desired_notional
     min_buy_notional = max(5.0, _float_env("MOMENTUM_DECISION_MIN_BUY_NOTIONAL", 5.0))
-    if use_available_quote and notional < min_buy_notional and not kraken.dry_run:
+    required_notional = max(min_buy_notional, desired_notional)
+    if use_available_quote and available_notional < required_notional and not kraken.dry_run:
         wait_attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
         wait_sleep = max(0.2, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
         reserve = max(0.0, _float_env("MOMENTUM_DECISION_QUOTE_RESERVE", 1.0))
         safety_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_BUY_BALANCE_RATIO", 0.995)))
-        required_free_quote = reserve + (min_buy_notional / safety_ratio)
+        required_free_quote = reserve + (required_notional / safety_ratio)
         confirmed_free_quote = _wait_for_quote_notional(kraken, quote, required_free_quote, attempts=wait_attempts, sleep_sec=wait_sleep)
-        notional, free_quote = _safe_quote_notional(
+        available_notional, free_quote = _safe_quote_notional(
             settings,
             kraken,
             quote,
             desired_notional,
-            use_full_available=use_full_available_quote,
             observed_free_quote=confirmed_free_quote,
         )
-    if notional < min_buy_notional:
-        state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
-        return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"
+    if available_notional < required_notional:
+        state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": available_notional, "min_buy_notional": min_buy_notional, "decision": decision})
+        return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={available_notional:.4f}"
 
     entry = _place_confirmed_spot_market_entry(kraken=kraken, rules=rules, symbol=symbol, quote_amount=notional)
     qty = str(entry["quantity"])
@@ -987,10 +983,7 @@ def buy_symbol(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: 
     if already:
         state.add_event(cid, "momentum_buy_skipped_already_have", {"symbol": symbol, "reason": reason, "decision": decision})
         return f"already_have:{reason}"
-    explicit_cross_margin = _env("MOMENTUM_DECISION_USE_CROSS_MARGIN") is not None and _explicit_cross_margin_requested()
-    settings_cross_margin = hasattr(settings, "exchange") and _explicit_cross_margin_requested()
-    kraken_cross_margin = str(getattr(settings, "exchange", "") or "").lower() in {"kraken", "kraken_pro"}
-    should_try_margin = bool(decision.get("force_cross_margin")) or explicit_cross_margin or settings_cross_margin or kraken_cross_margin
+    should_try_margin = bool(decision.get("force_cross_margin")) or _explicit_cross_margin_requested()
     if should_try_margin:
         margin_failures: list[dict[str, Any]] = []
         for leverage in margin_leverage_attempts():
@@ -1197,7 +1190,6 @@ def execute_decision(decision: dict[str, Any]) -> str:
         if held_symbol and (not buy or buy == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
         if held_symbol and buy != held_symbol:
-            force_cross_margin = _is_cross_margin_position(held_position)
             rotation_decision = {
                 **decision,
                 "action": "ROTATE",
@@ -1206,7 +1198,6 @@ def execute_decision(decision: dict[str, Any]) -> str:
                 "buy_symbol": buy,
                 "symbol": buy,
                 "order_sequence": _rotation_order_sequence(held_symbol, buy),
-                **({"force_cross_margin": True} if force_cross_margin else {}),
             }
             state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
             sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
@@ -1227,8 +1218,7 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action == "ROTATE":
         if not _decision_targets_held_symbol(decision, held_symbol):
             return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-        force_cross_margin = _is_cross_margin_position(held_position)
-        rotation_decision = {**decision, "force_cross_margin": True} if force_cross_margin else decision
+        rotation_decision = dict(decision)
         state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": rotation_decision.get("buy_symbol"), "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
         sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
         buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
