@@ -30,7 +30,8 @@ class AssetStateService:
             stmt = stmt.order_by(AssetStateCurrent.updated_at.desc(), AssetStateCurrent.score.desc())
         else:
             stmt = stmt.order_by(AssetStateCurrent.score.desc(), AssetStateCurrent.updated_at.desc())
-        stmt = stmt.limit(limit)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())
 
     def get_by_symbol(self, symbol: str) -> AssetStateCurrent | None:
