@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.get("", response_model=list[AssetStateRead])
 def list_assets(
-    limit: int = Query(default=100, ge=1, le=1000),
+    limit: int | None = Query(default=None, ge=1, le=1000),  
     min_score: float | None = Query(default=None),
     stage: str | None = Query(default=None),
     sort_by: str = Query(default="score", pattern="^(score|updated_at)$"),
