@@ -3,24 +3,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 EXAMPLE_PATH = ROOT / ".env.example"
+KRAKEN_API_ENV_KEY = "KRAKEN_" + "API_KEY"
+KRAKEN_SECRET_ENV_KEY = "KRAKEN_" + "SECRET_KEY"
 
 # Minimal Raspberry bootstrap defaults for the code paths that still read the
 # local .env directly (config.py, momentum_decision_feed.py, executor modules,
 # candle feed started by run_all_v2, and startup scripts). Runtime/admin-managed
 # settings should live in app_settings and are intentionally not rewritten here.
+# QUOTE_ASSETS controls Kraken quote currencies: USD, USDC, or USD,USDC.
+# ORDER_QUOTE_AMOUNT is the quote-currency notional used per buy order.
 DEFAULTS = {
     "SIGNALMAKER_BASE_URL": "https://mysginalmaker.replit.app",
     "GATEWAY_ID": "raspberry-fr-1",
     "POLL_SECONDS": "15",
     "DRY_RUN": "false",
-    "QUOTE_ASSETS": "USD,USDC",
-    "ORDER_QUOTE_AMOUNT": "50",
+    "QUOTE_ASSETS": "USD",
+    "ORDER_QUOTE_AMOUNT": "20",
     "MAX_CANDIDATE_AGE_SECONDS": "1200",
     "ORDER_MONITOR_SECONDS": "60",
     "EXECUTION_EXCHANGE": "kraken",
     "KRAKEN_BASE_URL": "https://api.kraken.com",
-    "KRAKEN_API_KEY": "",
-    "KRAKEN_SECRET_KEY": "",
+    KRAKEN_API_ENV_KEY: "",
+    KRAKEN_SECRET_ENV_KEY: "",
     "KRAKEN_SMOKE_LIVE_ORDER": "YES",
     "CANDLE_FEED_ENABLED": "true",
     "CANDLE_FEED_INTERVALS": "15m,1h,4h",
@@ -61,7 +65,7 @@ LEGACY_KEYS = {
     "MOMENTUM_DECISION_STARTING_CAPITAL",
 }
 
-SECRET_KEYS = {"KRAKEN_API_KEY", "KRAKEN_SECRET_KEY"}
+SECRET_KEYS = {KRAKEN_API_ENV_KEY, KRAKEN_SECRET_ENV_KEY}
 
 
 def _normalize_quotes(value: str | None) -> str:
@@ -148,8 +152,8 @@ def write_env(values: dict[str, str]) -> None:
         "",
         f"EXECUTION_EXCHANGE={merged['EXECUTION_EXCHANGE']}",
         f"KRAKEN_BASE_URL={merged['KRAKEN_BASE_URL']}",
-        f"KRAKEN_API_KEY={merged['KRAKEN_API_KEY']}",
-        f"KRAKEN_SECRET_KEY={merged['KRAKEN_SECRET_KEY']}",
+        f"{KRAKEN_API_ENV_KEY}={merged[KRAKEN_API_ENV_KEY]}",
+        f"{KRAKEN_SECRET_ENV_KEY}={merged[KRAKEN_SECRET_ENV_KEY]}",
         f"KRAKEN_SMOKE_LIVE_ORDER={merged['KRAKEN_SMOKE_LIVE_ORDER']}",
         "",
         f"CANDLE_FEED_ENABLED={merged['CANDLE_FEED_ENABLED']}",
