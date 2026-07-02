@@ -95,9 +95,10 @@ function MobileAssetCards({ rows }) {
 
 export default function DashboardPage() {
   const [marketFilter, setMarketFilter] = useState('actionable')
-  const { data: adminSettings } = usePollingQuery(useCallback(() => api.adminSettings(), []), 30000)
-  const assetLimit = 50
-  const { data: assets = [], loading, error } = usePollingQuery(useCallback(() => api.assets(`?limit=${assetLimit}&sort_by=updated_at`), [assetLimit]), 15000)
+  const { data: assets = [], loading, error } = usePollingQuery(
+    useCallback(() => api.assets('?sort_by=updated_at'), []),
+    15000
+  )
 
   const counts = useMemo(() => ({
     actionable: assets.filter(actionableWatch).length,
@@ -177,10 +178,10 @@ export default function DashboardPage() {
 
   return <div className="page-stack">
     <PageHeader title="Dashboard 360" subtitle="Market overview: 4H context/target, 1H Wyckoff-SMC setup, 15m alignment filter." />
-    <div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint={`latest updated · limit ${assetLimit}`} /><StatCard label="Trade candidate" value={counts.tradeCandidate} /><StatCard label="1H setup valid" value={counts.oneHourConfirmed} /><StatCard label="Waiting 15m alignment" value={counts.waitingFifteenMinAlignment} /></div>
+    <div className="stats-grid"><StatCard label="Tracked assets" value={assets.length} hint="latest updated · all loaded" /><StatCard label="Trade candidate" value={counts.tradeCandidate} /><StatCard label="1H setup valid" value={counts.oneHourConfirmed} /><StatCard label="Waiting 15m alignment" value={counts.waitingFifteenMinAlignment} /></div>
     <div className="stats-grid"><StatCard label="Average score" value={avgScore} /><StatCard label="Actionable" value={counts.actionable} /><StatCard label="Bull / Bear 1H" value={`${counts.oneHourBull} / ${counts.oneHourBear}`} /><StatCard label="15m aligned / opposed" value={`${counts.fifteenMinAligned} / ${counts.fifteenMinOpposed}`} /></div>
     {loading ? <div className="panel">Loading assets…</div> : null}{error ? <div className="panel error">{error}</div> : null}
     <FoldableTable title="Highest score assets" columns={columns.slice(0, 9)} rows={strongestAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" />
     <details className="panel collapsible-panel" open><summary><h2>Market view 360</h2><span className="collapse-indicator">⌄</span></summary><div className="market-toolbar"><div className="filter-chips" role="tablist" aria-label="Market filters">{filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${marketFilter === key ? 'active' : ''}`} onClick={() => setMarketFilter(key)}>{label}</button>)}</div><div className="market-toolbar-hint">Showing {sortedFilteredAssets.length} / {assets.length}</div></div><div className="desktop-market-table"><FoldableTable title="Assets" columns={columns} rows={sortedFilteredAssets} empty="No asset state available" defaultSortKey="score" defaultSortDir="desc" /></div><MobileAssetCards rows={sortedFilteredAssets} /></details>
   </div>
-}
+  }
