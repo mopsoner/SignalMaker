@@ -15,6 +15,7 @@ from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_leverage_attempts, margin_multiplier
 from raspberry_executor.state import StateStore
+from raspberry_executor.spot_order_manager import SpotOrderManager
 
 logger = setup_logging("raspberry-momentum-decision")
 
@@ -432,44 +433,14 @@ def _spot_avg_fill_price(kraken: KrakenClient, payload: dict, fallback: float) -
     return float(fallback)
 
 
-def _confirm_spot_entry_order(kraken: KrakenClient, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float, fallback_qty: str) -> dict[str, Any]:
-    symbol = symbol.upper()
-    if not entry_order_id:
-        raise RuntimeError(f"momentum_spot_entry_missing_order_id symbol={symbol} payload={submitted_payload}")
-    if kraken.dry_run:
-        payload = {**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}
-        return {
-            "entry_confirmed": True,
-            "entry_confirm_status": "FILLED",
-            "entry_confirm_payload": payload,
-            "entry_price": _spot_avg_fill_price(kraken, payload, fallback_price),
-            "executed_qty": _spot_executed_qty(payload, fallback_qty),
-        }
-
-    timeout = max(0.1, _float_env("MOMENTUM_DECISION_ENTRY_CONFIRM_TIMEOUT", 30.0))
-    poll = max(0.1, _float_env("MOMENTUM_DECISION_ENTRY_CONFIRM_POLL", 1.0))
-    deadline = time.monotonic() + timeout
-    last_payload = submitted_payload
-    while time.monotonic() <= deadline:
-        payload = kraken.get_order(symbol, entry_order_id)
-        last_payload = payload
-        status = str(payload.get("status") or "").upper()
-        order_symbol = str(payload.get("symbol") or symbol).upper()
-        executed_qty = float(payload.get("executedQty") or 0)
-        if order_symbol != symbol:
-            raise RuntimeError(f"momentum_spot_entry_symbol_mismatch expected={symbol} got={order_symbol} order_id={entry_order_id}")
-        if status == "FILLED" and executed_qty > 0:
-            return {
-                "entry_confirmed": True,
-                "entry_confirm_status": status,
-                "entry_confirm_payload": payload,
-                "entry_price": _spot_avg_fill_price(kraken, payload, fallback_price),
-                "executed_qty": _spot_executed_qty(payload, fallback_qty),
-            }
-        if status in {"CANCELED", "REJECTED", "EXPIRED"}:
-            raise RuntimeError(f"momentum_spot_entry_not_filled symbol={symbol} order_id={entry_order_id} status={status} payload={payload}")
-        time.sleep(poll)
-    raise RuntimeError(f"momentum_spot_entry_confirmation_timeout symbol={symbol} order_id={entry_order_id} last_payload={last_payload}")
+def _confirm_spot_entry_order(kraken: KrakenClient, rules: KrakenSymbolRules, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float, fallback_qty: str) -> dict[str, Any]:
+    confirm = SpotOrderManager(kraken, rules).confirm_spot_entry_order(
+        symbol=symbol,
+        entry_order_id=entry_order_id,
+        submitted_payload={**submitted_payload, "quantity": submitted_payload.get("quantity") or fallback_qty},
+        fallback_price=fallback_price,
+    )
+    return {**confirm, "executed_qty": _spot_executed_qty(confirm.get("entry_confirm_payload") or {}, fallback_qty)}
 
 
 def _place_confirmed_spot_market_entry(*, kraken: KrakenClient, rules: KrakenSymbolRules, symbol: str, quote_amount: float) -> dict[str, Any]:
@@ -480,6 +451,7 @@ def _place_confirmed_spot_market_entry(*, kraken: KrakenClient, rules: KrakenSym
     entry_order_id = _spot_order_id(order)
     confirm = _confirm_spot_entry_order(
         kraken,
+        rules,
         symbol=symbol,
         entry_order_id=entry_order_id,
         submitted_payload=order,
@@ -610,7 +582,7 @@ def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, s
         "quote_asset": quote,
         "confirmed_base_balance": acquired,
     })
-    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": notional, "quote": quote, "confirmed_base_balance": acquired, "order": order, "decision": decision, "mode": "spot"})
+    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": notional, "quote": quote, "confirmed_base_balance": acquired, "order": order, "decision": decision, "mode": "spot", "entry_confirmed": entry.get("entry_confirmed"), "entry_confirm_status": entry.get("entry_confirm_status"), "entry_confirm_payload": entry.get("entry_confirm_payload") or {}})
     return f"bought:{symbol}:qty={qty}:notional={notional:.4f}"
 
 
