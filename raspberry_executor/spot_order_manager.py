@@ -42,9 +42,9 @@ class SpotOrderManager:
 
     def _entry_confirm_timeout_seconds(self) -> float:
         try:
-            return max(1.0, float(os.getenv("SPOT_ENTRY_CONFIRM_TIMEOUT_SECONDS", "8") or "8"))
+            return max(1.0, float(os.getenv("SPOT_ENTRY_CONFIRM_TIMEOUT_SECONDS", "30") or "30"))
         except Exception:
-            return 8.0
+            return 30.0
 
     def _entry_confirm_poll_seconds(self) -> float:
         try:
