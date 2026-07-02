@@ -20,7 +20,7 @@ class AssetStateService:
         self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
         self.db.commit()
 
-    def list_assets(self, *, limit: int, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
+    def list_assets(self, *, limit: int | None, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
         stmt = select(AssetStateCurrent)
         if min_score is not None:
             stmt = stmt.where(AssetStateCurrent.score >= min_score)
