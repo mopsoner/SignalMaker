@@ -18,8 +18,28 @@ REQUIRED_PACKAGES=(
   build-essential
 )
 
+REQ_FILE="requirements-raspberry.txt"
+DEPS_MARKER=".deps_ok"
+DEPS_HASH_FILE=".deps_ok.sha256"
+
 apt_install() {
   sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+}
+
+package_installed() {
+  dpkg -s "$1" >/dev/null 2>&1
+}
+
+requirements_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$REQ_FILE" | awk '{print $1}'
+  else
+    python3 - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+print(sha256(Path('requirements-raspberry.txt').read_bytes()).hexdigest())
+PY
+  fi
 }
 
 if ! command -v sudo >/dev/null 2>&1; then
@@ -27,22 +47,39 @@ if ! command -v sudo >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -f "requirements-raspberry.txt" ]; then
-  echo "requirements-raspberry.txt is missing" >&2
+if [ ! -f "$REQ_FILE" ]; then
+  echo "$REQ_FILE is missing" >&2
   exit 1
 fi
 
-echo "Installing Raspberry Pi system dependencies..."
-sudo apt-get update
-apt_install --fix-broken
-apt_install postgresql-common
+echo "Checking Raspberry Pi system dependencies..."
+MISSING_PACKAGES=()
+for package in "${REQUIRED_PACKAGES[@]}"; do
+  if ! package_installed "$package"; then
+    MISSING_PACKAGES+=("$package")
+  fi
+done
+
+if ! package_installed postgresql-common; then
+  MISSING_PACKAGES=(postgresql-common "${MISSING_PACKAGES[@]}")
+fi
+
+if [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
+  echo "Installing missing system packages: ${MISSING_PACKAGES[*]}"
+  sudo apt-get update
+  sudo dpkg --configure -a
+  apt_install --fix-broken
+  apt_install "${MISSING_PACKAGES[@]}"
+else
+  echo "System packages already present; skipping apt-get update/install."
+fi
+
 if ! command -v pg_lsclusters >/dev/null 2>&1; then
-  echo "pg_lsclusters was not installed by postgresql-common; repairing PostgreSQL packages..." >&2
+  echo "pg_lsclusters not available; repairing PostgreSQL common package..." >&2
+  sudo apt-get update
   sudo dpkg --configure -a
   apt_install --reinstall postgresql-common
 fi
-apt_install "${REQUIRED_PACKAGES[@]}"
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${REQUIRED_PACKAGES[@]}"
 
 echo "Enabling and starting PostgreSQL..."
 sudo systemctl enable postgresql
@@ -86,7 +123,7 @@ set_env_value() {
 RASPBERRY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 RASPBERRY_IP="${RASPBERRY_IP:-<raspberry-ip>}"
 RASPBERRY_APP_PORT="${RASPBERRY_APP_PORT:-$(env_value APP_PORT 8080)}"
-RASPBERRY_QUOTE_ASSETS="${RASPBERRY_QUOTE_ASSETS:-$(env_value QUOTE_ASSETS 'USD,USDC')}"
+RASPBERRY_QUOTE_ASSETS="${RASPBERRY_QUOTE_ASSETS:-$(env_value QUOTE_ASSETS 'USD')}"
 RASPBERRY_CORS_ORIGINS="http://localhost:${RASPBERRY_APP_PORT},http://127.0.0.1:${RASPBERRY_APP_PORT},http://${RASPBERRY_IP}:${RASPBERRY_APP_PORT}"
 RASPBERRY_CORS_ORIGIN_REGEX=''
 
@@ -98,12 +135,30 @@ if ! grep -q '^CORS_ORIGIN_REGEX=' .env; then
   printf 'CORS_ORIGIN_REGEX=%s\n' "$RASPBERRY_CORS_ORIGIN_REGEX" >> .env
 fi
 
-echo "Creating a fresh Python virtual environment..."
-rm -rf .venv
-python3 -m venv .venv --system-site-packages
+if [ -x .venv/bin/python ]; then
+  echo "Python virtual environment already present; skipping venv creation."
+else
+  echo "Creating Python virtual environment..."
+  python3 -m venv .venv --system-site-packages
+fi
+
 source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements-raspberry.txt
+
+CURRENT_REQ_HASH="$(requirements_hash)"
+PREVIOUS_REQ_HASH=""
+if [ -f "$DEPS_HASH_FILE" ]; then
+  PREVIOUS_REQ_HASH="$(cat "$DEPS_HASH_FILE" 2>/dev/null || true)"
+fi
+
+if [ -f "$DEPS_MARKER" ] && [ "$PREVIOUS_REQ_HASH" = "$CURRENT_REQ_HASH" ]; then
+  echo "Python dependencies already installed for current $REQ_FILE; skipping pip install."
+else
+  echo "Installing Python dependencies because requirements changed or marker is missing..."
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install -r "$REQ_FILE"
+  printf '%s\n' "$CURRENT_REQ_HASH" > "$DEPS_HASH_FILE"
+  touch "$DEPS_MARKER"
+fi
 
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 if [ "$ARCH" = "armv6l" ]; then
