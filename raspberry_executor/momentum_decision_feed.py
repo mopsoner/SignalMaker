@@ -13,7 +13,6 @@ from raspberry_executor.env_store import read_env
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.execution_core import place_spot_market_entry
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_leverage_attempts, margin_multiplier
 from raspberry_executor.state import StateStore
 
@@ -396,6 +395,112 @@ def _safe_margin_quote_notional(margin: MarginClient, symbol: str, quote: str, d
     return min(desired, usable), free_quote
 
 
+
+def _spot_order_id(payload: dict | None):
+    if not payload:
+        return None
+    return payload.get("orderId") or payload.get("order_id")
+
+
+def _spot_executed_qty(payload: dict, fallback: str | None = None) -> str:
+    try:
+        raw = payload.get("executedQty")
+        if float(raw or 0) > 0:
+            return str(raw)
+    except Exception:
+        pass
+    return str(fallback or "0")
+
+
+def _spot_avg_fill_price(kraken: KrakenClient, payload: dict, fallback: float) -> float:
+    avg = kraken.average_fill_price(payload, fallback=fallback)
+    if avg is not None:
+        return float(avg)
+    try:
+        qty = float(payload.get("executedQty") or 0)
+        quote_qty = float(payload.get("cummulativeQuoteQty") or payload.get("cumulativeQuoteQty") or 0)
+        if qty > 0 and quote_qty > 0:
+            return quote_qty / qty
+    except Exception:
+        pass
+    try:
+        price = payload.get("price")
+        if price and float(price) > 0:
+            return float(price)
+    except Exception:
+        pass
+    return float(fallback)
+
+
+def _confirm_spot_entry_order(kraken: KrakenClient, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float, fallback_qty: str) -> dict[str, Any]:
+    symbol = symbol.upper()
+    if not entry_order_id:
+        raise RuntimeError(f"momentum_spot_entry_missing_order_id symbol={symbol} payload={submitted_payload}")
+    if kraken.dry_run:
+        payload = {**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}
+        return {
+            "entry_confirmed": True,
+            "entry_confirm_status": "FILLED",
+            "entry_confirm_payload": payload,
+            "entry_price": _spot_avg_fill_price(kraken, payload, fallback_price),
+            "executed_qty": _spot_executed_qty(payload, fallback_qty),
+        }
+
+    timeout = max(0.1, _float_env("MOMENTUM_DECISION_ENTRY_CONFIRM_TIMEOUT", 30.0))
+    poll = max(0.1, _float_env("MOMENTUM_DECISION_ENTRY_CONFIRM_POLL", 1.0))
+    deadline = time.monotonic() + timeout
+    last_payload = submitted_payload
+    while time.monotonic() <= deadline:
+        payload = kraken.get_order(symbol, entry_order_id)
+        last_payload = payload
+        status = str(payload.get("status") or "").upper()
+        order_symbol = str(payload.get("symbol") or symbol).upper()
+        executed_qty = float(payload.get("executedQty") or 0)
+        if order_symbol != symbol:
+            raise RuntimeError(f"momentum_spot_entry_symbol_mismatch expected={symbol} got={order_symbol} order_id={entry_order_id}")
+        if status == "FILLED" and executed_qty > 0:
+            return {
+                "entry_confirmed": True,
+                "entry_confirm_status": status,
+                "entry_confirm_payload": payload,
+                "entry_price": _spot_avg_fill_price(kraken, payload, fallback_price),
+                "executed_qty": _spot_executed_qty(payload, fallback_qty),
+            }
+        if status in {"CANCELED", "REJECTED", "EXPIRED"}:
+            raise RuntimeError(f"momentum_spot_entry_not_filled symbol={symbol} order_id={entry_order_id} status={status} payload={payload}")
+        time.sleep(poll)
+    raise RuntimeError(f"momentum_spot_entry_confirmation_timeout symbol={symbol} order_id={entry_order_id} last_payload={last_payload}")
+
+
+def _place_confirmed_spot_market_entry(*, kraken: KrakenClient, rules: KrakenSymbolRules, symbol: str, quote_amount: float) -> dict[str, Any]:
+    symbol = symbol.upper()
+    price = kraken.current_price(symbol)
+    requested_qty = rules.quantity_from_quote(symbol, float(quote_amount), price, market=True)
+    order = kraken.place_market_entry(symbol, "long", requested_qty)
+    entry_order_id = _spot_order_id(order)
+    confirm = _confirm_spot_entry_order(
+        kraken,
+        symbol=symbol,
+        entry_order_id=entry_order_id,
+        submitted_payload=order,
+        fallback_price=price,
+        fallback_qty=requested_qty,
+    )
+    return {
+        "mode": "spot",
+        "symbol": symbol,
+        "side": "long",
+        "quantity": confirm["executed_qty"],
+        "entry_price": float(confirm["entry_price"]),
+        "entry_order_id": entry_order_id,
+        "leverage": None,
+        "entry_payload": order,
+        "total_quote_amount": float(quote_amount),
+        "entry_confirmed": confirm.get("entry_confirmed"),
+        "entry_confirm_status": confirm.get("entry_confirm_status"),
+        "entry_confirm_payload": confirm.get("entry_confirm_payload") or {},
+    }
+
 def _buy_symbol_cross_margin(
     settings,
     kraken: KrakenClient,
@@ -478,7 +583,7 @@ def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, s
         state.add_event(cid, "momentum_buy_skipped_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": notional, "min_buy_notional": min_buy_notional, "decision": decision})
         return f"quote_balance_wait:{quote}:free={free_quote:.4f}:usable={notional:.4f}"
 
-    entry = place_spot_market_entry(kraken=kraken, rules=rules, symbol=symbol, quote_amount=notional)
+    entry = _place_confirmed_spot_market_entry(kraken=kraken, rules=rules, symbol=symbol, quote_amount=notional)
     qty = str(entry["quantity"])
     order = entry["entry_payload"]
     fill_price = float(entry["entry_price"])
@@ -495,9 +600,12 @@ def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, s
         "entry_price": float(fill_price),
         "stop_price": None,
         "target_price": None,
-        "entry_order_id": order.get("orderId"),
+        "entry_order_id": entry.get("entry_order_id"),
         "momentum_decision": decision,
         "entry_payload": order,
+        "entry_confirmed": entry.get("entry_confirmed"),
+        "entry_confirm_status": entry.get("entry_confirm_status"),
+        "entry_confirm_payload": entry.get("entry_confirm_payload") or {},
         "notional_used": notional,
         "quote_asset": quote,
         "confirmed_base_balance": acquired,
