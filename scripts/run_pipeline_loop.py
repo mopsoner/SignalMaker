@@ -35,6 +35,20 @@ def as_bool(value, default=True):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return default
 
+
+def parse_symbol_limit(value):
+    if value is None:
+        return DEFAULT_LIMIT
+    text = str(value).strip().lower()
+    if text in {"", "0", "none", "all", "auto", "null"}:
+        return None
+    try:
+        parsed = int(text)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
     print("Pipeline worker started", flush=True)
     while True:
@@ -45,17 +59,17 @@ if __name__ == "__main__":
 
             enabled = as_bool(bot.get("bot_pipeline_enabled", True), default=True)
 
-raw_limit = bot.get("bot_pipeline_symbol_limit")
-if raw_limit is None:
-    raw_limit = os.getenv("BOT_PIPELINE_SYMBOL_LIMIT")
+            raw_limit = bot.get("bot_pipeline_symbol_limit")
+            if raw_limit is None:
+                raw_limit = os.getenv("BOT_PIPELINE_SYMBOL_LIMIT")
 
-limit = parse_symbol_limit(raw_limit)
-interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
-settings_log = (
-    f"bot_pipeline_enabled={enabled} "
-    f"bot_pipeline_interval_sec={interval} "
-    f"symbol_limit={limit if limit is not None else 'all'}"
-)
+            limit = parse_symbol_limit(raw_limit)
+            interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
+            settings_log = (
+                f"bot_pipeline_enabled={enabled} "
+                f"bot_pipeline_interval_sec={interval} "
+                f"symbol_limit={limit if limit is not None else 'all'}"
+            )
 
             print(f"Pipeline tick start: {settings_log}", flush=True)
             if not enabled:
@@ -77,15 +91,3 @@ settings_log = (
                 pass
 
         time.sleep(interval)
-
-def parse_symbol_limit(value):
-    if value is None:
-        return None
-    text = str(value).strip().lower()
-    if text in {"", "0", "none", "all", "auto", "null"}:
-        return None
-    try:
-        parsed = int(text)
-        return parsed if parsed > 0 else None
-    except Exception:
-        return None
