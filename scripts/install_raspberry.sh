@@ -6,6 +6,7 @@ cd "$APP_DIR"
 
 REQUIRED_PACKAGES=(
   git
+  cron
   python3
   python3-venv
   python3-pip
@@ -119,123 +120,42 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://postgres:postgres@loca
 echo "Running database initialization..."
 python -m scripts.init_db
 
-install_systemd_services() {
-  if ! command -v systemctl >/dev/null 2>&1; then
-    echo "systemd not found; skipping SignalMaker service installation" >&2
+install_run_sh_startup() {
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo "crontab not found; skipping run.sh startup registration" >&2
     return 0
   fi
 
-  echo "Installing SignalMaker systemd services for $APP_DIR..."
-  local service_dir
-  service_dir="$(mktemp -d)"
+  echo "Registering run.sh to start SignalMaker at Raspberry boot..."
+  local startup_line
+  startup_line="@reboot cd $APP_DIR && /bin/bash run.sh >> $APP_DIR/logs/startup.log 2>&1"
+  local tmp_cron
+  tmp_cron="$(mktemp)"
 
-  cat > "$service_dir/signalmaker-api.service" <<EOF
-[Unit]
-Description=SignalMaker API
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-ExecStart=/bin/bash $APP_DIR/scripts/start_api.sh
-Restart=always
-RestartSec=5
-Environment=APP_PORT=$RASPBERRY_APP_PORT
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  cat > "$service_dir/signalmaker-executor.service" <<EOF
-[Unit]
-Description=SignalMaker Executor Worker
-After=network.target postgresql.service signalmaker-api.service
-
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-ExecStart=/bin/bash $APP_DIR/scripts/start_executor_worker.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  cat > "$service_dir/signalmaker-pipeline.service" <<EOF
-[Unit]
-Description=SignalMaker Pipeline Worker
-After=network.target postgresql.service signalmaker-api.service
-
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-ExecStart=/bin/bash $APP_DIR/scripts/start_pipeline_worker.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  cat > "$service_dir/signalmaker-scheduler.service" <<EOF
-[Unit]
-Description=SignalMaker Scheduler Worker
-After=network.target postgresql.service signalmaker-api.service
-
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-ExecStart=/bin/bash $APP_DIR/scripts/start_scheduler_worker.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  cat > "$service_dir/signalmaker-frontend.service" <<EOF
-[Unit]
-Description=SignalMaker Frontend UI
-After=network.target signalmaker-api.service
-
-[Service]
-Type=simple
-WorkingDirectory=$APP_DIR
-ExecStart=/bin/bash $APP_DIR/scripts/start_frontend.sh
-Restart=on-failure
-RestartSec=5
-Environment=FRONTEND_PORT=5001
-Environment=SIGNALMAKER_API_BASE=http://127.0.0.1:$RASPBERRY_APP_PORT
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  sudo cp "$service_dir"/signalmaker-*.service /etc/systemd/system/
-  sudo chmod 644 /etc/systemd/system/signalmaker-*.service
-  sudo systemctl daemon-reload
-  sudo systemctl enable signalmaker-api signalmaker-executor signalmaker-pipeline signalmaker-scheduler
-  rm -rf "$service_dir"
+  crontab -l 2>/dev/null \
+    | grep -vF "cd $APP_DIR && /bin/bash run.sh" \
+    | grep -vF "cd $APP_DIR && bash run.sh" \
+    > "$tmp_cron" || true
+  printf '%s\n' "$startup_line" >> "$tmp_cron"
+  crontab "$tmp_cron"
+  rm -f "$tmp_cron"
 }
 
-install_systemd_services
+install_run_sh_startup
 
 echo "Running final Raspberry install checks..."
 pg_isready -h localhost -p 5432
 python -m scripts.init_db
 
-echo "After future frontend updates, rebuild and restart the API service:"
+echo "After future frontend updates, rebuild and restart the single run.sh launcher:"
 echo "  bash scripts/build_frontend.sh"
-echo "  sudo systemctl restart signalmaker-api"
-echo "Optional only: signalmaker-frontend.service is installed but not enabled; Raspberry UI is served by signalmaker-api on port ${RASPBERRY_APP_PORT}."
+echo "  pkill -f 'run.sh' || true"
+echo "  bash run.sh"
+echo "Startup is registered in the current user crontab with: @reboot cd ${APP_DIR} && /bin/bash run.sh"
+echo "Startup logs: ${APP_DIR}/logs/startup.log"
 
 echo "SignalMaker Raspberry install complete"
 echo "Run SignalMaker with:"
-echo "  bash run.sh api"
-echo "  bash run.sh executor-loop"
-echo "  bash run.sh pipeline-loop"
-echo "  bash run.sh scheduler-loop"
-echo "  # Optional only: bash scripts/start_frontend.sh"
+echo "  bash run.sh"
 echo "SignalMaker UI/API: http://${RASPBERRY_IP}:${RASPBERRY_APP_PORT}"
 echo "Admin UI: http://${RASPBERRY_IP}:${RASPBERRY_APP_PORT}/admin.html"

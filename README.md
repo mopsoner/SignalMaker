@@ -90,7 +90,7 @@ cd SignalMaker
 bash scripts/install_raspberry.sh
 ```
 
-The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, seeds `app_settings` from `.env`, and enables the SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi. It creates `.env` from `.env.example`, the single supported template for current deployments. The template is intentionally limited to the current Raspberry startup surface: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and the minimal polling/feed/decision settings.
+The installer provisions PostgreSQL locally, creates the `signalmaker` database, installs Raspberry-specific Python dependencies, builds the lightweight static frontend by copying HTML/CSS/JS into `frontend/dist`, initializes the schema, seeds `app_settings` from `.env`, and registers a single `@reboot` crontab entry that runs `bash run.sh`. It no longer creates or enables SignalMaker systemd services. It does not run Vite, npm or esbuild on the Raspberry Pi. It creates `.env` from `.env.example`, the single supported template for current deployments. The template is intentionally limited to the current Raspberry startup surface: API/database settings, Kraken credentials, quote assets, dry-run/live controls, and the minimal polling/feed/decision settings.
 
 During installation, `.env` has priority only for the initial `app_settings` seed performed by `python -m scripts.init_db` / `python -m scripts.seed_app_settings`. After those rows exist, the admin/runtime database (`app_settings`) is authoritative for API and worker settings. Editing `.env` later will not override populated DB rows; run `python -m scripts.seed_app_settings --overwrite` for an explicit controlled resync, or delete the intended `app_settings` rows first and rerun `python -m scripts.seed_app_settings` to refill only missing/empty rows.
 
@@ -98,10 +98,10 @@ During installation, `.env` has priority only for the initial `app_settings` see
 Older Raspberry Pi devices / `armv6l` can fail on Vite/esbuild with `Bus error`. SignalMaker now avoids that path: run `bash scripts/build_frontend.sh` to refresh `frontend/dist` with static files only.
 
 ### Raspberry UI
-After installation, the main Raspberry service is `signalmaker-api`. It serves both the FastAPI API and the lightweight static pages copied into `frontend/dist`; the separate `signalmaker-frontend` service is optional and is not required for Raspberry usage.
+After installation, the Raspberry starts through the single `bash run.sh` entry registered in the user's crontab. That command serves both the FastAPI API and the lightweight static pages copied into `frontend/dist`; no separate SignalMaker frontend service is required.
 
 ```bash
-sudo systemctl start signalmaker-api
+bash run.sh
 ```
 
 Open SignalMaker Raspberry Executor from another device on the same network using port `8080` only:
@@ -177,8 +177,8 @@ Useful Raspberry debug commands:
 
 ```bash
 uname -m
-systemctl status signalmaker-api
-journalctl -u signalmaker-api -f
+crontab -l
+tail -f logs/startup.log
 curl http://localhost:8080/healthz
 curl -I http://localhost:8080/index.html
 curl -I http://localhost:8080/ops.html
@@ -192,7 +192,8 @@ Use these commands after updating the Raspberry frontend or service files:
 ```bash
 cd ~/Desktop/SignalMaker
 bash scripts/build_frontend.sh
-sudo systemctl restart signalmaker-api
+pkill -f 'run.sh' || true
+bash run.sh
 curl -i http://localhost:8080/healthz
 curl -i http://localhost:8080/api/v1/admin/settings
 curl -I http://localhost:8080/ops.html

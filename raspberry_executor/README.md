@@ -20,15 +20,13 @@ Use the single official starter:
 
 Startup chain:
 
-`systemd -> ./run.sh device -> scripts/start_api.sh -> wait for /healthz -> python -m raspberry_executor.run_all_v2`
+`@reboot crontab -> bash run.sh -> ./run.sh device -> scripts/start_api.sh -> wait for /healthz -> python -m raspberry_executor.run_all_v2`
 
 `run_all_v2` remains the internal engine. Do not launch it directly for normal Raspberry operation. `scripts/start_raspberry_executor.sh` is kept only as a deprecated compatibility wrapper that delegates to `./run.sh device`.
 
-## systemd
+## Startup
 
-A template is available at `systemd/raspberry-executor.service`.
-
-Install it into `/etc/systemd/system/`, reload systemd, enable the service, then start it.
+The Raspberry installer registers a single user crontab entry so `bash run.sh` starts at boot. To inspect it, run `crontab -l`. Logs are appended to `logs/startup.log`.
 
 ## Safety
 
