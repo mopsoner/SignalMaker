@@ -19,7 +19,7 @@ from app.services.pipeline_service import PipelineService
 from app.services.runtime_settings import load_runtime_settings
 
 DEFAULT_INTERVAL = 60
-DEFAULT_LIMIT = 25
+DEFAULT_LIMIT = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -44,13 +44,18 @@ if __name__ == "__main__":
             bot = runtime.get("bot", {})
 
             enabled = as_bool(bot.get("bot_pipeline_enabled", True), default=True)
-            limit = DEFAULT_LIMIT
-            interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
-            settings_log = (
-                f"bot_pipeline_enabled={enabled} "
-                f"bot_pipeline_interval_sec={interval} "
-                f"symbol_limit={limit}"
-            )
+
+raw_limit = bot.get("bot_pipeline_symbol_limit")
+if raw_limit is None:
+    raw_limit = os.getenv("BOT_PIPELINE_SYMBOL_LIMIT")
+
+limit = parse_symbol_limit(raw_limit)
+interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
+settings_log = (
+    f"bot_pipeline_enabled={enabled} "
+    f"bot_pipeline_interval_sec={interval} "
+    f"symbol_limit={limit if limit is not None else 'all'}"
+)
 
             print(f"Pipeline tick start: {settings_log}", flush=True)
             if not enabled:
@@ -72,3 +77,15 @@ if __name__ == "__main__":
                 pass
 
         time.sleep(interval)
+
+def parse_symbol_limit(value):
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"", "0", "none", "all", "auto", "null"}:
+        return None
+    try:
+        parsed = int(text)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
