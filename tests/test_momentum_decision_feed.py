@@ -29,6 +29,7 @@ class FakeKraken:
         self.quote_balances = list(quote_balances or [0.0])
         self.base_balance = base_balance
         self.orders: list[dict] = []
+        self.get_order_calls: list[tuple[str, int | str]] = []
 
     def current_price(self, symbol: str) -> float:
         return 1.0
@@ -47,6 +48,13 @@ class FakeKraken:
             self.base_balance = 0.0
             self.quote_balances = [25.0]
         return order
+
+    def get_order(self, symbol: str, order_id: int | str) -> dict:
+        self.get_order_calls.append((symbol, order_id))
+        for order in self.orders:
+            if order.get("orderId") == order_id:
+                return {**order, "side": "BUY", "status": "FILLED"}
+        return {"orderId": order_id, "symbol": symbol, "side": "BUY", "status": "NEW", "executedQty": "0"}
 
     def average_fill_price(self, order: dict, fallback: float | None = None) -> float | None:
         return fallback
@@ -83,6 +91,38 @@ def test_buy_symbol_keeps_confirmed_quote_when_next_account_read_is_stale(tmp_pa
 
     assert result == "bought:ALLUSDC:qty=12.00000000:notional=12.0000"
     assert [event["event_type"] for event in state.events()] == ["position_opened", "momentum_bought"]
+
+
+
+def test_spot_buy_confirms_order_before_recording_open_position(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.time.sleep", lambda _: None)
+    calls: list[str] = []
+
+    class RecordingKraken(FakeKraken):
+        def get_order(self, symbol: str, order_id: int | str) -> dict:
+            calls.append("get_order")
+            return super().get_order(symbol, order_id)
+
+    class RecordingState(StateStore):
+        def add_open_position(self, candidate_id: str, payload: dict) -> None:
+            calls.append("add_open_position")
+            assert "get_order" in calls
+            super().add_open_position(candidate_id, payload)
+
+    state = RecordingState()
+    kraken = RecordingKraken(quote_balances=[35.0])
+
+    result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
+
+    assert result == "bought:ALLUSDC:qty=35.00000000:notional=35.0000"
+    assert calls == ["get_order", "add_open_position"]
+    position = state.open_positions()["momentum-ALLUSDC"]
+    assert position["entry_confirmed"] is True
+    assert position["entry_confirm_status"] == "FILLED"
+    assert position["entry_confirm_payload"]["orderId"] == 1
 
 
 def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
