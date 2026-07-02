@@ -123,6 +123,11 @@ def test_spot_buy_confirms_order_before_recording_open_position(tmp_path, monkey
     assert position["entry_confirmed"] is True
     assert position["entry_confirm_status"] == "FILLED"
     assert position["entry_confirm_payload"]["orderId"] == 1
+    event = state.events()[1]
+    assert event["event_type"] == "momentum_bought"
+    assert event["payload"]["entry_confirmed"] is True
+    assert event["payload"]["entry_confirm_status"] == "FILLED"
+    assert event["payload"]["entry_confirm_payload"]["orderId"] == 1
 
 
 def test_buy_symbol_uses_full_available_quote_balance(tmp_path, monkeypatch):
