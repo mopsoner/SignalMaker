@@ -92,6 +92,7 @@ def effective_kraken_requests_per_minute(base_url: str, env: dict[str, str]) -> 
     doc_limit = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
     return doc_limit, doc_limit, 1.0
 
+
 def _kraken_asset(asset: str) -> str:
     value = str(asset or "").upper()
     if value in {"XBT", "XXBT"}:
@@ -147,10 +148,24 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
 
 
 def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, limit: int = 0) -> tuple[list[str], str]:
-    # Candle/universe discovery must stay spot-based for Kraken. Margin
-    # eligibility is decided later, per BUY execution, so non-margin spot pairs
-    # remain available for analysis, candle feed, momentum and fallback spot buys.
-    return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
+    env = read_env()
+    margin_only = _bool(
+        os.getenv("CANDLE_FEED_MARGIN_ONLY") or env.get("CANDLE_FEED_MARGIN_ONLY"),
+        default=True,
+    )
+
+    if margin_only:
+        return discover_kraken_margin_symbols(
+            settings.kraken_base_url,
+            quote_assets,
+            limit=limit,
+        ), "kraken_margin"
+
+    return discover_kraken_spot_symbols(
+        settings.kraken_base_url,
+        quote_assets,
+        limit=limit,
+    ), "kraken_spot"
 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
@@ -279,7 +294,7 @@ def run_loop() -> None:
     doc_limit = int(env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60") or "60")
     rpm_override = env.get("CANDLE_FEED_KRAKEN_REQUESTS_PER_MINUTE", "60")
     weight_ratio = "1.0"
-    logger.info("candle feed started exchange=%s execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s request_limit_1m=%s weight_ratio=%s rpm_override=%s", exchange, execution_mode(), env.get("QUOTE_ASSETS", "USD,USDC"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, weight_ratio, rpm_override)
+    logger.info("candle feed started exchange=%s execution_mode=%s quote_assets=%s intervals=%s poll_seconds=%s max_workers=%s request_limit_1m=%s weight_ratio=%s rpm_override=%s margin_only=%s", exchange, execution_mode(), env.get("QUOTE_ASSETS", "USD,USDC"), env.get("CANDLE_FEED_INTERVALS", "15m,1h,4h"), poll_seconds, env.get("CANDLE_FEED_MAX_WORKERS", "3"), doc_limit, weight_ratio, rpm_override, env.get("CANDLE_FEED_MARGIN_ONLY", "true"))
 
     while True:
         try:
