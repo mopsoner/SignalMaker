@@ -1,4 +1,4 @@
-⁸from pathlib import Path
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
@@ -22,8 +22,14 @@ DEFAULTS = {
     "MAX_CANDIDATE_AGE_SECONDS": "1200",
     "ORDER_MONITOR_SECONDS": "60",
     "EXECUTION_EXCHANGE": "kraken",
-    "EXECUTION_MODE":"cross",
-    "KRAKEN_BASE_URL": "https://api.kraken.com",
+"EXECUTION_MODE": "cross",
+"MARGIN_MODE_ENABLED": "true",
+"MARGIN_ACCOUNT_MODE": "cross",
+"MARGIN_ISOLATED": "false",
+"MARGIN_MAX_MULTIPLIER": "5",
+"MARGIN_TRANSFER_SPOT_BALANCE": "true",
+"SHORTS_ENABLED": "false",
+"KRAKEN_BASE_URL": "https://api.kraken.com", 
     KRAKEN_API_ENV_KEY: "",
     KRAKEN_SECRET_ENV_KEY: "",
     "KRAKEN_SMOKE_LIVE_ORDER": "YES",
