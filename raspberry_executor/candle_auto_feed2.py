@@ -149,12 +149,23 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
 
 def discover_symbols_for_exchange(settings, quote_assets: list[str], mode: str, limit: int = 0) -> tuple[list[str], str]:
     env = read_env()
-    margin_only = _bool(os.getenv("CANDLE_FEED_MARGIN_ONLY") or env.get("CANDLE_FEED_MARGIN_ONLY"), default=True)
+    margin_only = _bool(
+        os.getenv("CANDLE_FEED_MARGIN_ONLY") or env.get("CANDLE_FEED_MARGIN_ONLY"),
+        default=True,
+    )
 
     if margin_only:
-        return discover_kraken_margin_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_margin"
+        return discover_kraken_margin_symbols(
+            settings.kraken_base_url,
+            quote_assets,
+            limit=limit,
+        ), "kraken_margin"
 
-    return discover_kraken_spot_symbols(settings.kraken_base_url, quote_assets, limit=limit), "kraken_spot"
+    return discover_kraken_spot_symbols(
+        settings.kraken_base_url,
+        quote_assets,
+        limit=limit,
+    ), "kraken_spot"
 
 
 def resolve_feed_symbols(settings) -> tuple[list[str], list[str], str]:
