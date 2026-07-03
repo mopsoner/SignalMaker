@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -40,6 +41,27 @@ class KrakenPair:
 
 def log(message: str) -> None:
     print(message, flush=True)
+
+
+def load_dotenv_if_present() -> None:
+    """
+    Charge .env si présent, sans écraser les variables déjà exportées par bootstrap_feed.sh.
+    Important pour récupérer SIGNALMAKER_BASE_URL.
+    """
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+
+        os.environ.setdefault(key, value)
 
 
 def env_str(name: str, default: str) -> str:
@@ -107,7 +129,6 @@ def normalize_asset(asset: str) -> str:
     if asset in aliases:
         return aliases[asset]
 
-    # Kraken legacy asset codes often start with X/Z, e.g. XXRP, ZEUR.
     if len(asset) > 3 and asset[0] in {"X", "Z"}:
         stripped = asset[1:]
         if stripped in aliases:
@@ -252,13 +273,13 @@ def fetch_kraken_ohlc(
     if interval_minutes is None:
         raise ValueError(f"Unsupported interval: {interval}")
 
-    since = int(time.time() - (min_candles + 5) * interval_minutes * 60)
+    since_seconds = int(time.time() - (min_candles + 5) * interval_minutes * 60)
 
     query = urllib.parse.urlencode(
         {
             "pair": pair.altname or pair.pair_key,
             "interval": interval_minutes,
-            "since": since,
+            "since": since_seconds,
         }
     )
     url = f"{KRAKEN_OHLC_URL}?{query}"
@@ -266,7 +287,7 @@ def fetch_kraken_ohlc(
     log(
         f"[bootstrap] kraken_ohlc_request symbol={pair.symbol} "
         f"pair={pair.altname or pair.pair_key} interval={interval} "
-        f"kraken_interval={interval_minutes} since={since}"
+        f"kraken_interval={interval_minutes} since={since_seconds}"
     )
 
     data = http_json(url, timeout=30)
@@ -288,25 +309,37 @@ def fetch_kraken_ohlc(
         return []
 
     candles: list[dict[str, Any]] = []
-    close_delta_seconds = interval_minutes * 60 - 1
+    interval_ms = interval_minutes * 60 * 1000
 
     for row in rows[-min_candles:]:
         # Kraken OHLC row:
-        # [time, open, high, low, close, vwap, volume, count]
-        open_time = int(float(row[0]))
-        volume = float(row[6])
+        # [time_seconds, open, high, low, close, vwap, volume, count]
+        open_time_seconds = int(float(row[0]))
+
+        # IMPORTANT:
+        # Main SignalMaker attend les timestamps en millisecondes.
+        # Kraken retourne les timestamps en secondes.
+        open_time_ms = open_time_seconds * 1000
+        close_time_ms = open_time_ms + interval_ms - 1
+
+        open_price = float(row[1])
+        high_price = float(row[2])
+        low_price = float(row[3])
+        close_price = float(row[4])
+        vwap = float(row[5]) if len(row) > 5 else close_price
+        volume = float(row[6]) if len(row) > 6 else 0.0
         count = int(float(row[7])) if len(row) > 7 else 0
 
         candles.append(
             {
-                "open_time": open_time,
-                "close_time": open_time + close_delta_seconds,
-                "open": float(row[1]),
-                "high": float(row[2]),
-                "low": float(row[3]),
-                "close": float(row[4]),
+                "open_time": open_time_ms,
+                "close_time": close_time_ms,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
                 "volume": volume,
-                "quote_volume": 0.0,
+                "quote_volume": vwap * volume,
                 "number_of_trades": count,
                 "taker_buy_base_volume": 0.0,
                 "taker_buy_quote_volume": 0.0,
@@ -373,6 +406,8 @@ def sleep_for_rate_limit(last_call_at: float | None, rpm: int) -> float:
 
 
 def main() -> int:
+    load_dotenv_if_present()
+
     base_url = env_str("SIGNALMAKER_BASE_URL", "https://mysginalmaker.replit.app")
     quote_raw = env_str("BOOTSTRAP_QUOTES", "USD")
     wanted_quotes = {item.strip().upper() for item in quote_raw.split(",") if item.strip()}
