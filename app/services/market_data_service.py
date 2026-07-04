@@ -71,6 +71,7 @@ class MarketDataService:
         interval: str | None = None,
         limit: int = 200,
         latest: bool = False,
+        first: bool = False,
     ) -> list[MarketCandle]:
         if latest:
             filters = "WHERE 1=1"
@@ -98,7 +99,10 @@ class MarketDataService:
             stmt = stmt.where(MarketCandle.symbol == symbol.upper())
         if interval:
             stmt = stmt.where(MarketCandle.interval == interval)
-        stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
+        if first:
+            stmt = stmt.order_by(MarketCandle.open_time.asc()).limit(limit)
+        else:
+            stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
