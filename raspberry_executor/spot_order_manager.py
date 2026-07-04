@@ -107,7 +107,7 @@ class SpotOrderManager:
                 raise RuntimeError(f"spot_entry_symbol_mismatch expected={symbol} got={order_symbol} order_id={entry_order_id}")
             if side and side != "BUY":
                 raise RuntimeError(f"spot_entry_side_mismatch expected=BUY got={side} symbol={symbol} order_id={entry_order_id}")
-            if status == "FILLED" and executed_qty > 0:
+            if status in {"FILLED", "CLOSED"} and executed_qty > 0:
                 return {
                     "entry_confirmed": True,
                     "entry_confirm_status": status,
