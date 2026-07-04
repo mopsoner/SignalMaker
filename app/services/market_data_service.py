@@ -19,7 +19,7 @@ INTERVAL_MS = {
 class MarketDataService:
     def __init__(self, db: Session) -> None:
         self.db = db
-        self._ensure_optional_candle_columns()
+        
 
     def _ensure_optional_candle_columns(self) -> None:
         """Keep existing Replit/Postgres databases compatible with new Kraken kline fields."""
@@ -64,7 +64,7 @@ class MarketDataService:
             stmt = stmt.limit(limit)
         return [str(symbol).upper() for symbol in self.db.scalars(stmt).all()]
 
-    def list_candles(
+   def list_candles(
         self,
         *,
         symbol: str | None = None,
@@ -72,38 +72,48 @@ class MarketDataService:
         limit: int = 200,
         latest: bool = False,
         first: bool = False,
-    ) -> list[MarketCandle]:
-        if latest:
+      ) -> list[MarketCandle]:
+        limit = min(max(int(limit or 200), 1), 1000)
+
+        if latest and first:
+            raise ValueError("latest and first cannot both be true")
+
+        if latest or first:
             filters = "WHERE 1=1"
-            params: dict = {}
+            params: dict[str, Any] = {"limit": limit}
+
             if symbol:
                 filters += " AND symbol = :symbol"
                 params["symbol"] = symbol.upper()
+
             if interval:
                 filters += " AND interval = :interval"
                 params["interval"] = interval
+
+            order_col = "open_time ASC" if first else "close_time DESC"
 
             sql = text(f"""
                 SELECT DISTINCT ON (symbol, interval) *
                 FROM market_candles
                 {filters}
-                ORDER BY symbol, interval, ingested_at DESC
+                ORDER BY symbol, interval, {order_col}
                 LIMIT :limit
             """)
-            params["limit"] = limit
+
             rows = self.db.execute(sql, params).mappings().all()
-            return [MarketCandle(**dict(r)) for r in rows]
+            return [MarketCandle(**dict(row)) for row in rows]
 
         stmt = select(MarketCandle)
+
         if symbol:
             stmt = stmt.where(MarketCandle.symbol == symbol.upper())
+
         if interval:
             stmt = stmt.where(MarketCandle.interval == interval)
-        if first:
-            stmt = stmt.order_by(MarketCandle.open_time.asc()).limit(limit)
-        else:
-            stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
+
+        stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
+
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
         filters = "WHERE 1=1"
