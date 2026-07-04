@@ -101,15 +101,15 @@ class MarginOrderManager:
 
     def _entry_confirm_timeout_seconds(self) -> float:
         try:
-            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_TIMEOUT_SECONDS", "180") or "180"))
+            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_TIMEOUT_SECONDS", "30") or "30"))
         except Exception:
-            return 180.0
+            return 30
 
     def _entry_confirm_poll_seconds(self) -> float:
         try:
-            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_POLL_SECONDS", "60") or "60"))
+            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_POLL_SECONDS", "5") or "5"))
         except Exception:
-            return 60.0
+            return 5
 
     def confirm_margin_order(self, *, symbol: str, order_id, submitted_payload: dict, fallback_price: float, expected_side: str) -> dict:
         symbol = symbol.upper()
@@ -135,8 +135,7 @@ class MarginOrderManager:
                 "executed_qty": self._executed_qty(submitted_payload, submitted_payload.get("quantity")),
             }
 
-        poll_seconds = self._entry_confirm_poll_seconds()
-        time.sleep(poll_seconds)
+        
         deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
         last_payload = submitted_payload
         while time.monotonic() <= deadline:
@@ -150,7 +149,7 @@ class MarginOrderManager:
                 raise RuntimeError(f"margin_order_symbol_mismatch expected={symbol} got={order_symbol} order_id={order_id}")
             if side and side != expected_side:
                 raise RuntimeError(f"margin_order_side_mismatch expected={expected_side} got={side} symbol={symbol} order_id={order_id}")
-            if status == "FILLED" and executed_qty > 0:
+            if status in {"FILLED", "CLOSED"} and executed_qty > 0:
                 return {
                     "entry_confirmed": True,
                     "entry_confirm_status": status,
