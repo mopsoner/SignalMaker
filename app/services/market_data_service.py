@@ -86,33 +86,6 @@ class MarketDataService:
         if latest and first:
             raise ValueError("latest and first cannot both be true")
 
-        if latest or first:
-            filters = "WHERE 1=1"
-            params: dict[str, Any] = {"limit": limit}
-
-            if symbol:
-                filters += " AND symbol = :symbol"
-                params["symbol"] = symbol.upper()
-
-            if interval:
-                filters += " AND interval = :interval"
-                params["interval"] = interval
-
-            order_col = "open_time ASC" if first else "close_time DESC"
-
-            sql = text(
-                f"""
-                SELECT DISTINCT ON (symbol, interval) *
-                FROM market_candles
-                {filters}
-                ORDER BY symbol, interval, {order_col}
-                LIMIT :limit
-                """
-            )
-
-            rows = self.db.execute(sql, params).mappings().all()
-            return [MarketCandle(**dict(row)) for row in rows]
-
         stmt = select(MarketCandle)
 
         if symbol:
@@ -121,7 +94,14 @@ class MarketDataService:
         if interval:
             stmt = stmt.where(MarketCandle.interval == interval)
 
-        stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
+        if first:
+            stmt = stmt.order_by(MarketCandle.open_time.asc())
+        elif latest:
+            stmt = stmt.order_by(MarketCandle.close_time.desc())
+        else:
+            stmt = stmt.order_by(MarketCandle.ingested_at.desc())
+
+        stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
