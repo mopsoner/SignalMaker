@@ -126,7 +126,7 @@ class MarginOrderManager:
                 "entry_price": self._avg_price_from_order(payload, fallback_price),
                 "executed_qty": self._executed_qty(payload, submitted_payload.get("quantity")),
             }
-        if str(submitted_payload.get("status") or "").upper() == "FILLED" and float(submitted_payload.get("executedQty") or 0) > 0:
+        if str(submitted_payload.get("status") or "").upper() in {"FILLED", "CLOSED"} and float(submitted_payload.get("executedQty") or 0) > 0:
             return {
                 "entry_confirmed": True,
                 "entry_confirm_status": "FILLED",
@@ -159,7 +159,7 @@ class MarginOrderManager:
                 }
             if status in {"CANCELED", "REJECTED", "EXPIRED"}:
                 raise RuntimeError(f"margin_order_not_filled symbol={symbol} order_id={order_id} side={expected_side} status={status} payload={payload}")
-            time.sleep(poll_seconds)
+            time.sleep(self._entry_confirm_poll_seconds())
         raise RuntimeError(f"margin_order_confirmation_timeout symbol={symbol} order_id={order_id} side={expected_side} last_payload={last_payload}")
 
     def confirm_margin_entry_order(self, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float) -> dict:
