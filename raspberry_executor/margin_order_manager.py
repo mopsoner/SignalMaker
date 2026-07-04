@@ -101,15 +101,15 @@ class MarginOrderManager:
 
     def _entry_confirm_timeout_seconds(self) -> float:
         try:
-            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_TIMEOUT_SECONDS", "30") or "30"))
+            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_TIMEOUT_SECONDS", "180") or "180"))
         except Exception:
-            return 30.0
+            return 180.0
 
     def _entry_confirm_poll_seconds(self) -> float:
         try:
-            return max(0.2, float(os.getenv("MARGIN_ENTRY_CONFIRM_POLL_SECONDS", "0.5") or "0.5"))
+            return max(1.0, float(os.getenv("MARGIN_ENTRY_CONFIRM_POLL_SECONDS", "60") or "60"))
         except Exception:
-            return 0.5
+            return 60.0
 
     def confirm_margin_order(self, *, symbol: str, order_id, submitted_payload: dict, fallback_price: float, expected_side: str) -> dict:
         symbol = symbol.upper()
@@ -135,6 +135,8 @@ class MarginOrderManager:
                 "executed_qty": self._executed_qty(submitted_payload, submitted_payload.get("quantity")),
             }
 
+        poll_seconds = self._entry_confirm_poll_seconds()
+        time.sleep(poll_seconds)
         deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
         last_payload = submitted_payload
         while time.monotonic() <= deadline:
@@ -158,7 +160,7 @@ class MarginOrderManager:
                 }
             if status in {"CANCELED", "REJECTED", "EXPIRED"}:
                 raise RuntimeError(f"margin_order_not_filled symbol={symbol} order_id={order_id} side={expected_side} status={status} payload={payload}")
-            time.sleep(self._entry_confirm_poll_seconds())
+            time.sleep(poll_seconds)
         raise RuntimeError(f"margin_order_confirmation_timeout symbol={symbol} order_id={order_id} side={expected_side} last_payload={last_payload}")
 
     def confirm_margin_entry_order(self, *, symbol: str, entry_order_id, submitted_payload: dict, fallback_price: float) -> dict:
