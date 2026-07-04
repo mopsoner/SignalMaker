@@ -259,14 +259,13 @@ class MarketDataService:
         """
         True PostgreSQL upsert.
 
-        The previous implementation did:
-        - SELECT by primary key
-        - then INSERT if not found
+        This version deduplicates candles inside the same batch before calling
+        INSERT ... ON CONFLICT DO UPDATE.
 
-        That can fail under concurrency:
-        two feeds can both see the row as missing, then both try to insert it.
-        This version uses INSERT ... ON CONFLICT DO UPDATE, so duplicate candles
-        update the existing row instead of throwing market_candles_pkey errors.
+        Without this, PostgreSQL can raise:
+        ON CONFLICT DO UPDATE command cannot affect row a second time
+
+        That happens when the same candle_id appears twice in the same POST.
         """
         if not candles:
             return 0
@@ -274,38 +273,41 @@ class MarketDataService:
         now = datetime.now(timezone.utc)
         normalized_symbol = symbol.upper()
 
-        records: list[dict[str, Any]] = []
+        records_by_id: dict[str, dict[str, Any]] = {}
 
         for candle in candles:
             candle_id = f"{normalized_symbol}-{interval}-{int(candle['open_time'])}"
 
-            records.append(
-                {
-                    "candle_id": candle_id,
-                    "symbol": normalized_symbol,
-                    "interval": interval,
-                    "open_time": int(candle["open_time"]),
-                    "close_time": int(candle["close_time"]),
-                    "open": float(candle["open"]),
-                    "high": float(candle["high"]),
-                    "low": float(candle["low"]),
-                    "close": float(candle["close"]),
-                    "volume": float(candle["volume"]),
-                    "quote_volume": float(candle.get("quote_volume") or 0.0),
-                    "number_of_trades": int(candle.get("number_of_trades") or 0),
-                    "taker_buy_base_volume": float(candle.get("taker_buy_base_volume") or 0.0),
-                    "taker_buy_quote_volume": float(candle.get("taker_buy_quote_volume") or 0.0),
-                    "provider": str(candle.get("provider") or "KRAKEN").upper(),
-                    "asset_id": candle.get("asset_id"),
-                    "provider_symbol": candle.get("provider_symbol"),
-                    "asset_type": candle.get("asset_type"),
-                    "currency": candle.get("currency"),
-                    "exchange": candle.get("exchange"),
-                    "universe": candle.get("universe"),
-                    "metadata_json": candle.get("metadata_json"),
-                    "ingested_at": now,
-                }
-            )
+            records_by_id[candle_id] = {
+                "candle_id": candle_id,
+                "symbol": normalized_symbol,
+                "interval": interval,
+                "open_time": int(candle["open_time"]),
+                "close_time": int(candle["close_time"]),
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+                "volume": float(candle["volume"]),
+                "quote_volume": float(candle.get("quote_volume") or 0.0),
+                "number_of_trades": int(candle.get("number_of_trades") or 0),
+                "taker_buy_base_volume": float(candle.get("taker_buy_base_volume") or 0.0),
+                "taker_buy_quote_volume": float(candle.get("taker_buy_quote_volume") or 0.0),
+                "provider": str(candle.get("provider") or "KRAKEN").upper(),
+                "asset_id": candle.get("asset_id"),
+                "provider_symbol": candle.get("provider_symbol"),
+                "asset_type": candle.get("asset_type"),
+                "currency": candle.get("currency"),
+                "exchange": candle.get("exchange"),
+                "universe": candle.get("universe"),
+                "metadata_json": candle.get("metadata_json"),
+                "ingested_at": now,
+            }
+
+        records = list(records_by_id.values())
+
+        if not records:
+            return 0
 
         table = MarketCandle.__table__
         stmt = pg_insert(table).values(records)
