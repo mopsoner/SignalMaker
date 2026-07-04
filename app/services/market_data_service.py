@@ -64,7 +64,7 @@ class MarketDataService:
             stmt = stmt.limit(limit)
         return [str(symbol).upper() for symbol in self.db.scalars(stmt).all()]
 
-   def list_candles(
+    def list_candles(
         self,
         *,
         symbol: str | None = None,
@@ -72,7 +72,7 @@ class MarketDataService:
         limit: int = 200,
         latest: bool = False,
         first: bool = False,
-      ) -> list[MarketCandle]:
+        ) -> list[MarketCandle]:
         limit = min(max(int(limit or 200), 1), 1000)
 
         if latest and first:
@@ -103,16 +103,16 @@ class MarketDataService:
             rows = self.db.execute(sql, params).mappings().all()
             return [MarketCandle(**dict(row)) for row in rows]
 
-        stmt = select(MarketCandle)
+          stmt = select(MarketCandle)
 
-        if symbol:
-            stmt = stmt.where(MarketCandle.symbol == symbol.upper())
+          if symbol:
+              stmt = stmt.where(MarketCandle.symbol == symbol.upper())
 
-        if interval:
-            stmt = stmt.where(MarketCandle.interval == interval)
+          if interval:
+              stmt = stmt.where(MarketCandle.interval == interval)
 
-        stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
-        return list(self.db.scalars(stmt).all())
+          stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
+          return list(self.db.scalars(stmt).all())
 
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
