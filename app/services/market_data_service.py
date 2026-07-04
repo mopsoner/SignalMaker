@@ -19,7 +19,6 @@ INTERVAL_MS = {
 class MarketDataService:
     def __init__(self, db: Session) -> None:
         self.db = db
-        
 
     def _ensure_optional_candle_columns(self) -> None:
         """Keep existing Replit/Postgres databases compatible with new Kraken kline fields."""
@@ -37,25 +36,34 @@ class MarketDataService:
             "universe": "VARCHAR(128)",
             "metadata_json": "JSON",
         }
+
         for column, definition in columns.items():
-            self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}"))
+            self.db.execute(
+                text(f"ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS {column} {definition}")
+            )
+
         try:
-            self.db.execute(text("""
-                CREATE TABLE IF NOT EXISTS market_data_import_runs (
-                    id VARCHAR(96) PRIMARY KEY,
-                    provider VARCHAR(32),
-                    run_type VARCHAR(64),
-                    status VARCHAR(32),
-                    started_at TIMESTAMP,
-                    finished_at TIMESTAMP,
-                    total_assets INTEGER DEFAULT 0,
-                    success_count INTEGER DEFAULT 0,
-                    failed_count INTEGER DEFAULT 0,
-                    error_message TEXT
+            self.db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS market_data_import_runs (
+                        id VARCHAR(96) PRIMARY KEY,
+                        provider VARCHAR(32),
+                        run_type VARCHAR(64),
+                        status VARCHAR(32),
+                        started_at TIMESTAMP,
+                        finished_at TIMESTAMP,
+                        total_assets INTEGER DEFAULT 0,
+                        success_count INTEGER DEFAULT 0,
+                        failed_count INTEGER DEFAULT 0,
+                        error_message TEXT
+                    )
+                    """
                 )
-            """))
+            )
         except Exception:
             self.db.rollback()
+
         self.db.commit()
 
     def list_symbols(self, limit: int | None = None) -> list[str]:
@@ -72,7 +80,7 @@ class MarketDataService:
         limit: int = 200,
         latest: bool = False,
         first: bool = False,
-        ) -> list[MarketCandle]:
+    ) -> list[MarketCandle]:
         limit = min(max(int(limit or 200), 1), 1000)
 
         if latest and first:
@@ -92,40 +100,44 @@ class MarketDataService:
 
             order_col = "open_time ASC" if first else "close_time DESC"
 
-            sql = text(f"""
+            sql = text(
+                f"""
                 SELECT DISTINCT ON (symbol, interval) *
                 FROM market_candles
                 {filters}
                 ORDER BY symbol, interval, {order_col}
                 LIMIT :limit
-            """)
+                """
+            )
 
             rows = self.db.execute(sql, params).mappings().all()
             return [MarketCandle(**dict(row)) for row in rows]
 
-          stmt = select(MarketCandle)
+        stmt = select(MarketCandle)
 
-          if symbol:
-              stmt = stmt.where(MarketCandle.symbol == symbol.upper())
+        if symbol:
+            stmt = stmt.where(MarketCandle.symbol == symbol.upper())
 
-          if interval:
-              stmt = stmt.where(MarketCandle.interval == interval)
+        if interval:
+            stmt = stmt.where(MarketCandle.interval == interval)
 
-          stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
-          return list(self.db.scalars(stmt).all())
-
+        stmt = stmt.order_by(MarketCandle.ingested_at.desc()).limit(limit)
+        return list(self.db.scalars(stmt).all())
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:
         filters = "WHERE 1=1"
-        params: dict = {}
+        params: dict[str, Any] = {}
+
         if symbol:
             filters += " AND symbol = :symbol"
             params["symbol"] = symbol.upper()
+
         if provider:
             filters += " AND provider = :provider"
             params["provider"] = provider.upper()
 
-        sql = text(f"""
+        sql = text(
+            f"""
             SELECT
                 symbol,
                 interval,
@@ -143,15 +155,18 @@ class MarketDataService:
             {filters}
             GROUP BY symbol, interval
             ORDER BY symbol, interval
-        """)
+            """
+        )
+
         rows = self.db.execute(sql, params).mappings().all()
-        return [dict(r) for r in rows]
+        return [dict(row) for row in rows]
 
     def get_latest_close_times(self, symbols: list[str]) -> dict[str, dict[str, int]]:
         if not symbols:
             return {}
 
-        normalized = [s.upper() for s in symbols]
+        normalized = [symbol.upper() for symbol in symbols]
+
         stmt = (
             select(MarketCandle.symbol, MarketCandle.interval, func.max(MarketCandle.close_time))
             .where(MarketCandle.symbol.in_(normalized))
@@ -159,8 +174,10 @@ class MarketDataService:
         )
 
         out: dict[str, dict[str, int]] = {}
+
         for symbol, interval, close_time in self.db.execute(stmt).all():
             out.setdefault(symbol, {})[interval] = int(close_time)
+
         return out
 
     def load_symbol_bundle(self, symbol: str, limits: dict[str, int]) -> dict[str, list[dict[str, Any]]]:
@@ -174,6 +191,7 @@ class MarketDataService:
                 .order_by(MarketCandle.open_time.desc())
                 .limit(limit)
             )
+
             rows = list(self.db.scalars(stmt).all())
             rows.reverse()
 
@@ -220,10 +238,12 @@ class MarketDataService:
 
             if open_time in seen_open_times:
                 duplicate_count += 1
+
             seen_open_times.add(open_time)
 
             if previous_open_time is not None and open_time - previous_open_time != expected_step:
                 gap_count += 1
+
             previous_open_time = open_time
 
             open_price = float(candle["open"])
@@ -239,8 +259,10 @@ class MarketDataService:
 
         if duplicate_count:
             issues.append(f"duplicate_open_times:{duplicate_count}")
+
         if gap_count:
             issues.append(f"time_gaps:{gap_count}")
+
         if ohlc_error_count:
             issues.append(f"ohlc_inconsistencies:{ohlc_error_count}")
 
@@ -355,9 +377,15 @@ class MarketDataService:
     def last_import_run(self, provider: str = "KRAKEN") -> dict[str, Any] | None:
         try:
             row = self.db.execute(
-                text("SELECT * FROM market_data_import_runs WHERE provider = :provider ORDER BY started_at DESC LIMIT 1"),
+                text(
+                    "SELECT * FROM market_data_import_runs "
+                    "WHERE provider = :provider "
+                    "ORDER BY started_at DESC "
+                    "LIMIT 1"
+                ),
                 {"provider": provider.upper()},
             ).mappings().first()
+
             return dict(row) if row else None
         except Exception:
             self.db.rollback()
