@@ -147,7 +147,7 @@ def margin_leverage_attempts() -> tuple[int, ...]:
     levels in order. Spot fallback is handled by each workflow after all
     returned leverage attempts fail.
     """
-    return (5, 3)
+    return (5,4, 3,2)
 
 
 def margin_transfer_spot_balance() -> bool:
