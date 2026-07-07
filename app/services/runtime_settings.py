@@ -87,7 +87,6 @@ BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
     "PLANNER_MIN_RR": ("strategy", "planner_min_rr"),
     "BOT_PIPELINE_ENABLED": ("bot", "bot_pipeline_enabled"),
     "BOT_EXECUTOR_ENABLED": ("bot", "bot_executor_enabled"),
-    "BOT_EXECUTOR_MOMENTUM_ENABLED": ("bot", "bot_executor_momentum_enabled"),
     "BOT_SCHEDULER_ENABLED": ("bot", "bot_scheduler_enabled"),
     "BOT_PIPELINE_INTERVAL_SEC": ("bot", "bot_pipeline_interval_sec"),
     "BOT_EXECUTOR_INTERVAL_SEC": ("bot", "bot_executor_interval_sec"),
@@ -171,7 +170,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "bot": {
         "bot_pipeline_enabled": base_settings.bot_pipeline_enabled,
         "bot_executor_enabled": base_settings.bot_executor_enabled,
-        "bot_executor_momentum_enabled": base_settings.bot_executor_momentum_enabled,
         "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
         "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
         "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
@@ -219,7 +217,6 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
     "bot": {
         "BOT_PIPELINE_ENABLED": "bot_pipeline_enabled",
         "BOT_EXECUTOR_ENABLED": "bot_executor_enabled",
-        "BOT_EXECUTOR_MOMENTUM_ENABLED": "bot_executor_momentum_enabled",
         "BOT_SCHEDULER_ENABLED": "bot_scheduler_enabled",
         "BOT_PIPELINE_INTERVAL_SEC": "bot_pipeline_interval_sec",
         "BOT_EXECUTOR_INTERVAL_SEC": "bot_executor_interval_sec",

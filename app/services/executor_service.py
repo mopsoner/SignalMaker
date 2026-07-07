@@ -188,7 +188,7 @@ class ExecutorService:
             'stop_order_id': stop_local.order_id if stop_local else None,
         }
 
-    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
+    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper', sync_momentum_first: bool = False) -> dict:
         executed = []
         skipped = []
         requested_mode = (mode or 'paper').lower()

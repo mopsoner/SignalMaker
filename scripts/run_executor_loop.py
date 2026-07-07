@@ -38,6 +38,20 @@ def _settings_fallback(section: str, key: str, technical_fallback):
     return technical_fallback
 
 
+def _runtime_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
 if __name__ == "__main__":
     print("Executor worker started", flush=True)
     while True:
@@ -46,8 +60,8 @@ if __name__ == "__main__":
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
             live_cfg = runtime.get("live", {})
-            executor_enabled = bool(bot.get("bot_executor_enabled", True))
-            momentum_executor_enabled = bool(bot.get("bot_executor_momentum_enabled", False))
+            executor_enabled = _runtime_bool(bot.get("bot_executor_enabled"), True)
+            momentum_executor_enabled = _runtime_bool(bot.get("bot_executor_momentum_enabled"), False)
 
             if not executor_enabled and not momentum_executor_enabled:
                 print("Executor disabled — sleeping 30s", flush=True)
