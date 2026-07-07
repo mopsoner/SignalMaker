@@ -246,17 +246,15 @@ def test_does_not_overwrite_executed_local_candidate(db_session, monkeypatch):
 
 def test_executor_can_execute_synced_candidate_in_paper_mode(db_session, monkeypatch):
     patch_get(monkeypatch, [remote_candidate()])
-    sync_result = MomentumCandidateSyncService(db_session).sync()
 
-    result = ExecutorService(db_session).execute_momentum_decision(quantity=0.25, mode="paper")
+    result = ExecutorService(db_session).execute_open_candidates(limit=10, quantity=0.25, mode="paper", sync_momentum_first=True)
 
-    assert sync_result["upserted"] == 1
-    assert result["status"] == "executed"
-    assert result["result"]["candidate_id"] == "momentum-BTCUSDT-open"
+    assert result["sync"]["upserted"] == 1
+    assert result["executed"][0]["candidate_id"] == "momentum-BTCUSDT-open"
     assert db_session.get(TradeCandidate, "momentum-BTCUSDT-open").status == "executed"
 
 
-def test_api_failure_does_not_block_classic_executor(db_session, monkeypatch):
+def test_api_failure_returns_clean_error_and_does_not_crash_executor(db_session, monkeypatch):
     TradeCandidateService(db_session).upsert_open_candidate(
         candidate_id="ETHUSDT-accumulation",
         symbol="ETHUSDT",
@@ -274,8 +272,9 @@ def test_api_failure_does_not_block_classic_executor(db_session, monkeypatch):
     )
     patch_get(monkeypatch, exc=requests.ConnectionError("central down"))
 
-    result = ExecutorService(db_session).execute_open_candidates(limit=10, quantity=1.0, mode="paper")
+    result = ExecutorService(db_session).execute_open_candidates(limit=10, quantity=1.0, mode="paper", sync_momentum_first=True)
 
+    assert result["sync"]["errors"][0]["reason"] == "api_error"
     assert result["executed"][0]["candidate_id"] == "ETHUSDT-accumulation"
 
 

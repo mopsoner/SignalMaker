@@ -5,6 +5,7 @@ from app.services.fill_service import FillService
 from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.risk_service import RiskService
+from app.services.momentum_candidate_sync_service import MomentumCandidateSyncService
 from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
 from raspberry_executor.kraken_margin_client import KrakenMarginClient
@@ -191,9 +192,12 @@ class ExecutorService:
     def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper', sync_momentum_first: bool = False) -> dict:
         executed = []
         skipped = []
+        sync_result = None
+        if sync_momentum_first:
+            sync_result = MomentumCandidateSyncService(self.db).sync(limit=limit)
         requested_mode = (mode or 'paper').lower()
         for candidate in self.candidates.get_open_candidates(limit=limit):
-            if candidate.stage == 'momentum':
+            if candidate.stage == 'momentum' and not sync_momentum_first:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'momentum_candidate_handled_by_momentum_executor'})
                 continue
             if candidate.entry_price is None:
@@ -216,7 +220,10 @@ class ExecutorService:
                 executed.append(result)
             except Exception as exc:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
-        return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
+        result = {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
+        if sync_result is not None:
+            result['sync'] = sync_result
+        return result
 
     def execute_momentum_decision(self, quantity: float = 1.0, mode: str = 'paper') -> dict:
         requested_mode = (mode or 'paper').lower()
@@ -271,6 +278,7 @@ class ExecutorService:
             }
         except Exception as exc:
             return {**base, 'status': 'error', 'reason': str(exc)}
+
 
     def reconcile_live_positions(self) -> dict:
         if not self._runtime_section('live').get('live_reconcile_enabled'):
