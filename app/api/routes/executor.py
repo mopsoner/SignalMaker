@@ -18,6 +18,7 @@ def execute_candidates(
     return ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
 
 
+
 @router.post('/executor/reconcile')
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
     from app.services.executor_service import ExecutorService
