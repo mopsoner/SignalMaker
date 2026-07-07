@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Executor worker — runs ExecutorService.execute_open_candidates() on a
+Executor worker — runs classic and momentum executor flows on a
 configurable interval. Reads config from runtime settings at each tick.
 """
 import os
@@ -46,9 +46,10 @@ if __name__ == "__main__":
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
             live_cfg = runtime.get("live", {})
-            momentum_cfg = runtime.get("momentum", {})
+            executor_enabled = bool(bot.get("bot_executor_enabled", True))
+            momentum_executor_enabled = bool(bot.get("bot_executor_momentum_enabled", False))
 
-            if not bot.get("bot_executor_enabled", True):
+            if not executor_enabled and not momentum_executor_enabled:
                 print("Executor disabled — sleeping 30s", flush=True)
                 time.sleep(30)
                 continue
@@ -61,9 +62,26 @@ if __name__ == "__main__":
             interval = int(bot.get("bot_executor_interval_sec", interval_fallback))
             mode = 'live' if live_cfg.get('live_trading_enabled', settings.live_trading_enabled) else 'paper'
 
-            sync_momentum_first = bool(momentum_cfg.get('momentum_candidates_sync_enabled', settings.momentum_candidates_sync_enabled))
-            result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode, sync_momentum_first=sync_momentum_first)
-            print(f"Executor tick ({mode}): {result}", flush=True)
+            executor = ExecutorService(db)
+            if momentum_executor_enabled:
+                momentum_result = executor.execute_momentum_decision(quantity=quantity, mode=mode)
+                print(
+                    "Momentum executor decision: "
+                    f"decision_action={momentum_result.get('decision_action')} "
+                    f"symbol={momentum_result.get('symbol')} "
+                    f"target_symbol={momentum_result.get('target_symbol')} "
+                    f"status={momentum_result.get('status')} "
+                    f"order_ids={momentum_result.get('order_ids')} "
+                    f"fill_ids={momentum_result.get('fill_ids')} "
+                    f"reason={momentum_result.get('reason')}",
+                    flush=True,
+                )
+
+            if executor_enabled:
+                result = executor.execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
+                print(f"Executor tick ({mode}): {result}", flush=True)
+            else:
+                print("Classic executor disabled by bot_executor_enabled=False", flush=True)
 
         except Exception as exc:
             print(f"Executor error: {exc}", flush=True)

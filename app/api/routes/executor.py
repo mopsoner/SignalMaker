@@ -11,12 +11,11 @@ def execute_candidates(
     limit: int = Query(default=10, ge=1, le=100),
     quantity: float = Query(default=1.0, gt=0),
     mode: str = Query(default='paper'),
-    sync_momentum_first: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.executor_service import ExecutorService
 
-    return ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode, sync_momentum_first=sync_momentum_first)
+    return ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
 
 
 @router.post('/executor/sync-momentum-candidates')

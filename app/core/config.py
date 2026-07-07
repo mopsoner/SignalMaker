@@ -125,6 +125,7 @@ class Settings(BaseSettings):
 
     bot_pipeline_enabled: bool = Field(default=True, alias="BOT_PIPELINE_ENABLED")
     bot_executor_enabled: bool = Field(default=True, alias="BOT_EXECUTOR_ENABLED")
+    bot_executor_momentum_enabled: bool = Field(default=False, alias="BOT_EXECUTOR_MOMENTUM_ENABLED")
     bot_scheduler_enabled: bool = Field(default=True, alias="BOT_SCHEDULER_ENABLED")
     bot_pipeline_interval_sec: int = Field(default=60, alias="BOT_PIPELINE_INTERVAL_SEC")
     bot_executor_interval_sec: int = Field(default=30, alias="BOT_EXECUTOR_INTERVAL_SEC")
