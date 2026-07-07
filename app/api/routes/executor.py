@@ -1,9 +1,37 @@
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.services.momentum_decision_service import MomentumDecisionService
 
 from app.api.deps import get_db
 
 router = APIRouter()
+public_router = APIRouter()
+
+
+def _momentum_decision_service(db: Session) -> "MomentumDecisionService":
+    from app.services.momentum_decision_service import MomentumDecisionService
+
+    return MomentumDecisionService(db)
+
+
+@router.get("/momentum-engine/decision")
+@public_router.get("/momentum-engine/decision", include_in_schema=False)
+def momentum_engine_decision(db: Session = Depends(get_db)) -> dict:
+    return _momentum_decision_service(db).decision()
+
+
+@router.post("/executor/momentum/run-once")
+@public_router.post("/executor/momentum/run-once", include_in_schema=False)
+def execute_momentum_once(
+    quantity: float = Query(default=1.0, gt=0),
+    mode: str = Query(default='paper'),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _momentum_decision_service(db).run_once(quantity=quantity, mode=mode)
 
 
 @router.post("/executor/run-once")
