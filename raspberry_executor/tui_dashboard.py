@@ -269,8 +269,7 @@ def render_status(stdscr, y, x, h, w, data):
         ("PNL total", f"{total_pnl:+.4f}" if total_pnl is not None else "-"),
         ("Candidates", f"{len(data.get('candidates') or [])}/{data.get('candidate_limit', '-')}") ,
         ("Candle feed", candle_feed_text(data)),
-        ("Mom cands", len(data.get("momentum_candidates") or [])),
-        ("Mom action", momentum.get("action", "-")),
+        ("Mom action", momentum.get("decision_action") or momentum.get("action", "-")),
         ("Mom result", momentum.get("execution_result", "-")),
         ("Refresh", data["refreshed_at"]),
     ]
@@ -281,40 +280,26 @@ def render_status(stdscr, y, x, h, w, data):
 
 
 def render_momentum(stdscr, y, x, h, w, data):
-    box(stdscr, y, x, h, w, "Momentum Candidates")
-    rows = data.get("momentum_candidates") or []
+    box(stdscr, y, x, h, w, "Momentum Decision")
     m = data.get("momentum") or {}
-    if rows:
-        add(stdscr, y + 1, x + 2, f"Trade candidates={len(rows)} last_action={safe(m.get('action'))}", curses.color_pair(3))
-        add(stdscr, y + 2, x + 2, "Rank Symbol     RSI1H  Buy      Score      Status", curses.A_BOLD)
-        for idx, row in enumerate(rows[: max(0, h - 4)]):
-            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-            remote = payload.get("remote_candidate") if isinstance(payload.get("remote_candidate"), dict) else {}
-            rank = remote.get("rank") or payload.get("rank") or "-"
-            score = row.get("score") if row.get("score") is not None else remote.get("momentum_score")
-            buyable = momentum_buyable_text(row)
-            line = f"{safe(rank):<4} {safe(row.get('symbol')):<10} {safe(candidate_rsi_1h(row)):<6} {buyable:<8} {safe(score):<10} {safe(row.get('status'))}"
-            add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4), curses.color_pair(2) if buyable == "buy" and str(row.get("status")) == "open" else curses.color_pair(4))
-        return
     if not m:
         add(stdscr, y + 1, x + 2, "No momentum trade candidate yet", curses.color_pair(4))
         return
     decision = m.get("decision") if isinstance(m.get("decision"), dict) else {}
     target = decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {}
     rows = [
-        ("Action", m.get("action")),
+        ("Decision", m.get("decision_action") or m.get("action")),
         ("Symbol", m.get("symbol")),
-        ("Buy", m.get("buy_symbol")),
-        ("Sell", m.get("sell_symbol")),
-        ("Trade", m.get("should_trade")),
-        ("Result", m.get("execution_result")),
-        ("Rank/Score", f"{safe(target.get('rank'))}/{safe(target.get('momentum_score'))}"),
-        ("Next", m.get("next_check_at")),
-        ("Orders", m.get("order_sequence")),
+        ("Target", m.get("target_symbol")),
+        ("Status", m.get("status")),
         ("Reason", m.get("reason")),
+        ("Order IDs", m.get("order_ids")),
+        ("Fill IDs", m.get("fill_ids")),
+        ("Result", m.get("execution_result")),
+        ("Next", m.get("next_check_at")),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
-        color = curses.color_pair(2) if k == "Action" and str(v).upper() in {"BUY", "HOLD"} else curses.color_pair(5) if k == "Action" and str(v).upper() in {"SELL", "ROTATE"} else curses.color_pair(4)
+        color = curses.color_pair(2) if k == "Decision" and str(v).upper() in {"BUY", "HOLD"} else curses.color_pair(5) if k == "Decision" and str(v).upper() in {"SELL", "ROTATE"} else curses.color_pair(4)
         add(stdscr, y + 1 + i, x + 2, f"{k:<10}", curses.color_pair(3))
         add(stdscr, y + 1 + i, x + 14, trunc(v, w - 16), color)
 

@@ -110,18 +110,17 @@ def momentum_summary_box(momentum):
     <div class='box'>
       <h2>Momentum Decision</h2>
       <div class='grid'>
-        <div class='card'><b>Action</b><span>{_status_pill(momentum.get('action'))}</span></div>
+        <div class='card'><b>Decision action</b><span>{_status_pill(momentum.get('decision_action') or momentum.get('action'))}</span></div>
         <div class='card'><b>Symbol</b><span>{c(momentum.get('symbol'))}</span></div>
-        <div class='card'><b>Buy</b><span>{c(momentum.get('buy_symbol'))}</span></div>
-        <div class='card'><b>Sell</b><span>{c(momentum.get('sell_symbol'))}</span></div>
-        <div class='card'><b>Should trade</b><span>{c(momentum.get('should_trade'))}</span></div>
-        <div class='card'><b>Result</b><span>{c(momentum.get('execution_result'))}</span></div>
+        <div class='card'><b>Target symbol</b><span>{c(momentum.get('target_symbol'))}</span></div>
+        <div class='card'><b>Status</b><span>{_status_pill(momentum.get('status'))}</span></div>
+        <div class='card'><b>Order IDs</b><span>{c(momentum.get('order_ids'))}</span></div>
+        <div class='card'><b>Fill IDs</b><span>{c(momentum.get('fill_ids'))}</span></div>
       </div>
       <p><b>Last:</b> {c(momentum.get('timestamp'))}</p>
       <p><b>Next check:</b> {c(momentum.get('next_check_at'))}</p>
       <p><b>Reason:</b> {c(momentum.get('reason'))}</p>
-      <p><b>Target rank / score / RSI 1H:</b> {c(target.get('rank'))} / {c(target.get('momentum_score') or target.get('score'))} / {c(target.get('rsi_1h'))}</p>
-      <p><b>Buyable candidates:</b> {c(momentum.get('buy_candidates_count'))} · RSI 1H range 50-65</p>
+      <p><b>Execution result:</b> {c(momentum.get('execution_result'))}</p>
       <p><a href='/momentum-decision'>Open momentum details</a></p>
     </div>
     """
@@ -134,14 +133,14 @@ def momentum_decision_page():
     html = "<h1>Momentum Decision</h1>" + momentum_summary_box(latest)
     html += "<div class='box'><h2>Settings</h2>"
     env = read_env()
-    for key in ["MOMENTUM_DECISION_ENABLED", "MOMENTUM_DECISION_EXECUTE_ENABLED", "MOMENTUM_DECISION_POLL_SECONDS", "MOMENTUM_DECISION_CADENCE_HOURS", "MOMENTUM_DECISION_STARTING_CAPITAL", "MOMENTUM_DECISION_MIN_SCORE", "MOMENTUM_BUYABLE_RSI_1H_MIN", "MOMENTUM_BUYABLE_RSI_1H_MAX"]:
+    for key in ["MOMENTUM_DECISION_ENABLED", "MOMENTUM_DECISION_EXECUTE_ENABLED", "MOMENTUM_DECISION_POLL_SECONDS", "MOMENTUM_DECISION_CADENCE_HOURS", "MOMENTUM_DECISION_STARTING_CAPITAL", "MOMENTUM_DECISION_PATH", "MOMENTUM_DECISION_METHOD", "MOMENTUM_DECISION_USE_REMOTE_RUN_ONCE", "MOMENTUM_EXECUTOR_RUN_ONCE_PATH"]:
         html += f"<p><b>{c(key)}</b>: <code>{c(env.get(key))}</code></p>"
     html += "<p class='muted'>Modify these values from Admin, then restart the executor.</p></div>"
     if rows:
-        html += "<div class='box'><h2>Recent momentum events</h2><table><tr><th>Time</th><th>Event</th><th>Action</th><th>Symbol</th><th>Buy</th><th>Sell</th><th>Result</th><th>Reason/Error</th><th>Details</th></tr>"
+        html += "<div class='box'><h2>Recent momentum events</h2><table><tr><th>Time</th><th>Event</th><th>Decision action</th><th>Symbol</th><th>Target</th><th>Status</th><th>Orders</th><th>Fills</th><th>Result</th><th>Reason/Error</th><th>Details</th></tr>"
         for row in rows:
             details = json.dumps(row.get("decision") or row, ensure_ascii=False, sort_keys=True, indent=2)
-            html += f"<tr><td>{c(row.get('timestamp'))}</td><td>{c(row.get('event_type'))}</td><td>{c(row.get('action'))}</td><td>{c(row.get('symbol'))}</td><td>{c(row.get('buy_symbol'))}</td><td>{c(row.get('sell_symbol'))}</td><td>{c(row.get('execution_result'))}</td><td>{c(row.get('reason') or row.get('error'))}</td><td><details><summary>json</summary><pre>{c(details)}</pre></details></td></tr>"
+            html += f"<tr><td>{c(row.get('timestamp'))}</td><td>{c(row.get('event_type'))}</td><td>{c(row.get('decision_action') or row.get('action'))}</td><td>{c(row.get('symbol'))}</td><td>{c(row.get('target_symbol'))}</td><td>{c(row.get('status'))}</td><td>{c(row.get('order_ids'))}</td><td>{c(row.get('fill_ids'))}</td><td>{c(row.get('execution_result'))}</td><td>{c(row.get('reason') or row.get('error'))}</td><td><details><summary>json</summary><pre>{c(details)}</pre></details></td></tr>"
         html += "</table></div>"
     return html
 
