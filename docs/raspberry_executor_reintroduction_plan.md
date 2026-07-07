@@ -22,7 +22,7 @@ This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ea
 
 - `raspberry_executor/momentum_decision_feed.py` remains the Momentum buy/sell/rotation business engine and defaults back to spot mode unless margin is explicitly configured.
 - `raspberry_executor/momentum_decision_feed_sync.py` is importable and delegates to the Momentum decision feed.
-- `app/services/momentum_candidate_sync_service.py` keeps Momentum ranking/payload sync into local trade candidates and preserves executed-candidate guards to avoid artificial duplicate executions.
+- Momentum ranking/payload sync into local trade candidates has been retired; runtime execution now consumes already-open candidates only.
 - The frontend/TUI-visible data now shows Momentum candidates from local trade candidates with entry, TP, stop, status, score, and RSI-derived payload fields.
 
 ## Historical endpoints available
@@ -31,7 +31,6 @@ This branch keeps the clean revert of PR #154 (`ce9738a3ffcb7a116eea024e644f87ea
 - `GET /api/v1/trade-candidates?status=open&limit=...`
 - `POST /api/v1/trade-candidates/{candidate_id}/executed`
 - `POST /api/v1/executor/run-once`
-- `POST /api/v1/executor/sync-momentum-candidates`
 - `POST /api/v1/executor/reconcile`
 - `GET /api/v1/momentum`
 - `GET /api/v1/momentum/ranking`

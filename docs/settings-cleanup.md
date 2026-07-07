@@ -43,9 +43,6 @@ The cleanup migration copies useful old values into canonical `app_settings` row
 | `LIVE_MAX_OPEN_POSITIONS` | `live.live_max_open_positions` |
 | `LIVE_MAX_NOTIONAL_PER_TRADE` | `live.live_max_notional_per_trade` |
 | `SIGNALMAKER_BASE_URL` | `momentum.signalmaker_base_url` |
-| `MOMENTUM_CANDIDATES_SYNC_ENABLED` | `momentum.momentum_candidates_sync_enabled` |
-| `MOMENTUM_CANDIDATES_LIMIT` | `momentum.momentum_candidates_limit` |
-| `MOMENTUM_CANDIDATES_MIN_SCORE` | `momentum.momentum_candidates_min_score` |
 
 Legacy uppercase admin rows are also canonicalized and deleted after their values are copied.
 

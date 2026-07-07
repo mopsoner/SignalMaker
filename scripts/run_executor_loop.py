@@ -46,7 +46,6 @@ if __name__ == "__main__":
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
             live_cfg = runtime.get("live", {})
-            momentum_cfg = runtime.get("momentum", {})
 
             if not bot.get("bot_executor_enabled", True):
                 print("Executor disabled — sleeping 30s", flush=True)
@@ -61,8 +60,7 @@ if __name__ == "__main__":
             interval = int(bot.get("bot_executor_interval_sec", interval_fallback))
             mode = 'live' if live_cfg.get('live_trading_enabled', settings.live_trading_enabled) else 'paper'
 
-            sync_momentum_first = bool(momentum_cfg.get('momentum_candidates_sync_enabled', settings.momentum_candidates_sync_enabled))
-            result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode, sync_momentum_first=sync_momentum_first)
+            result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
             print(f"Executor tick ({mode}): {result}", flush=True)
 
         except Exception as exc:
