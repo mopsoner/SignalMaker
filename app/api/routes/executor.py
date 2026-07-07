@@ -37,6 +37,21 @@ def sync_momentum_candidates(
     )
 
 
+@router.get('/momentum-engine/decision')
+def read_momentum_decision() -> dict:
+    from raspberry_executor.momentum_decision_feed import fetch_decision
+
+    decision = fetch_decision()
+    return {'decision': decision}
+
+
+@router.post('/executor/momentum/run-once')
+def run_momentum_executor_once() -> dict:
+    from raspberry_executor.momentum_decision_feed import run_once
+
+    return run_once()
+
+
 @router.post('/executor/reconcile')
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
     from app.services.executor_service import ExecutorService

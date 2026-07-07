@@ -4,17 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SignalMaker Raspberry Executor - Momentum</title>
-    <meta name="description" content="Vue momentum buy/sell, décisions RSI et synchronisation des candidats SignalMaker.">
+    <meta name="description" content="Vue Momentum decision / action pour le flux décisionnel SignalMaker.">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
-      <h1>Momentum</h1>
-      <p>Décisions momentum buy/sell, RSI et synchronisation depuis SignalMaker.</p>
+      <h1>Momentum decision / action</h1>
+      <p>Décision et action Momentum depuis SignalMaker.</p>
       <nav data-main-nav></nav>
     </header>
     <main>
-      <section id="momentum" class="card"><h2>Momentum buy / sell</h2><button data-action="sync-momentum">Synchroniser depuis SignalMaker</button> <button data-action="refresh">Rafraîchir</button><p id="sync-result" class="muted"></p><div id="momentum-summary"></div><div id="momentum-content" class="muted">Chargement...</div></section>
+      <section id="momentum" class="card"><h2>Momentum decision / action</h2><button data-action="run-momentum-executor">Exécuter Momentum run-once</button> <button data-action="refresh">Rafraîchir</button><p id="sync-result" class="muted"></p><div id="momentum-summary"></div><div id="momentum-content" class="muted">Chargement...</div></section>
     </main>
     <footer>Dernière mise à jour : <span id="updated-at">-</span></footer>
     <script src="./app.js" defer></script>
