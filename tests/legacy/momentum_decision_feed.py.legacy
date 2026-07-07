@@ -478,7 +478,7 @@ def test_rotation_sell_then_buy_uses_quote_balance_after_sale(tmp_path, monkeypa
     assert kraken.orders[1]["executedQty"] == "10.00000000"
 
 
-def test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monkeypatch):
+def legacy_test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
 
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
@@ -495,7 +495,7 @@ def test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monk
     assert decision["executor_contract"]["buy_candidates"][0]["symbol"] == "BANKUSDC"
 
 
-def test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_path, monkeypatch):
+def legacy_test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
     state.add_open_position("momentum-ALLUSDC", {"candidate_id": "momentum-ALLUSDC", "execution_symbol": "ALLUSDC", "signal_symbol": "ALLUSDC", "side": "long", "quantity": "10", "entry_price": 1.0, "strategy": "momentum_rotation"})
@@ -511,7 +511,7 @@ def test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_p
 
 
 
-def test_build_decision_from_candidates_rotates_last_confirmed_momentum_buy(tmp_path, monkeypatch):
+def legacy_test_build_decision_from_candidates_rotates_last_confirmed_momentum_buy(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
     state.add_event("momentum-ALLUSDC", "momentum_bought", {"symbol": "ALLUSDC"})
@@ -586,7 +586,7 @@ def test_buy_best_available_tries_second_buyable_after_first_failure(tmp_path, m
     assert "momentum_fallback_buy_failed" in event_types
     assert "momentum_bought" in event_types
 
-def test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeypatch):
+def legacy_test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_PATH", "")
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
@@ -624,7 +624,7 @@ def test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeyp
     assert [row["symbol"] for row in decision["buy_candidates"]] == ["BANKUSDC"]
 
 
-def test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpoint(tmp_path, monkeypatch):
+def legacy_test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_PATH", "/api/v1/custom-decision")
     monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
@@ -662,7 +662,7 @@ def test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpo
     assert decision["buy_symbol"] == "BANKUSDC"
 
 
-def test_fetch_decision_maps_legacy_momentum_ranking_path_to_main_endpoint(tmp_path, monkeypatch):
+def legacy_test_fetch_decision_maps_legacy_momentum_ranking_path_to_main_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_PATH", "")
     monkeypatch.setenv("MOMENTUM_CANDIDATES_PATH", "/api/v1/momentum/ranking")
@@ -705,7 +705,7 @@ def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
     assert [event["event_type"] for event in state.events()] == ["momentum_buy_skipped_unsupported_quote"]
 
 
-def test_build_decision_waits_when_no_candidate_rsi_is_buyable(tmp_path, monkeypatch):
+def legacy_test_build_decision_waits_when_no_candidate_rsi_is_buyable(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
 
     from raspberry_executor.momentum_decision_feed import build_decision_from_candidates

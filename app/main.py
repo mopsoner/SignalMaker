@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db
 from app.api.router import api_router
 from app.core.config import settings
 
@@ -37,6 +40,24 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.get("/momentum-engine/decision", tags=["executor"], include_in_schema=False)
+def root_momentum_engine_decision(db: Session = Depends(get_db)) -> dict:
+    from app.services.momentum_decision_service import MomentumDecisionService
+
+    return MomentumDecisionService(db).decision()
+
+
+@app.post("/executor/momentum/run-once", tags=["executor"], include_in_schema=False)
+def root_execute_momentum_once(
+    quantity: float = Query(default=1.0, gt=0),
+    mode: str = Query(default="paper"),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.momentum_decision_service import MomentumDecisionService
+
+    return MomentumDecisionService(db).run_once(quantity=quantity, mode=mode)
 
 
 @app.get("/healthz", tags=["health"])
