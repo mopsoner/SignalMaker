@@ -43,13 +43,6 @@ class Settings(BaseSettings):
         supported = ", ".join(sorted(cls.SUPPORTED_SIGNAL_EXECUTION_INTERVALS))
         raise ValueError(f"Unsupported signal execution interval {v!r}. Supported intervals: {supported}.")
 
-    @field_validator("momentum_candidates_min_rr", mode="before")
-    @classmethod
-    def empty_momentum_min_rr_as_none(cls, v: str | None) -> str | None:
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
-
     app_name: str = Field(default="SignalMaker Raspberry Executor", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
@@ -97,14 +90,6 @@ class Settings(BaseSettings):
     live_reconcile_enabled: bool = Field(default=True, alias="LIVE_RECONCILE_ENABLED")
 
     signalmaker_base_url: str = Field(default="https://mysginalmaker.replit.app", alias="SIGNALMAKER_BASE_URL")
-    momentum_candidates_sync_enabled: bool = Field(default=False, alias="MOMENTUM_CANDIDATES_SYNC_ENABLED")
-    momentum_candidates_limit: int = Field(default=100, alias="MOMENTUM_CANDIDATES_LIMIT")
-    momentum_candidates_min_score: float = Field(default=0.0, alias="MOMENTUM_CANDIDATES_MIN_SCORE")
-    momentum_candidates_min_rr: float | None = Field(default=None, alias="MOMENTUM_CANDIDATES_MIN_RR")
-    momentum_candidates_require_wyckoff_context: bool = Field(default=True, alias="MOMENTUM_CANDIDATES_REQUIRE_WYCKOFF_CONTEXT")
-    momentum_candidates_http_timeout_sec: float = Field(default=20.0, alias="MOMENTUM_CANDIDATES_HTTP_TIMEOUT_SEC")
-    momentum_candidates_source_path: str = Field(default="/api/v1/momentum", alias="MOMENTUM_CANDIDATES_SOURCE_PATH")
-    momentum_candidates_target_pct: float = Field(default=3.0, alias="MOMENTUM_CANDIDATES_TARGET_PCT")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")

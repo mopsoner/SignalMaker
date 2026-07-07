@@ -66,14 +66,6 @@ BOOTSTRAP_ENV_ALIASES: dict[str, tuple[str, str]] = {
     "LIVE_REQUIRE_TP_SL": ("live", "live_require_tp_sl"),
     "LIVE_RECONCILE_ENABLED": ("live", "live_reconcile_enabled"),
     "SIGNALMAKER_BASE_URL": ("momentum", "signalmaker_base_url"),
-    "MOMENTUM_CANDIDATES_SYNC_ENABLED": ("momentum", "momentum_candidates_sync_enabled"),
-    "MOMENTUM_CANDIDATES_LIMIT": ("momentum", "momentum_candidates_limit"),
-    "MOMENTUM_CANDIDATES_MIN_SCORE": ("momentum", "momentum_candidates_min_score"),
-    "MOMENTUM_CANDIDATES_MIN_RR": ("momentum", "momentum_candidates_min_rr"),
-    "MOMENTUM_CANDIDATES_REQUIRE_WYCKOFF_CONTEXT": ("momentum", "momentum_candidates_require_wyckoff_context"),
-    "MOMENTUM_CANDIDATES_HTTP_TIMEOUT_SEC": ("momentum", "momentum_candidates_http_timeout_sec"),
-    "MOMENTUM_CANDIDATES_SOURCE_PATH": ("momentum", "momentum_candidates_source_path"),
-    "MOMENTUM_CANDIDATES_TARGET_PCT": ("momentum", "momentum_candidates_target_pct"),
     "SESSION_TIMEZONE_OFFSET_HOURS": ("strategy", "session_timezone_offset_hours"),
     "SIGNAL_EXECUTION_INTERVAL": ("strategy", "signal_execution_interval"),
     "SIGNAL_RSI_PERIOD": ("strategy", "signal_rsi_period"),
@@ -189,14 +181,6 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "momentum": {
         "signalmaker_base_url": base_settings.signalmaker_base_url,
-        "momentum_candidates_sync_enabled": base_settings.momentum_candidates_sync_enabled,
-        "momentum_candidates_limit": base_settings.momentum_candidates_limit,
-        "momentum_candidates_min_score": base_settings.momentum_candidates_min_score,
-        "momentum_candidates_min_rr": base_settings.momentum_candidates_min_rr,
-        "momentum_candidates_require_wyckoff_context": base_settings.momentum_candidates_require_wyckoff_context,
-        "momentum_candidates_http_timeout_sec": base_settings.momentum_candidates_http_timeout_sec,
-        "momentum_candidates_source_path": base_settings.momentum_candidates_source_path,
-        "momentum_candidates_target_pct": base_settings.momentum_candidates_target_pct,
     },
 }
 
@@ -227,9 +211,6 @@ ADMIN_FIELD_ALIASES: dict[str, dict[str, str]] = {
         "LIVE_MAX_NOTIONAL_PER_TRADE": "live_max_notional_per_trade",
     },
     "momentum": {
-        "MOMENTUM_CANDIDATES_SYNC_ENABLED": "momentum_candidates_sync_enabled",
-        "MOMENTUM_CANDIDATES_LIMIT": "momentum_candidates_limit",
-        "MOMENTUM_CANDIDATES_MIN_SCORE": "momentum_candidates_min_score",
     },
 }
 
@@ -451,8 +432,6 @@ BOOL_SETTING_KEYS: dict[str, dict[str, bool]] = {
         "kraken_incremental_fetch_enabled": True,
     },
     "momentum": {
-        "momentum_candidates_sync_enabled": False,
-        "momentum_candidates_require_wyckoff_context": True,
     },
     "live": {
         "live_trading_enabled": False,
