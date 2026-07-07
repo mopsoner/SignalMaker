@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import raspberry_executor.sqlite_db as sqlite_db
 import raspberry_executor.momentum_decision_feed as momentum_module
 from raspberry_executor.momentum_decision_feed import buy_best_available, buy_symbol, sell_symbol
 from raspberry_executor.state import StateStore
+
+
+@pytest.fixture(autouse=True)
+def default_momentum_env(monkeypatch):
+    monkeypatch.setenv("MOMENTUM_DECISION_EXECUTE_ENABLED", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "false")
+    monkeypatch.setenv("MARGIN_LEVERAGE_ATTEMPTS", "5,3")
+    monkeypatch.delenv("MOMENTUM_DECISION_PATH", raising=False)
+    monkeypatch.delenv("MOMENTUM_DECISION_METHOD", raising=False)
+    monkeypatch.delenv("MOMENTUM_DECISION_USE_REMOTE_RUN_ONCE", raising=False)
 
 
 class FakeRules:
@@ -355,21 +367,82 @@ def test_rotate_sells_cross_margin_position_before_restarting_buy_pattern(tmp_pa
 
 
 
-def test_build_decision_rotate_includes_sell_before_buy_order_sequence(tmp_path, monkeypatch):
+def test_fetch_decision_reads_structured_central_decision_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    state = StateStore()
-    state.add_open_position("momentum-ALLUSDC", {"candidate_id": "momentum-ALLUSDC", "execution_symbol": "ALLUSDC", "signal_symbol": "ALLUSDC", "side": "long", "quantity": "10", "entry_price": 1.0, "strategy": "momentum_rotation"})
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
+    calls = []
 
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
+    class FakeResponse:
+        status_code = 200
+        ok = True
+        headers = {"content-type": "application/json"}
+        text = "{}"
 
-    decision = build_decision_from_candidates([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}])
+        def __init__(self, url):
+            self.url = url
 
-    assert decision["action"] == "ROTATE"
-    assert decision["order_sequence"] == [
-        {"step": 1, "action": "SELL", "symbol": "ALLUSDC", "role": "exit_held_momentum_asset"},
-        {"step": 2, "action": "BUY", "symbol": "BANKUSDC", "role": "enter_new_momentum_asset"},
-    ]
-    assert decision["executor_contract"]["order_sequence"] == decision["order_sequence"]
+        def json(self):
+            return {
+                "decision_action": "BUY",
+                "symbol": "ALLUSDC",
+                "target_symbol": "ALLUSDC",
+                "status": "ready",
+                "reason": "central_momentum_signal",
+                "order_ids": ["order-1"],
+                "fill_ids": ["fill-1"],
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return FakeResponse(url)
+
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.get", fake_get)
+
+    decision = momentum_module.fetch_decision()
+
+    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum-engine/decision"]
+    assert decision["decision_action"] == "BUY"
+    assert decision["action"] == "BUY"
+    assert decision["symbol"] == "ALLUSDC"
+    assert decision["target_symbol"] == "ALLUSDC"
+    assert decision["status"] == "ready"
+    assert decision["reason"] == "central_momentum_signal"
+    assert decision["order_ids"] == ["order-1"]
+    assert decision["fill_ids"] == ["fill-1"]
+
+
+def test_fetch_decision_can_display_central_run_once_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_METHOD", "POST")
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        ok = True
+        headers = {"content-type": "application/json"}
+        text = "{}"
+
+        def __init__(self, url):
+            self.url = url
+
+        def json(self):
+            return {"decision": {"decision_action": "HOLD", "symbol": "ALLUSDC", "target_symbol": "ALLUSDC"}, "result": {"status": "completed", "reason": "already_positioned", "order_ids": [], "fill_ids": []}}
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return FakeResponse(url)
+
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.post", fake_post)
+
+    decision = momentum_module.fetch_decision()
+
+    assert [call["url"] for call in calls] == ["https://central.test/api/v1/executor/momentum/run-once"]
+    assert decision["decision_action"] == "HOLD"
+    assert decision["symbol"] == "ALLUSDC"
+    assert decision["target_symbol"] == "ALLUSDC"
+    assert decision["status"] == "completed"
+    assert decision["reason"] == "already_positioned"
 
 
 def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_path, monkeypatch):
@@ -478,221 +551,31 @@ def test_rotation_sell_then_buy_uses_quote_balance_after_sale(tmp_path, monkeypa
     assert kraken.orders[1]["executedQty"] == "10.00000000"
 
 
-def test_build_decision_from_candidates_buys_top_supported_symbol(tmp_path, monkeypatch):
+def test_buy_best_available_uses_only_central_target_without_ranking_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
+    monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
 
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
+    def fail_fetch(limit):
+        raise AssertionError("ranking fallback must not be fetched")
 
-    decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 8.0, "rsi_1h": 50},
-    ])
-
-    assert decision["action"] == "BUY"
-    assert decision["should_trade"] is True
-    assert decision["buy_symbol"] == "BANKUSDC"
-    assert decision["source"] == "momentum_rankings"
-    assert decision["executor_contract"]["buy_candidates"][0]["symbol"] == "BANKUSDC"
-
-
-def test_build_decision_from_candidates_rotates_existing_momentum_position(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    state = StateStore()
-    state.add_open_position("momentum-ALLUSDC", {"candidate_id": "momentum-ALLUSDC", "execution_symbol": "ALLUSDC", "signal_symbol": "ALLUSDC", "side": "long", "quantity": "10", "entry_price": 1.0, "strategy": "momentum_rotation"})
-
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
-
-    decision = build_decision_from_candidates([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}])
-
-    assert decision["action"] == "ROTATE"
-    assert decision["should_trade"] is True
-    assert decision["sell_symbol"] == "ALLUSDC"
-    assert decision["buy_symbol"] == "BANKUSDC"
-
-
-
-def test_build_decision_from_candidates_rotates_last_confirmed_momentum_buy(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    state = StateStore()
-    state.add_event("momentum-ALLUSDC", "momentum_bought", {"symbol": "ALLUSDC"})
-
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
-
-    decision = build_decision_from_candidates([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}])
-
-    assert decision["action"] == "ROTATE"
-    assert decision["should_trade"] is True
-    assert decision["sell_symbol"] == "ALLUSDC"
-    assert decision["buy_symbol"] == "BANKUSDC"
-    assert decision["order_sequence"] == [
-        {"step": 1, "action": "SELL", "symbol": "ALLUSDC", "role": "exit_held_momentum_asset"},
-        {"step": 2, "action": "BUY", "symbol": "BANKUSDC", "role": "enter_new_momentum_asset"},
-    ]
-
-
-
-def test_build_decision_buys_best_rsi_buyable_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
-
-    decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 66},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
-    ])
-
-    assert decision["action"] == "BUY"
-    assert decision["buy_symbol"] == "ALLUSDC"
-    assert decision["buy_candidates"][0]["symbol"] == "ALLUSDC"
-    assert decision["skipped_candidates"][0]["reason"].startswith("rsi_1h_out_of_range")
-
-
-def test_build_decision_holds_when_held_rank_beats_buyable_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    state = StateStore()
-    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.0, "strategy": "momentum_rotation"})
-
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
-
-    decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 66},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
-    ])
-
-    assert decision["action"] == "HOLD"
-    assert decision["should_trade"] is False
-    assert decision["buy_symbol"] == "ALLUSDC"
-    assert "held_rank=1" in decision["reason"]
-
-
-def test_buy_best_available_tries_second_buyable_after_first_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", lambda limit: [
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 50},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
-    ])
+    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", fail_fetch)
     state = StateStore()
 
-    class FirstBuyFailsKraken(FakeKraken):
-        def place_market_entry(self, symbol: str, side: str, quantity: str) -> dict:
-            if side == "long" and symbol == "BANKUSDC":
-                raise RuntimeError("first candidate rejected")
-            return super().place_market_entry(symbol, side, quantity)
+    result = buy_best_available(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, {"decision_action": "BUY", "target_symbol": "ALLUSDC"})
 
-    result = buy_best_available(settings(), FirstBuyFailsKraken(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert "momentum-ALLUSDC" in state.open_positions()
 
-    assert result.startswith("fallback_buy:ALLUSDC:bought:ALLUSDC"), result
-    event_types = [event["event_type"] for event in state.events()]
-    assert "momentum_fallback_buy_failed" in event_types
-    assert "momentum_bought" in event_types
 
-def test_fetch_decision_uses_main_momentum_rankings_by_default(tmp_path, monkeypatch):
+def test_buy_best_available_skips_missing_central_target(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_PATH", "")
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
-    calls = []
+    state = StateStore()
 
-    class FakeResponse:
-        def __init__(self, payload, status_code, url):
-            self._payload = payload
-            self.status_code = status_code
-            self.url = url
-            self.ok = status_code < 400
-            self.headers = {"content-type": "application/json"}
-            self.text = "{}"
+    result = buy_best_available(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, {"decision_action": "BUY"})
 
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        calls.append({"url": url, **kwargs})
-        return FakeResponse([
-            {"symbol": "BADUSDT", "rank": 1, "momentum_score": 99.0, "rsi_1h": 50},
-            {"symbol": "BANKUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 50},
-        ], 200, url)
-
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.get", fake_get)
-
-    from raspberry_executor.momentum_decision_feed import fetch_decision
-
-    decision = fetch_decision()
-
-    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum"]
-    assert decision["action"] == "BUY"
-    assert decision["buy_symbol"] == "BANKUSDC"
-    assert decision["source"] == "momentum_rankings"
-    assert [row["symbol"] for row in decision["buy_candidates"]] == ["BANKUSDC"]
-
-
-def test_fetch_decision_falls_back_to_momentum_rankings_for_custom_missing_endpoint(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_PATH", "/api/v1/custom-decision")
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
-    calls = []
-
-    class FakeResponse:
-        def __init__(self, payload, status_code, url):
-            self._payload = payload
-            self.status_code = status_code
-            self.url = url
-            self.ok = status_code < 400
-            self.headers = {"content-type": "application/json"}
-            self.text = "{}"
-
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        calls.append({"url": url, **kwargs})
-        if url.endswith("/api/v1/custom-decision"):
-            return FakeResponse({"detail": "Not Found"}, 404, url)
-        return FakeResponse([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}], 200, url)
-
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.get", fake_get)
-
-    from raspberry_executor.momentum_decision_feed import fetch_decision
-
-    decision = fetch_decision()
-
-    assert [call["url"] for call in calls] == [
-        "https://central.test/api/v1/custom-decision",
-        "https://central.test/api/v1/momentum",
-    ]
-    assert decision["source"] == "momentum_decision_endpoint_fallback"
-    assert decision["buy_symbol"] == "BANKUSDC"
-
-
-def test_fetch_decision_maps_legacy_momentum_ranking_path_to_main_endpoint(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_PATH", "")
-    monkeypatch.setenv("MOMENTUM_CANDIDATES_PATH", "/api/v1/momentum/ranking")
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.load_settings", lambda: SimpleNamespace(signalmaker_base_url="https://central.test", quote_assets=["USDC"]))
-    calls = []
-
-    class FakeResponse:
-        def __init__(self, payload, status_code, url):
-            self._payload = payload
-            self.status_code = status_code
-            self.url = url
-            self.ok = status_code < 400
-            self.headers = {"content-type": "application/json"}
-            self.text = "{}"
-
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        calls.append({"url": url, **kwargs})
-        return FakeResponse([{"symbol": "BANKUSDC", "rank": 1, "momentum_score": 12.5, "rsi_1h": 50}], 200, url)
-
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.requests.get", fake_get)
-
-    from raspberry_executor.momentum_decision_feed import fetch_decision
-
-    decision = fetch_decision()
-
-    assert [call["url"] for call in calls] == ["https://central.test/api/v1/momentum"]
-    assert decision["buy_symbol"] == "BANKUSDC"
+    assert result == "buy_skipped_missing_target"
+    assert state.open_positions() == {}
 
 
 def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
@@ -703,47 +586,6 @@ def test_buy_symbol_skips_unsupported_quote_asset(tmp_path, monkeypatch):
 
     assert result == "unsupported_quote:BADUSDT:configured=USDC"
     assert [event["event_type"] for event in state.events()] == ["momentum_buy_skipped_unsupported_quote"]
-
-
-def test_build_decision_waits_when_no_candidate_rsi_is_buyable(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-
-    from raspberry_executor.momentum_decision_feed import build_decision_from_candidates
-
-    decision = build_decision_from_candidates([
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 70},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 38},
-        {"symbol": "LOWUSDC", "rank": 3, "momentum_score": 9.0, "rsi_1h": 34},
-    ])
-
-    assert decision["action"] == "WAIT"
-    assert decision["should_trade"] is False
-    assert decision["buy_symbol"] is None
-    assert decision["buy_candidates"] == []
-    assert decision["reason"] == "no_buyable_momentum_candidates_rsi_1h_50_65"
-    assert [row["symbol"] for row in decision["skipped_candidates"]] == ["BANKUSDC", "ALLUSDC", "LOWUSDC"]
-
-
-def test_buy_best_available_does_not_buy_non_buyable_lowest_rsi(tmp_path, monkeypatch):
-    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", lambda limit: [
-        {"symbol": "BANKUSDC", "rank": 1, "momentum_score": 20.0, "rsi_1h": 70},
-        {"symbol": "ALLUSDC", "rank": 2, "momentum_score": 12.5, "rsi_1h": 38},
-        {"symbol": "LOWUSDC", "rank": 3, "momentum_score": 9.0, "rsi_1h": 34},
-    ])
-    state = StateStore()
-
-    result = buy_best_available(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, {"action": "BUY"})
-
-    assert result == "fallback_buy_exhausted:no_candidates"
-    assert state.open_positions() == {}
-    event_types = [event["event_type"] for event in state.events()]
-    assert event_types == [
-        "momentum_buy_candidate_not_buyable",
-        "momentum_buy_candidate_not_buyable",
-        "momentum_buy_candidate_not_buyable",
-        "momentum_fallback_no_candidates",
-    ]
 
 
 def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, monkeypatch):
@@ -763,12 +605,11 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
     first = momentum_module.execute_decision(dict(decision))
     second = momentum_module.execute_decision(dict(decision))
 
-    assert first == "fallback_buy_exhausted:attempts=1"
+    assert first == "quote_balance_wait:USDC:free=0.0000:usable=0.0000"
     assert second.startswith("wait:momentum_cadence:next_check_at="), second
     assert [event["event_type"] for event in StateStore().events()] == [
         "momentum_decision_cadence_checked",
         "momentum_buy_skipped_quote_balance",
-        "momentum_fallback_buy_exhausted",
         "momentum_decision_cadence_wait",
     ]
 
@@ -813,7 +654,7 @@ def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_
 
     result = buy_symbol(cfg, kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert attempts == [5, 3]
+    assert attempts == [5, 4, 3, 2]
     assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert kraken.orders[0]["executedQty"] == "10.00000000"
     assert [event["event_type"] for event in state.events()] == [

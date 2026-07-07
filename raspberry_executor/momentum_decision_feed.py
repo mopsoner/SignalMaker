@@ -19,13 +19,12 @@ from raspberry_executor.spot_order_manager import SpotOrderManager
 
 logger = setup_logging("raspberry-momentum-decision")
 
-DEFAULT_DECISION_PATH = "/api/v1/momentum"
+DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
 DEFAULT_DECISION_METHOD = "GET"
 DEFAULT_DECISION_LIMIT = 25
-DEFAULT_CANDIDATES_PATH = "/api/v1/momentum"
-DECISION_RANKINGS_SOURCE = "momentum_rankings"
-DECISION_ENDPOINT_FALLBACK_SOURCE = "momentum_decision_endpoint_fallback"
-LEGACY_DECISION_PATH = "/api/v1/momentum-engine/decision"
+DEFAULT_EXECUTOR_RUN_ONCE_PATH = "/api/v1/executor/momentum/run-once"
+LEGACY_CANDIDATES_PATH = "/api/v1/momentum"
+LEGACY_DECISION_SOURCE = "legacy_momentum_rankings"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -69,7 +68,7 @@ def _url(base_url: str, path: str) -> str:
 
 def _decision_path() -> str:
     path = (_env("MOMENTUM_DECISION_PATH", DEFAULT_DECISION_PATH) or DEFAULT_DECISION_PATH).strip()
-    if path.rstrip("/") == "/api/v1/momentum/ranking":
+    if path.rstrip("/") in {"/api/v1/momentum", "/api/v1/momentum/ranking"}:
         return DEFAULT_DECISION_PATH
     return path
 
@@ -82,14 +81,12 @@ def _decision_limit() -> int:
     return _int_env("MOMENTUM_DECISION_LIMIT", DEFAULT_DECISION_LIMIT)
 
 
+def _executor_run_once_path() -> str:
+    return (_env("MOMENTUM_EXECUTOR_RUN_ONCE_PATH", DEFAULT_EXECUTOR_RUN_ONCE_PATH) or DEFAULT_EXECUTOR_RUN_ONCE_PATH).strip()
+
+
 def _candidates_path() -> str:
-    path = _env("MOMENTUM_CANDIDATES_PATH", DEFAULT_CANDIDATES_PATH) or DEFAULT_CANDIDATES_PATH
-    # Current SignalMaker main exposes the Momentum list directly at
-    # /api/v1/momentum. Keep old Raspberry env files that still name the removed
-    # /ranking child route working by transparently reading the existing route.
-    if path.rstrip("/") == "/api/v1/momentum/ranking":
-        return DEFAULT_CANDIDATES_PATH
-    return path
+    return (_env("MOMENTUM_CANDIDATES_PATH", LEGACY_CANDIDATES_PATH) or LEGACY_CANDIDATES_PATH).strip()
 
 
 def _read_json_payload(response: requests.Response) -> Any:
@@ -110,72 +107,82 @@ def _read_json_response(response: requests.Response) -> dict[str, Any]:
     return data
 
 
-def _decision_candidates_fallback_enabled() -> bool:
-    return _bool(_env("MOMENTUM_DECISION_CANDIDATES_FALLBACK_ENABLED"), default=True)
+def _use_remote_executor_run_once() -> bool:
+    return _decision_method() == "POST" or _bool(_env("MOMENTUM_DECISION_USE_REMOTE_RUN_ONCE"), default=False)
 
 
 def fetch_decision() -> dict[str, Any]:
-    """Fetch the actionable momentum decision for the Raspberry executor.
+    """Fetch the central structured momentum decision/result contract.
 
-    The current main SignalMaker API exposes the Momentum list at /api/v1/momentum. It
-    does not expose the older experimental /api/v1/momentum-engine/decision
-    route, so the existing Momentum endpoint is the default source. MOMENTUM_DECISION_PATH remains
-    supported for deployments that explicitly provide a decision endpoint.
+    Raspberry no longer builds BUY/HOLD/ROTATE locally from momentum rankings.
+    Use GET /api/v1/momentum-engine/decision for a decision-only contract, or
+    POST /api/v1/executor/momentum/run-once when the central executor should
+    return the action/result that the Raspberry displays.
     """
-    decision_path = _decision_path()
-    decision_method = _decision_method()
-    if not decision_path or decision_path == LEGACY_DECISION_PATH:
-        return build_decision_from_candidates(
-            fetch_momentum_candidates(limit=_decision_limit()),
-            source=DECISION_RANKINGS_SOURCE,
-        )
-    if decision_path.rstrip("/") == DEFAULT_DECISION_PATH and decision_method == "GET":
-        return build_decision_from_candidates(
-            fetch_momentum_candidates(limit=_decision_limit()),
-            source=DECISION_RANKINGS_SOURCE,
-        )
-    if decision_method != "GET":
-        raise RuntimeError(f"unsupported_momentum_decision_method:{decision_method}")
-
     settings = load_settings()
+    if _use_remote_executor_run_once():
+        response = requests.post(
+            _url(settings.signalmaker_base_url, _executor_run_once_path()),
+            timeout=30,
+            headers={"accept": "application/json", "cache-control": "no-cache"},
+        )
+        data = _read_json_response(response)
+        if not response.ok:
+            raise RuntimeError(f"momentum_run_once_http_error status={response.status_code} url={response.url} payload={data}")
+        return normalize_decision(data)
+
+    if _decision_method() != "GET":
+        raise RuntimeError(f"unsupported_momentum_decision_method:{_decision_method()}")
+
     response = requests.get(
-        _url(settings.signalmaker_base_url, decision_path),
-        params={"limit": _decision_limit()},
+        _url(settings.signalmaker_base_url, _decision_path()),
         timeout=30,
         headers={"accept": "application/json", "cache-control": "no-cache"},
     )
-    if not response.ok and response.status_code in {404, 405} and _decision_candidates_fallback_enabled():
-        logger.warning(
-            "momentum decision endpoint unavailable status=%s url=%s; falling back to %s",
-            response.status_code,
-            response.url,
-            _candidates_path(),
-        )
-        return build_decision_from_candidates(
-            fetch_momentum_candidates(limit=_decision_limit()),
-            source=DECISION_ENDPOINT_FALLBACK_SOURCE,
-        )
     data = _read_json_response(response)
     if not response.ok:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
     return apply_previous_buy_rotation(normalize_decision(data))
 
-
 def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     payload = dict(decision)
-    contract = payload.get("executor_contract")
-    if isinstance(contract, dict):
-        for key in ("action", "raw_action", "symbol", "buy_symbol", "sell_symbol", "reason", "should_trade", "order_sequence", "buy_candidates", "fallback_policy"):
-            payload.setdefault(key, contract.get(key))
+    nested_decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    contract = payload.get("executor_contract") if isinstance(payload.get("executor_contract"), dict) else {}
+
+    for source in (nested_decision, result, contract):
+        for key in (
+            "decision_action",
+            "action",
+            "raw_action",
+            "symbol",
+            "target_symbol",
+            "buy_symbol",
+            "sell_symbol",
+            "status",
+            "reason",
+            "should_trade",
+            "order_sequence",
+            "order_ids",
+            "fill_ids",
+            "execution_result",
+        ):
+            if key in source and payload.get(key) is None:
+                payload[key] = source.get(key)
+
     payload.setdefault("mode", "momentum_rotation")
-    payload.setdefault("action", "WAIT")
-    payload["action"] = str(payload.get("action") or "WAIT").upper()
-    payload.setdefault("symbol", payload.get("buy_symbol") or payload.get("sell_symbol"))
-    payload.setdefault("buy_symbol", payload.get("symbol") if payload["action"] in {"BUY", "ROTATE"} else None)
+    payload["decision_action"] = str(payload.get("decision_action") or payload.get("action") or "WAIT").upper()
+    payload.setdefault("action", payload["decision_action"])
+    payload["action"] = str(payload.get("action") or payload["decision_action"]).upper()
+    payload.setdefault("target_symbol", payload.get("buy_symbol") or payload.get("symbol"))
+    payload.setdefault("symbol", payload.get("target_symbol") or payload.get("buy_symbol") or payload.get("sell_symbol"))
+    payload.setdefault("buy_symbol", payload.get("target_symbol") if payload["action"] in {"BUY", "ROTATE"} else None)
     payload.setdefault("sell_symbol", payload.get("symbol") if payload["action"] == "SELL" else None)
     payload.setdefault("should_trade", payload["action"] in {"BUY", "SELL", "ROTATE"})
+    payload.setdefault("status", payload.get("execution_status") or result.get("status") or "decision")
     payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
-    payload.setdefault("buy_candidates", [])
+    payload.setdefault("order_ids", [])
+    payload.setdefault("fill_ids", [])
     payload.setdefault("fallback_policy", {})
     return payload
 
@@ -787,7 +794,7 @@ def fetch_momentum_candidates(limit: int = 50) -> list[dict[str, Any]]:
     ]
 
 
-def build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: str = DECISION_RANKINGS_SOURCE) -> dict[str, Any]:
+def legacy_build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: str = LEGACY_DECISION_SOURCE) -> dict[str, Any]:
     state = StateStore()
     held_symbol = _position_symbol(current_momentum_position(state)) or _last_recorded_buy_without_later_sell(state)
     ordered_candidates = _ordered_momentum_candidates([row for row in candidates if _candidate_symbol(row)])
@@ -1014,65 +1021,20 @@ def _buy_result_balance_wait(result: str) -> bool:
 
 
 def buy_best_available(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
-    if not _bool(_env("MOMENTUM_DECISION_FALLBACK_ENABLED"), default=True):
-        symbol = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
-        row = {"symbol": symbol, **(decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {})}
-        buyable, reason = _candidate_buyable(row)
-        if not buyable:
-            state.add_event(_candidate_id(symbol), "momentum_buy_candidate_not_buyable", {"symbol": symbol, "rank": _candidate_rank(row), "rsi_1h": _candidate_rsi_1h(row), "reason": reason, "decision": decision})
-            return f"not_buyable:{symbol}:{reason}"
-        return buy_symbol(settings, kraken, rules, state, symbol, decision, use_available_quote=True)
+    """Buy only the central decision target.
 
-    attempts: list[dict[str, Any]] = []
-    max_attempts = max(1, _int_env("MOMENTUM_DECISION_FALLBACK_MAX_ATTEMPTS", 10))
+    Ranking-based local fallbacks and RSI filtering are intentionally not used:
+    the central momentum engine owns candidate selection and buyability rules.
+    """
+    symbol = str(decision.get("target_symbol") or decision.get("buy_symbol") or decision.get("symbol") or "").upper()
     exclude_set = {item.upper() for item in (exclude or set()) if item}
-    try:
-        candidates = []
-        for row in fetch_momentum_candidates(limit=max_attempts * 2):
-            symbol = _candidate_symbol(row)
-            buyable, reason = _candidate_buyable(row)
-            if symbol in exclude_set or not _candidate_quote_supported(row, settings.quote_assets):
-                continue
-            if not buyable:
-                state.add_event(_candidate_id(symbol), "momentum_buy_candidate_not_buyable", {"symbol": symbol, "rank": _candidate_rank(row), "rsi_1h": _candidate_rsi_1h(row), "reason": reason, "decision": decision})
-                continue
-            candidates.append(_enrich_candidate(row, buyable=True, reason=reason))
-    except Exception as exc:
-        candidates = []
-        state.add_event("momentum-decision", "momentum_rankings_fetch_failed", {"error": str(exc), "decision": decision})
-    decision_candidates = []
-    for row in decision_buy_candidates(decision, exclude=exclude_set | {_candidate_symbol(row) for row in candidates}):
-        buyable, reason = _candidate_buyable(row)
-        if buyable:
-            decision_candidates.append(_enrich_candidate(row, buyable=True, reason=reason))
-        else:
-            state.add_event(_candidate_id(_candidate_symbol(row)), "momentum_buy_candidate_not_buyable", {"symbol": _candidate_symbol(row), "rank": _candidate_rank(row), "rsi_1h": _candidate_rsi_1h(row), "reason": reason, "decision": decision})
-    candidates.extend(_ordered_momentum_candidates(decision_candidates))
-    candidates = _ordered_momentum_candidates(candidates)
-    if not candidates:
-        state.add_event("momentum-decision", "momentum_fallback_no_candidates", {"decision": decision})
-        return "fallback_buy_exhausted:no_candidates"
-
-    for row in candidates[:max_attempts]:
-        symbol = _candidate_symbol(row)
-        trial_decision = {**decision, "buy_symbol": symbol, "symbol": symbol, "fallback_target_asset": row}
-        try:
-            result = buy_symbol(settings, kraken, rules, state, symbol, trial_decision, use_available_quote=True)
-            attempts.append({"symbol": symbol, "result": result, "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source")})
-            if _buy_result_ok(result):
-                state.add_event("momentum-decision", "momentum_fallback_buy_selected", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
-                return f"fallback_buy:{symbol}:{result}"
-            if _buy_result_balance_wait(result):
-                state.add_event("momentum-decision", "momentum_fallback_buy_balance_wait", {"selected_symbol": symbol, "attempts": attempts, "decision": decision})
-                return f"fallback_buy_balance_wait:{symbol}:{result}"
-        except Exception as exc:
-            attempts.append({"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source")})
-            state.add_event(_candidate_id(symbol), "momentum_fallback_buy_failed", {"symbol": symbol, "error": str(exc), "rank": row.get("rank"), "score": row.get("momentum_score") or row.get("score"), "rsi_1h": _candidate_rsi_1h(row), "buyable_reason": row.get("buyable_reason"), "source": row.get("source"), "decision": decision})
-            continue
-
-    state.add_event("momentum-decision", "momentum_fallback_buy_exhausted", {"attempts": attempts, "decision": decision})
-    return f"fallback_buy_exhausted:attempts={len(attempts)}"
-
+    if not symbol:
+        state.add_event("momentum-decision", "momentum_buy_skipped_missing_target", {"decision": decision})
+        return "buy_skipped_missing_target"
+    if symbol in exclude_set:
+        state.add_event(_candidate_id(symbol), "momentum_buy_skipped_excluded_target", {"symbol": symbol, "decision": decision})
+        return f"buy_skipped_excluded_target:{symbol}"
+    return buy_symbol(settings, kraken, rules, state, symbol, decision, use_available_quote=True)
 
 def current_momentum_position(state: StateStore) -> dict[str, Any] | None:
     for candidate_id, position in state.open_positions().items():
@@ -1230,16 +1192,20 @@ def record_decision(decision: dict[str, Any], execution_result: str | None = Non
     action = str(decision.get("action") or "WAIT").upper()
     symbol = str(decision.get("symbol") or decision.get("buy_symbol") or decision.get("sell_symbol") or "momentum")
     StateStore().add_event("momentum-decision", "momentum_decision", {
+        "decision_action": decision.get("decision_action") or action,
         "action": action,
         "symbol": symbol,
+        "target_symbol": decision.get("target_symbol"),
+        "status": decision.get("status"),
         "should_trade": bool(decision.get("should_trade")),
         "buy_symbol": decision.get("buy_symbol"),
         "sell_symbol": decision.get("sell_symbol"),
-        "execution_result": execution_result,
+        "execution_result": execution_result or decision.get("execution_result"),
         "reason": decision.get("reason"),
+        "order_ids": decision.get("order_ids") or [],
+        "fill_ids": decision.get("fill_ids") or [],
         "due_now": decision.get("due_now"),
         "next_check_at": decision.get("next_check_at"),
-        "buy_candidates_count": len(decision_buy_candidates(decision)),
         "fallback_policy": decision.get("fallback_policy"),
         "decision": decision,
     })
@@ -1277,7 +1243,7 @@ def run_loop() -> None:
         try:
             output = run_once()
             decision = output["decision"]
-            logger.info("momentum decision action=%s symbol=%s should_trade=%s buy_symbol=%s sell_symbol=%s candidates=%s result=%s", decision.get("action"), decision.get("symbol"), decision.get("should_trade"), decision.get("buy_symbol"), decision.get("sell_symbol"), len(decision_buy_candidates(decision)), output.get("execution_result"))
+            logger.info("momentum decision action=%s symbol=%s target_symbol=%s status=%s result=%s", decision.get("decision_action") or decision.get("action"), decision.get("symbol"), decision.get("target_symbol"), decision.get("status"), output.get("execution_result"))
         except Exception as exc:
             logger.error("momentum decision feed error=%s", str(exc))
             try:
