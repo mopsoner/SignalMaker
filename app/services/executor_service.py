@@ -193,6 +193,9 @@ class ExecutorService:
         skipped = []
         requested_mode = (mode or 'paper').lower()
         for candidate in self.candidates.get_open_candidates(limit=limit):
+            if candidate.stage == 'momentum' and not sync_momentum_first:
+                skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'momentum_candidate_handled_by_momentum_executor'})
+                continue
             if candidate.entry_price is None:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
                 continue
@@ -214,6 +217,61 @@ class ExecutorService:
             except Exception as exc:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
+
+    def execute_momentum_decision(self, quantity: float = 1.0, mode: str = 'paper') -> dict:
+        requested_mode = (mode or 'paper').lower()
+        candidates = self.candidates.list_candidates(limit=1, status='open', stage='momentum', exclude_test_data=True)
+        if not candidates:
+            return {
+                'decision_action': 'HOLD',
+                'symbol': None,
+                'target_symbol': None,
+                'status': 'skipped',
+                'order_ids': [],
+                'fill_ids': [],
+                'reason': 'no_open_momentum_candidate',
+            }
+
+        candidate = candidates[0]
+        base = {
+            'decision_action': 'BUY' if candidate.side == 'long' else str(candidate.side or '').upper(),
+            'symbol': candidate.symbol,
+            'target_symbol': candidate.symbol,
+            'order_ids': [],
+            'fill_ids': [],
+        }
+        if candidate.entry_price is None:
+            return {**base, 'status': 'skipped', 'reason': 'missing_entry_price'}
+
+        try:
+            mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
+            if not self._price_before_target(candidate, mark_price):
+                return {
+                    **base,
+                    'status': 'skipped',
+                    'reason': 'current_price_past_or_missing_target',
+                    'mark_price': mark_price,
+                    'target_price': candidate.target_price,
+                }
+            result = self._execute_live_candidate(candidate, quantity) if requested_mode == 'live' else self._execute_paper_candidate(candidate, quantity)
+            order_ids = [
+                result.get('order_id'),
+                result.get('entry_order_id'),
+                result.get('tp_order_id'),
+                result.get('stop_order_id'),
+            ]
+            fill_ids = [result.get('fill_id')]
+            return {
+                **base,
+                'status': 'executed',
+                'order_ids': [order_id for order_id in order_ids if order_id is not None],
+                'fill_ids': [fill_id for fill_id in fill_ids if fill_id is not None],
+                'reason': 'momentum_candidate_executed',
+                'result': result,
+            }
+        except Exception as exc:
+            return {**base, 'status': 'error', 'reason': str(exc)}
+
 
     def reconcile_live_positions(self) -> dict:
         if not self._runtime_section('live').get('live_reconcile_enabled'):

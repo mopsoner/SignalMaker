@@ -63,10 +63,10 @@ def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monk
     ])
     db_session.commit()
     TradeCandidateService(db_session).upsert_open_candidate(
-        candidate_id="BTCUSDT-momentum",
+        candidate_id="BTCUSDT-trade",
         symbol="BTCUSDT",
         side="long",
-        stage="momentum",
+        stage="trade",
         score=8.0,
         entry_price=100.0,
         stop_price=90.0,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Executor worker — runs ExecutorService.execute_open_candidates() on a
+Executor worker — runs classic and momentum executor flows on a
 configurable interval. Reads config from runtime settings at each tick.
 """
 import os
@@ -38,6 +38,20 @@ def _settings_fallback(section: str, key: str, technical_fallback):
     return technical_fallback
 
 
+def _runtime_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
 if __name__ == "__main__":
     print("Executor worker started", flush=True)
     while True:
@@ -46,8 +60,13 @@ if __name__ == "__main__":
             runtime = load_runtime_settings(db)
             bot = runtime.get("bot", {})
             live_cfg = runtime.get("live", {})
+<<<<<<< codex/supprimer-lectures-momentum_candidates_sync_enabled
+            executor_enabled = _runtime_bool(bot.get("bot_executor_enabled"), True)
+            momentum_executor_enabled = _runtime_bool(bot.get("bot_executor_momentum_enabled"), False)
+=======
+>>>>>>> raspberry/executor-app
 
-            if not bot.get("bot_executor_enabled", True):
+            if not executor_enabled and not momentum_executor_enabled:
                 print("Executor disabled — sleeping 30s", flush=True)
                 time.sleep(30)
                 continue
@@ -60,8 +79,31 @@ if __name__ == "__main__":
             interval = int(bot.get("bot_executor_interval_sec", interval_fallback))
             mode = 'live' if live_cfg.get('live_trading_enabled', settings.live_trading_enabled) else 'paper'
 
+<<<<<<< codex/supprimer-lectures-momentum_candidates_sync_enabled
+            executor = ExecutorService(db)
+            if momentum_executor_enabled:
+                momentum_result = executor.execute_momentum_decision(quantity=quantity, mode=mode)
+                print(
+                    "Momentum executor decision: "
+                    f"decision_action={momentum_result.get('decision_action')} "
+                    f"symbol={momentum_result.get('symbol')} "
+                    f"target_symbol={momentum_result.get('target_symbol')} "
+                    f"status={momentum_result.get('status')} "
+                    f"order_ids={momentum_result.get('order_ids')} "
+                    f"fill_ids={momentum_result.get('fill_ids')} "
+                    f"reason={momentum_result.get('reason')}",
+                    flush=True,
+                )
+
+            if executor_enabled:
+                result = executor.execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
+                print(f"Executor tick ({mode}): {result}", flush=True)
+            else:
+                print("Classic executor disabled by bot_executor_enabled=False", flush=True)
+=======
             result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
             print(f"Executor tick ({mode}): {result}", flush=True)
+>>>>>>> raspberry/executor-app
 
         except Exception as exc:
             print(f"Executor error: {exc}", flush=True)
