@@ -184,14 +184,6 @@ def test_bootstrap_env_aliases_cover_runtime_default_fields():
         "KRAKEN_LOOKBACK_4H": ("market_data", "kraken_lookback_4h"),
         "LIVE_REQUIRE_TP_SL": ("live", "live_require_tp_sl"),
         "LIVE_RECONCILE_ENABLED": ("live", "live_reconcile_enabled"),
-        "MOMENTUM_CANDIDATES_MIN_RR": ("momentum", "momentum_candidates_min_rr"),
-        "MOMENTUM_CANDIDATES_REQUIRE_WYCKOFF_CONTEXT": (
-            "momentum",
-            "momentum_candidates_require_wyckoff_context",
-        ),
-        "MOMENTUM_CANDIDATES_HTTP_TIMEOUT_SEC": ("momentum", "momentum_candidates_http_timeout_sec"),
-        "MOMENTUM_CANDIDATES_SOURCE_PATH": ("momentum", "momentum_candidates_source_path"),
-        "MOMENTUM_CANDIDATES_TARGET_PCT": ("momentum", "momentum_candidates_target_pct"),
         "SIGNAL_RSI_PERIOD": ("strategy", "signal_rsi_period"),
         "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED": ("strategy", "signal_session_confirm_filter_enabled"),
         "PLANNER_MIN_SCORE": ("strategy", "planner_min_score"),
@@ -542,8 +534,6 @@ def test_load_runtime_settings_coerces_boolean_fields_from_db_values():
     rows = [
         runtime_settings.AppSetting(category="market_data", key="kraken_collector_enabled", value="false"),
         runtime_settings.AppSetting(category="market_data", key="kraken_incremental_fetch_enabled", value="0"),
-        runtime_settings.AppSetting(category="momentum", key="momentum_candidates_sync_enabled", value="true"),
-        runtime_settings.AppSetting(category="momentum", key="momentum_candidates_require_wyckoff_context", value="1"),
         runtime_settings.AppSetting(category="live", key="live_trading_enabled", value=False),
         runtime_settings.AppSetting(category="live", key="kraken_use_testnet", value=True),
         runtime_settings.AppSetting(category="bot", key="bot_pipeline_enabled", value="false"),
@@ -567,8 +557,6 @@ def test_load_runtime_settings_coerces_boolean_fields_from_db_values():
 
     assert payload["market_data"]["kraken_collector_enabled"] is False
     assert payload["market_data"]["kraken_incremental_fetch_enabled"] is False
-    assert payload["momentum"]["momentum_candidates_sync_enabled"] is True
-    assert payload["momentum"]["momentum_candidates_require_wyckoff_context"] is True
     assert payload["live"]["live_trading_enabled"] is False
     assert payload["live"]["kraken_use_testnet"] is True
     assert payload["bot"]["bot_pipeline_enabled"] is False
