@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.trade_candidate import TradeCandidate
+from app.schemas.momentum import SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS
 
 from app.services.exchange_adapter import create_execution_adapter
 from app.services.fill_service import FillService
@@ -325,6 +326,8 @@ class ExecutorService:
         decision = {**decision, 'decision_action': action}
         base = self._momentum_response_base(decision, action=action)
 
+        if action not in SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS:
+            return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
         if action in {'WAIT', 'HOLD'}:
             return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_noop'}
         if action == 'BUY':
@@ -355,12 +358,12 @@ class ExecutorService:
                 buy_result = self._execute_momentum_buy(decision, symbol=decision.get('target_symbol'), quantity=quantity, requested_mode=requested_mode)
                 order_ids.extend(buy_result.get('order_ids') or [])
                 fill_ids.extend(buy_result.get('fill_ids') or [])
-                status = 'executed' if buy_result.get('status') == 'executed' else 'partial'
+                status = 'executed' if buy_result.get('status') == 'executed' else 'skipped'
                 reason = 'momentum_rotated' if status == 'executed' else f"rotation_exit_completed_entry_{buy_result.get('status', 'unknown')}"
                 return {**base, 'status': status, 'reason': reason, 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result, 'entry_result': buy_result}
             except Exception as exc:
                 if close_result is not None:
-                    return {**base, 'status': 'partial', 'reason': f'rotation_exit_completed_entry_error: {exc}', 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result}
+                    return {**base, 'status': 'error', 'reason': f'rotation_exit_completed_entry_error: {exc}', 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result}
                 return {**base, 'status': 'error', 'reason': str(exc)}
         return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
 

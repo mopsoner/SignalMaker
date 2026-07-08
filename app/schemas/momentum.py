@@ -1,6 +1,38 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+MomentumDecisionAction = Literal["BUY", "SELL", "ROTATE", "WAIT", "HOLD"]
+MomentumDecisionStatus = Literal["ready", "idle", "waiting", "skipped", "executed", "error"]
+
+ALLOWED_MOMENTUM_DECISION_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
+SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
+EXPECTED_MOMENTUM_DECISION_STATUSES: set[str] = {
+    "ready",
+    "idle",
+    "waiting",
+    "skipped",
+    "executed",
+    "error",
+}
+
+
+class MomentumDecision(BaseModel):
+    decision_action: MomentumDecisionAction
+    symbol: str | None = None
+    target_symbol: str | None = None
+    status: MomentumDecisionStatus
+    reason: str
+    order_ids: list[str] = Field(default_factory=list)
+    fill_ids: list[str] = Field(default_factory=list)
+    candidate_id: str | None = None
+    side: str | None = None
+    score: float | None = None
+    entry_price: float | None = None
+    target_price: float | None = None
+    stop_price: float | None = None
+    mark_price: float | None = None
 
 
 class MomentumRead(BaseModel):
