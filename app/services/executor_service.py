@@ -122,21 +122,29 @@ class ExecutorService:
         normalized = active.normalize_order(candidate.symbol, quantity=quantity, target_price=candidate.target_price, stop_price=None)
         execution_mode = 'spot'
         margin_error = None
+        margin_attempts = []
+        used_leverage = None
         if candidate.side == 'long' and margin_enabled() and hasattr(active, 'client'):
-            try:
-                rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
-                margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
-                margin_manager = MarginOrderManager(active.client, margin, rules)
-                margin_result = margin_manager.open_long_with_margin_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
-                if margin_result.get('tp_error'):
-                    raise RuntimeError(margin_result['tp_error'])
-                entry_resp = margin_result.get('entry_payload') or {}
-                tp_resp = margin_result.get('tp_payload') or {}
-                avg_fill = float(margin_result['entry_price'])
-                filled_qty = float(margin_result['quantity'])
-                execution_mode = 'cross_margin'
-            except Exception as exc:
-                margin_error = str(exc)
+            rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
+            margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
+            margin_manager = MarginOrderManager(active.client, margin, rules)
+            quote_amount = float(quantity) * float(candidate.entry_price or normalized['mark_price'])
+            for leverage in margin_leverage_attempts():
+                try:
+                    margin_result = margin_manager.open_long_with_margin_take_profit(symbol=candidate.symbol, quote_amount=quote_amount, target_price=float(normalized['target_price']), leverage=leverage)
+                    if margin_result.get('tp_error'):
+                        raise RuntimeError(margin_result['tp_error'])
+                    entry_resp = margin_result.get('entry_payload') or {}
+                    tp_resp = margin_result.get('tp_payload') or {}
+                    avg_fill = float(margin_result['entry_price'])
+                    filled_qty = float(margin_result['quantity'])
+                    execution_mode = 'cross_margin'
+                    used_leverage = leverage
+                    break
+                except Exception as exc:
+                    margin_attempts.append({'leverage': leverage, 'error': str(exc)})
+            if execution_mode != 'cross_margin' and margin_attempts:
+                margin_error = f'margin attempts failed: {margin_attempts}'
         if execution_mode == 'spot':
             try:
                 if hasattr(active, 'client'):
@@ -158,7 +166,7 @@ class ExecutorService:
                     tp_resp = active.place_limit_sell(candidate.symbol, quantity=filled_qty, price=normalized['target_price'])
             except Exception as exc:
                 if margin_error:
-                    raise RuntimeError(f'margin failed ({margin_error}); spot fallback failed ({exc})') from exc
+                    raise RuntimeError(f'margin failed ({margin_error}); spot fallback failed ({exc}); margin_attempts={margin_attempts}') from exc
                 raise
 
         position = self.positions.create_position(
@@ -175,6 +183,8 @@ class ExecutorService:
                 'symbol': candidate.symbol,
                 'exchange': exchange_name,
                 'entry_exchange_order_id': entry_resp.get('orderId'),
+                'leverage': used_leverage,
+                'margin_attempts': margin_attempts,
             },
         )
         entry_order = self.orders.create_order(
@@ -187,7 +197,7 @@ class ExecutorService:
             requested_price=candidate.entry_price,
             filled_price=avg_fill,
             status=str(entry_resp.get('status', 'filled')).lower(),
-            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': entry_resp, 'margin_error': margin_error},
+            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': entry_resp, 'margin_error': margin_error, 'leverage': used_leverage, 'margin_attempts': margin_attempts},
         )
         fill = self.fills.create_fill(order_id=entry_order.order_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', quantity=filled_qty, price=avg_fill)
 
