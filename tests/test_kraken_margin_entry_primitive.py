@@ -89,6 +89,32 @@ def test_kraken_margin_order_add_order_payload_contains_leverage():
     assert kraken.signed_calls[0]["params"]["leverage"] == "3"
 
 
+def test_kraken_margin_order_accepts_per_call_leverage_override():
+    kraken = FakeKraken()
+    margin = KrakenMarginClient(kraken, dry_run=False, leverage=5)
+
+    observed = []
+    for attempt in (5, 4, 3, 2):
+        order = margin.margin_order("BTCUSDC", "BUY", "0.1", "MARKET", leverage=attempt)
+        observed.append((order["leverage"], kraken.signed_calls[-1]["params"]["leverage"]))
+
+    assert observed == [("5", "5"), ("4", "4"), ("3", "3"), ("2", "2")]
+
+
+def test_kraken_take_profit_sell_does_not_receive_entry_attempt_override():
+    kraken = FakeKraken()
+    margin = NoBorrowKrakenMargin(kraken, dry_run=False, leverage=5)
+    manager = MarginOrderManager(kraken, margin, FakeRules())
+
+    result = manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=10.0, target_price=12.0, leverage=2)
+
+    assert result["entry_payload"]["leverage"] == "2"
+    assert kraken.signed_calls[0]["params"]["leverage"] == "2"
+    assert kraken.signed_calls[1]["params"]["type"] == "sell"
+    assert kraken.signed_calls[1]["params"]["reduce_only"] is True
+    assert kraken.signed_calls[1]["params"]["leverage"] == "5"
+
+
 def test_shared_entry_primitive_uses_implicit_kraken_leverage_without_borrow():
     kraken = FakeKraken()
     margin = NoBorrowKrakenMargin(kraken, dry_run=False, leverage=2)
