@@ -89,7 +89,7 @@ def place_leveraged_market_entry(
         raise RuntimeError(f"margin_long_no_quote_available symbol={symbol} balance_guard={balance_guard}")
     current_price = kraken.current_price(symbol)
     quantity = rules.quantity_from_quote(symbol, total_quote, current_price, market=True)
-    entry = margin.margin_order(symbol, "BUY", quantity, "MARKET")
+    entry = margin.margin_order(symbol, "BUY", quantity, "MARKET", leverage=effective_leverage)
     entry_order_id = _order_id(entry)
     if confirm_entry is None:
         confirm = {"entry_price": _avg_price_from_order(entry, current_price), "executed_qty": _executed_qty(entry, quantity), "entry_confirmed": str(entry.get("status") or "").upper() == "FILLED", "entry_confirm_status": entry.get("status"), "entry_confirm_payload": entry}

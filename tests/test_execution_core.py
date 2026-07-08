@@ -57,7 +57,7 @@ class FakeMargin:
         self.orders.append((symbol, side, quantity, order_type, kwargs))
         if self.fail:
             raise RuntimeError("margin rejected")
-        return {"orderId": "margin-1", "status": "FILLED", "executedQty": quantity, "cummulativeQuoteQty": "100", "leverage": self._leverage}
+        return {"orderId": "margin-1", "status": "FILLED", "executedQty": quantity, "cummulativeQuoteQty": "100", "leverage": str(kwargs.get("leverage", self._leverage))}
 
 
 def test_place_leveraged_market_entry_calls_buy_market_and_returns_leverage_payload():
@@ -66,7 +66,7 @@ def test_place_leveraged_market_entry_calls_buy_market_and_returns_leverage_payl
 
     result = place_leveraged_market_entry(kraken=kraken, margin=margin, rules=FakeRules(), symbol="btcusdc", quote_amount=20.0, leverage="5")
 
-    assert margin.orders == [("BTCUSDC", "BUY", "10.00000000", "MARKET", {})]
+    assert margin.orders == [("BTCUSDC", "BUY", "10.00000000", "MARKET", {"leverage": "5"})]
     assert margin.borrow_calls == []
     assert result["mode"] == "cross_margin"
     assert result["symbol"] == "BTCUSDC"
@@ -76,6 +76,19 @@ def test_place_leveraged_market_entry_calls_buy_market_and_returns_leverage_payl
     assert result["leverage"] == "5"
     assert result["entry_payload"]["leverage"] == "5"
     assert result["borrow_payload"]["status"] == "implicit_margin"
+
+
+def test_place_leveraged_market_entry_propagates_each_attempt_leverage_to_order():
+    kraken = FakeKraken()
+
+    for attempt in (5, 4, 3, 2):
+        margin = FakeMargin(leverage="5")
+
+        result = place_leveraged_market_entry(kraken=kraken, margin=margin, rules=FakeRules(), symbol="BTCUSDC", quote_amount=20.0, leverage=attempt)
+
+        assert margin.orders[-1][4]["leverage"] == str(attempt)
+        assert result["entry_payload"]["leverage"] == str(attempt)
+        assert result["leverage"] == str(attempt)
 
 
 def test_place_spot_market_entry_calls_spot_long_market_entry():
@@ -100,6 +113,7 @@ def test_open_market_entry_margin_first_falls_back_to_spot_after_margin_errors()
     result = open_market_entry_margin_first(kraken=kraken, rules=FakeRules(), symbol="BTCUSDC", quote_amount=20.0, margin_factory=factory, leverages=[5, 3])
 
     assert [m.orders[0][1:4] for m in margins] == [("BUY", "10.00000000", "MARKET"), ("BUY", "6.00000000", "MARKET")]
+    assert [m.orders[0][4]["leverage"] for m in margins] == ["5", "3"]
     assert kraken.spot_orders == [("BTCUSDC", "long", "2.00000000")]
     assert result["mode"] == "spot"
     assert [attempt["leverage"] for attempt in result["margin_attempts"]] == [5, 3]
