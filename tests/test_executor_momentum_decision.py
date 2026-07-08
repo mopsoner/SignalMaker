@@ -11,6 +11,7 @@ from app.main import app
 from app.core.config import settings
 from app.models.base import Base
 from app.models.trade_candidate import TradeCandidate
+from app.models.position import Position
 
 
 REQUIRED_DECISION_FIELDS = {
@@ -143,3 +144,156 @@ def test_momentum_decision_returns_idle_contract_without_candidate(client):
     assert payload["decision_action"] == "HOLD"
     assert payload["status"] == "idle"
     assert payload["reason"] == "no_open_momentum_candidate"
+
+
+def seed_open_position(session_factory, *, symbol: str = "ALLUSDC") -> str:
+    from app.services.position_service import PositionService
+
+    db = session_factory()
+    try:
+        position = PositionService(db).create_position(
+            symbol=symbol,
+            side="long",
+            quantity=2.0,
+            entry_price=10.0,
+            mark_price=12.0,
+            stop_price=None,
+            target_price=15.0,
+            meta={"candidate_id": f"momentum-{symbol}-open", "mode": "paper"},
+        )
+        return position.position_id
+    finally:
+        db.close()
+
+
+def seed_named_momentum_candidate(session_factory, *, symbol: str) -> None:
+    db = session_factory()
+    try:
+        db.add(
+            TradeCandidate(
+                candidate_id=f"momentum-{symbol}-open",
+                symbol=symbol,
+                side="long",
+                stage="momentum",
+                status="open",
+                score=50.0,
+                entry_price=1.0,
+                stop_price=None,
+                target_price=2.0,
+                rr_ratio=2.0,
+                execution_target={"source": "momentum_ranking"},
+                payload={"source": "momentum_candidates"},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def execute_with_stubbed_decision(session_factory, monkeypatch, decision: dict) -> dict:
+    from app.services.executor_service import ExecutorService
+    from app.services.momentum_decision_service import MomentumDecisionService
+
+    monkeypatch.setattr(MomentumDecisionService, "decision", lambda self: decision)
+    db = session_factory()
+    try:
+        return ExecutorService(db).execute_momentum_decision(mode="paper")
+    finally:
+        db.close()
+
+
+def test_momentum_executor_sell_closes_matching_open_position(client, monkeypatch):
+    _, session_factory = client
+    position_id = seed_open_position(session_factory, symbol="ALLUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "sell",
+            "symbol": "ALLUSDC",
+            "target_symbol": None,
+            "status": "ready",
+            "reason": "test_sell",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == "SELL"
+    assert result["symbol"] == "ALLUSDC"
+    assert result["status"] == "executed"
+    assert result["reason"] == "momentum_position_closed"
+    assert result["order_ids"]
+    assert result["fill_ids"]
+
+    db = session_factory()
+    try:
+        assert db.get(Position, position_id).status == "closed"
+    finally:
+        db.close()
+
+
+def test_momentum_executor_rotate_closes_source_before_buying_target(client, monkeypatch):
+    _, session_factory = client
+    source_position_id = seed_open_position(session_factory, symbol="ALLUSDC")
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "rotate",
+            "symbol": "ALLUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": "test_rotate",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == "ROTATE"
+    assert result["symbol"] == "ALLUSDC"
+    assert result["target_symbol"] == "BTCUSDC"
+    assert result["status"] == "executed"
+    assert result["reason"] == "momentum_rotated"
+    assert len(result["order_ids"]) >= 2
+    assert len(result["fill_ids"]) >= 2
+
+    db = session_factory()
+    try:
+        assert db.get(Position, source_position_id).status == "closed"
+        assert any(row.symbol == "BTCUSDC" and row.status == "open" for row in db.query(Position).all())
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("action", ["WAIT", "HOLD"])
+def test_momentum_executor_wait_and_hold_are_explicit_noops(client, monkeypatch, action):
+    _, session_factory = client
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": action.lower(),
+            "symbol": "ALLUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": f"test_{action.lower()}",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == action
+    assert result["symbol"] == "ALLUSDC"
+    assert result["target_symbol"] == "BTCUSDC"
+    assert result["status"] == "skipped"
+    assert result["reason"] == f"test_{action.lower()}"
+    assert result["order_ids"] == []
+    assert result["fill_ids"] == []

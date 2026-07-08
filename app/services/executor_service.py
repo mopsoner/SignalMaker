@@ -1,4 +1,7 @@
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.models.trade_candidate import TradeCandidate
 
 from app.services.exchange_adapter import create_execution_adapter
 from app.services.fill_service import FillService
@@ -218,60 +221,148 @@ class ExecutorService:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
 
-    def execute_momentum_decision(self, quantity: float = 1.0, mode: str = 'paper') -> dict:
-        requested_mode = (mode or 'paper').lower()
-        candidates = self.candidates.list_candidates(limit=1, status='open', stage='momentum', exclude_test_data=True)
-        if not candidates:
-            return {
-                'decision_action': 'HOLD',
-                'symbol': None,
-                'target_symbol': None,
-                'status': 'skipped',
-                'order_ids': [],
-                'fill_ids': [],
-                'reason': 'no_open_momentum_candidate',
-            }
-
-        candidate = candidates[0]
-        base = {
-            'decision_action': 'BUY' if candidate.side == 'long' else str(candidate.side or '').upper(),
-            'symbol': candidate.symbol,
-            'target_symbol': candidate.symbol,
+    def _momentum_response_base(self, decision: dict, *, action: str | None = None) -> dict:
+        return {
+            'decision_action': (action or decision.get('decision_action') or 'HOLD').upper(),
+            'symbol': decision.get('symbol'),
+            'target_symbol': decision.get('target_symbol'),
             'order_ids': [],
             'fill_ids': [],
         }
+
+    def _open_position_for_symbol(self, *symbols: str | None):
+        wanted = {str(symbol).upper() for symbol in symbols if symbol}
+        if not wanted:
+            return None
+        for position in self.positions.list_positions(limit=500, status='open'):
+            if position.symbol.upper() in wanted:
+                return position
+        return None
+
+    def _close_momentum_position(self, position, *, reason: str, mode: str) -> dict:
+        mark_price = position.mark_price if position.mark_price is not None else position.entry_price
+        if mode == 'live':
+            active = self.kraken
+            if not active.is_configured():
+                exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'kraken'))
+                raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
+            if hasattr(active, 'place_market_exit'):
+                exit_resp = active.place_market_exit(position.symbol, position.side, float(position.quantity))
+            elif position.side == 'long' and hasattr(active, 'place_market_sell'):
+                exit_resp = active.place_market_sell(position.symbol, float(position.quantity))
+            else:
+                raise RuntimeError('live momentum sell is not supported by the configured execution adapter')
+            mark_price = active.average_fill_price(exit_resp, fallback=mark_price) if hasattr(active, 'average_fill_price') else mark_price
+            status = str(exit_resp.get('status', 'filled')).lower()
+            meta = {'mode': 'live', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('orderId')}
+        else:
+            exit_resp = {}
+            status = 'filled'
+            meta = {'mode': 'paper', 'reason': reason}
+
+        quantity = float(position.quantity)
+        fill_price = float(mark_price or 0.0)
+        pnl = None
+        if position.entry_price is not None:
+            if position.side == 'short':
+                pnl = (float(position.entry_price) - fill_price) * quantity
+            else:
+                pnl = (fill_price - float(position.entry_price)) * quantity
+        order = self.orders.create_order(
+            candidate_id=(position.meta or {}).get('candidate_id'),
+            position_id=position.position_id,
+            symbol=position.symbol,
+            side='buy' if position.side == 'short' else 'sell',
+            order_type='market',
+            quantity=quantity,
+            requested_price=mark_price,
+            filled_price=fill_price,
+            status=status,
+            meta=meta,
+        )
+        fill = self.fills.create_fill(order_id=order.order_id, position_id=position.position_id, symbol=position.symbol, side=order.side, quantity=quantity, price=fill_price)
+        self.positions.close_position(position.position_id, mark_price=fill_price, unrealized_pnl=pnl)
+        return {'position_id': position.position_id, 'order_id': order.order_id, 'fill_id': fill.fill_id, 'mode': mode, 'exchange_order_id': exit_resp.get('orderId')}
+
+    def _candidate_for_momentum_decision(self, decision: dict, *, symbol: str | None) -> TradeCandidate | None:
+        candidate_id = decision.get('candidate_id')
+        if candidate_id:
+            candidate = self.db.get(TradeCandidate, candidate_id)
+            if candidate is not None:
+                return candidate
+        if not symbol:
+            return None
+        stmt = (
+            select(TradeCandidate)
+            .where(TradeCandidate.status == 'open', TradeCandidate.stage == 'momentum', TradeCandidate.symbol == symbol.upper())
+            .order_by(TradeCandidate.score.desc(), TradeCandidate.created_at.asc())
+            .limit(1)
+        )
+        return self.db.scalars(stmt).first()
+
+    def _execute_momentum_buy(self, decision: dict, *, symbol: str | None, quantity: float, requested_mode: str) -> dict:
+        base = self._momentum_response_base(decision, action='BUY')
+        candidate = self._candidate_for_momentum_decision(decision, symbol=symbol)
+        if candidate is None:
+            return {**base, 'symbol': symbol, 'target_symbol': decision.get('target_symbol') or symbol, 'status': 'skipped', 'reason': 'missing_open_momentum_candidate'}
+        base = {**base, 'symbol': candidate.symbol, 'target_symbol': decision.get('target_symbol') or candidate.symbol}
         if candidate.entry_price is None:
             return {**base, 'status': 'skipped', 'reason': 'missing_entry_price'}
+        mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
+        if not self._price_before_target(candidate, mark_price):
+            return {**base, 'status': 'skipped', 'reason': 'current_price_past_or_missing_target', 'mark_price': mark_price, 'target_price': candidate.target_price}
+        result = self._execute_live_candidate(candidate, quantity) if requested_mode == 'live' else self._execute_paper_candidate(candidate, quantity)
+        order_ids = [result.get('order_id'), result.get('entry_order_id'), result.get('tp_order_id'), result.get('stop_order_id')]
+        fill_ids = [result.get('fill_id')]
+        return {**base, 'status': 'executed', 'order_ids': [item for item in order_ids if item], 'fill_ids': [item for item in fill_ids if item], 'reason': 'momentum_candidate_executed', 'result': result}
 
-        try:
-            mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
-            if not self._price_before_target(candidate, mark_price):
-                return {
-                    **base,
-                    'status': 'skipped',
-                    'reason': 'current_price_past_or_missing_target',
-                    'mark_price': mark_price,
-                    'target_price': candidate.target_price,
-                }
-            result = self._execute_live_candidate(candidate, quantity) if requested_mode == 'live' else self._execute_paper_candidate(candidate, quantity)
-            order_ids = [
-                result.get('order_id'),
-                result.get('entry_order_id'),
-                result.get('tp_order_id'),
-                result.get('stop_order_id'),
-            ]
-            fill_ids = [result.get('fill_id')]
-            return {
-                **base,
-                'status': 'executed',
-                'order_ids': [order_id for order_id in order_ids if order_id is not None],
-                'fill_ids': [fill_id for fill_id in fill_ids if fill_id is not None],
-                'reason': 'momentum_candidate_executed',
-                'result': result,
-            }
-        except Exception as exc:
-            return {**base, 'status': 'error', 'reason': str(exc)}
+    def execute_momentum_decision(self, quantity: float = 1.0, mode: str = 'paper') -> dict:
+        from app.services.momentum_decision_service import MomentumDecisionService
 
+        requested_mode = (mode or 'paper').lower()
+        decision = MomentumDecisionService(self.db).decision()
+        action = str(decision.get('decision_action') or 'HOLD').upper()
+        decision = {**decision, 'decision_action': action}
+        base = self._momentum_response_base(decision, action=action)
+
+        if action in {'WAIT', 'HOLD'}:
+            return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_noop'}
+        if action == 'BUY':
+            try:
+                return self._execute_momentum_buy(decision, symbol=decision.get('target_symbol') or decision.get('symbol'), quantity=quantity, requested_mode=requested_mode)
+            except Exception as exc:
+                return {**base, 'status': 'error', 'reason': str(exc)}
+        if action == 'SELL':
+            try:
+                position = self._open_position_for_symbol(decision.get('symbol'), decision.get('target_symbol'))
+                if position is None:
+                    return {**base, 'status': 'skipped', 'reason': 'no_open_position_for_momentum_sell'}
+                result = self._close_momentum_position(position, reason='momentum_sell', mode=requested_mode)
+                return {**base, 'symbol': position.symbol, 'target_symbol': decision.get('target_symbol'), 'status': 'executed', 'reason': 'momentum_position_closed', 'order_ids': [result['order_id']], 'fill_ids': [result['fill_id']], 'result': result}
+            except Exception as exc:
+                return {**base, 'status': 'error', 'reason': str(exc)}
+        if action == 'ROTATE':
+            close_result = None
+            order_ids = []
+            fill_ids = []
+            try:
+                position = self._open_position_for_symbol(decision.get('symbol'))
+                if position is None:
+                    return {**base, 'status': 'skipped', 'reason': 'no_open_source_position_for_momentum_rotate'}
+                close_result = self._close_momentum_position(position, reason='momentum_rotate_exit', mode=requested_mode)
+                order_ids.append(close_result['order_id'])
+                fill_ids.append(close_result['fill_id'])
+                buy_result = self._execute_momentum_buy(decision, symbol=decision.get('target_symbol'), quantity=quantity, requested_mode=requested_mode)
+                order_ids.extend(buy_result.get('order_ids') or [])
+                fill_ids.extend(buy_result.get('fill_ids') or [])
+                status = 'executed' if buy_result.get('status') == 'executed' else 'partial'
+                reason = 'momentum_rotated' if status == 'executed' else f"rotation_exit_completed_entry_{buy_result.get('status', 'unknown')}"
+                return {**base, 'status': status, 'reason': reason, 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result, 'entry_result': buy_result}
+            except Exception as exc:
+                if close_result is not None:
+                    return {**base, 'status': 'partial', 'reason': f'rotation_exit_completed_entry_error: {exc}', 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result}
+                return {**base, 'status': 'error', 'reason': str(exc)}
+        return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
 
     def reconcile_live_positions(self) -> dict:
         if not self._runtime_section('live').get('live_reconcile_enabled'):
