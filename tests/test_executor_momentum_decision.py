@@ -344,3 +344,134 @@ def test_momentum_executor_rejects_unsupported_action_before_execution(client, m
     assert result["reason"] == "unsupported_momentum_decision_action:CANCEL"
     assert result["order_ids"] == []
     assert result["fill_ids"] == []
+
+class FakeLiveAdapter:
+    exchange_name = "kraken"
+
+    def __init__(self):
+        self.client = type("Client", (), {"dry_run": True})()
+
+    def is_configured(self):
+        return True
+
+    def current_price(self, symbol):
+        return 1.0
+
+    def normalize_order(self, symbol, quantity, target_price, stop_price=None):
+        return {"symbol": symbol, "quantity": quantity, "mark_price": 1.0, "target_price": target_price, "stop_price": stop_price}
+
+
+class FakeMomentumMarginManager:
+    def __init__(self, *, fail_leverages=()):
+        self.fail_leverages = set(fail_leverages)
+        self.open_calls = []
+        self.sell_calls = []
+
+    def open_long_with_margin_take_profit(self, *, symbol, quote_amount, target_price, leverage=None):
+        self.open_calls.append({"symbol": symbol, "quote_amount": quote_amount, "target_price": target_price, "leverage": leverage})
+        if leverage in self.fail_leverages:
+            raise RuntimeError(f"leverage rejected:{leverage}")
+        return {
+            "symbol": symbol,
+            "quantity": "2.0",
+            "entry_price": "1.25",
+            "entry_order_id": f"entry-{symbol}-{leverage}",
+            "tp_order_id": f"tp-{symbol}-{leverage}",
+            "entry_payload": {"orderId": f"entry-{symbol}-{leverage}", "status": "FILLED"},
+            "tp_payload": {"orderId": f"tp-{symbol}-{leverage}", "status": "OPEN"},
+        }
+
+    def sell_all_margin_base(self, *, symbol):
+        self.sell_calls.append(symbol)
+        return {"status": "FILLED", "symbol": symbol, "quantity": "2.0", "price": 12.5, "order_id": f"sell-{symbol}"}
+
+
+def execute_live_with_stubbed_decision(session_factory, monkeypatch, decision: dict, manager: FakeMomentumMarginManager) -> dict:
+    from app.services import executor_service as executor_module
+    from app.services.executor_service import ExecutorService
+    from app.services.momentum_decision_service import MomentumDecisionService
+
+    monkeypatch.setattr(MomentumDecisionService, "decision", lambda self: decision)
+    monkeypatch.setattr(executor_module, "margin_leverage_attempts", lambda: (5, 3, 2))
+    monkeypatch.setattr(ExecutorService, "_kraken_margin_order_manager", lambda self: manager)
+    db = session_factory()
+    try:
+        service = ExecutorService(db)
+        service.kraken = FakeLiveAdapter()
+        return service.execute_momentum_decision(mode="live")
+    finally:
+        db.close()
+
+
+def test_momentum_executor_buy_uses_leveraged_fallback_attempts(client, monkeypatch):
+    _, session_factory = client
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+    manager = FakeMomentumMarginManager(fail_leverages={5})
+
+    result = execute_live_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {"decision_action": "BUY", "symbol": "BTCUSDC", "target_symbol": "BTCUSDC", "status": "ready", "reason": "test_buy", "order_ids": [], "fill_ids": []},
+        manager,
+    )
+
+    assert_decision_contract(result)
+    assert result["status"] == "executed"
+    assert [call["leverage"] for call in manager.open_calls] == [5, 3]
+    assert result["result"]["mode"] == "cross_margin"
+    assert result["result"]["leverage"] == 3
+    assert result["order_ids"]
+    assert result["fill_ids"]
+
+
+def test_momentum_executor_sell_uses_leveraged_close_for_margin_position(client, monkeypatch):
+    _, session_factory = client
+    position_id = seed_open_position(session_factory, symbol="ETHUSDC")
+    db = session_factory()
+    try:
+        position = db.get(Position, position_id)
+        position.meta = {**(position.meta or {}), "mode": "cross_margin"}
+        db.commit()
+    finally:
+        db.close()
+    manager = FakeMomentumMarginManager()
+
+    result = execute_live_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {"decision_action": "SELL", "symbol": "ETHUSDC", "target_symbol": None, "status": "ready", "reason": "test_sell", "order_ids": [], "fill_ids": []},
+        manager,
+    )
+
+    assert result["status"] == "executed"
+    assert manager.sell_calls == ["ETHUSDC"]
+    db = session_factory()
+    try:
+        assert db.get(Position, position_id).status == "closed"
+    finally:
+        db.close()
+
+
+def test_momentum_executor_rotate_uses_margin_sell_then_leveraged_buy(client, monkeypatch):
+    _, session_factory = client
+    source_position_id = seed_open_position(session_factory, symbol="SOLUSDC")
+    db = session_factory()
+    try:
+        db.get(Position, source_position_id).meta = {"mode": "cross_margin", "candidate_id": "momentum-SOLUSDC-open"}
+        db.commit()
+    finally:
+        db.close()
+    seed_named_momentum_candidate(session_factory, symbol="ADAUSDC")
+    manager = FakeMomentumMarginManager(fail_leverages={5})
+
+    result = execute_live_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {"decision_action": "ROTATE", "symbol": "SOLUSDC", "target_symbol": "ADAUSDC", "status": "ready", "reason": "test_rotate", "order_ids": [], "fill_ids": []},
+        manager,
+    )
+
+    assert result["status"] == "executed"
+    assert manager.sell_calls == ["SOLUSDC"]
+    assert [call["leverage"] for call in manager.open_calls] == [5, 3]
+    assert result["reason"] == "momentum_rotated"
