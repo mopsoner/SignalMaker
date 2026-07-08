@@ -14,7 +14,7 @@ from app.services.trade_candidate_service import TradeCandidateService
 from raspberry_executor.kraken_margin_client import KrakenMarginClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import margin_enabled, margin_multiplier
+from raspberry_executor.margin_settings import margin_enabled, margin_leverage_attempts, margin_multiplier
 from raspberry_executor.spot_order_manager import SpotOrderManager
 
 
@@ -59,6 +59,55 @@ class ExecutorService:
         fill = self.fills.create_fill(order_id=order.order_id, position_id=position.position_id, symbol=candidate.symbol, side=candidate.side, quantity=quantity, price=candidate.entry_price)
         self.candidates.mark_executed(candidate.candidate_id)
         return {"candidate_id": candidate.candidate_id, "position_id": position.position_id, "order_id": order.order_id, "fill_id": fill.fill_id, "mode": "paper"}
+
+    def _kraken_margin_order_manager(self) -> MarginOrderManager:
+        active = self.kraken
+        if not hasattr(active, 'client'):
+            raise RuntimeError('live momentum margin execution requires a Kraken client adapter')
+        rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
+        margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
+        return MarginOrderManager(active.client, margin, rules)
+
+    def _execute_live_momentum_leveraged_buy(self, candidate, quantity: float) -> dict:
+        active = self.kraken
+        exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'kraken'))
+        if not active.is_configured():
+            raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
+        normalized = active.normalize_order(candidate.symbol, quantity=quantity, target_price=candidate.target_price, stop_price=None)
+        manager = self._kraken_margin_order_manager()
+        quote_amount = float(quantity) * float(candidate.entry_price or normalized['mark_price'])
+        attempts = []
+        margin_result = None
+        used_leverage = None
+        for leverage in margin_leverage_attempts():
+            try:
+                result = manager.open_long_with_margin_take_profit(symbol=candidate.symbol, quote_amount=quote_amount, target_price=float(normalized['target_price']), leverage=leverage)
+                if result.get('tp_error'):
+                    raise RuntimeError(result['tp_error'])
+                margin_result = result
+                used_leverage = leverage
+                break
+            except Exception as exc:
+                attempts.append({'leverage': leverage, 'error': str(exc)})
+        if margin_result is None:
+            raise RuntimeError(f'momentum_margin_buy_failed:{attempts}')
+
+        entry_resp = margin_result.get('entry_payload') or {}
+        tp_resp = margin_result.get('tp_payload') or {}
+        avg_fill = float(margin_result['entry_price'])
+        filled_qty = float(margin_result['quantity'])
+        position = self.positions.create_position(
+            symbol=candidate.symbol, side=candidate.side, quantity=filled_qty, entry_price=avg_fill, mark_price=avg_fill, stop_price=normalized.get('stop_price'), target_price=normalized.get('target_price'),
+            meta={'candidate_id': candidate.candidate_id, 'mode': 'cross_margin', 'margin_isolated': False, 'symbol': candidate.symbol, 'exchange': exchange_name, 'entry_exchange_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'tp_exchange_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts},
+        )
+        entry_order = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', order_type='market', quantity=filled_qty, requested_price=candidate.entry_price, filled_price=avg_fill, status=str(entry_resp.get('status', margin_result.get('entry_confirm_status', 'filled'))).lower(), meta={'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_payload': entry_resp, 'exchange_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts})
+        fill = self.fills.create_fill(order_id=entry_order.order_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', quantity=filled_qty, price=avg_fill)
+        tp_local = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side='sell', order_type='take_profit', quantity=filled_qty, requested_price=normalized['target_price'], filled_price=None, status=str(tp_resp.get('status', 'open')).lower(), meta={'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId')})
+        position.meta = {**(position.meta or {}), 'tp_local_order_id': tp_local.order_id, 'exit_strategy': 'take_profit_only'}
+        self.db.commit()
+        self.db.refresh(position)
+        self.candidates.mark_executed(candidate.candidate_id)
+        return {'candidate_id': candidate.candidate_id, 'position_id': position.position_id, 'entry_order_id': entry_order.order_id, 'fill_id': fill.fill_id, 'tp_order_id': tp_local.order_id, 'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_entry_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'exchange_tp_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts}
 
     def _execute_live_candidate(self, candidate, quantity: float) -> dict:
         self.risk.validate_live_candidate(symbol=candidate.symbol, side=candidate.side, entry_price=candidate.entry_price, stop_price=candidate.stop_price, target_price=candidate.target_price, quantity=quantity)
@@ -247,15 +296,24 @@ class ExecutorService:
             if not active.is_configured():
                 exchange_name = getattr(active, 'exchange_name', getattr(self.exchange, 'exchange_name', 'kraken'))
                 raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
-            if hasattr(active, 'place_market_exit'):
+            position_mode = str((position.meta or {}).get('mode') or '').lower()
+            if position_mode in {'cross_margin', 'isolated_margin', 'margin'}:
+                exit_resp = self._kraken_margin_order_manager().sell_all_margin_base(symbol=position.symbol)
+                mark_price = float(exit_resp.get('price') or mark_price or 0.0)
+                status = str(exit_resp.get('status', 'filled')).lower()
+                meta = {'mode': position_mode or 'cross_margin', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('order_id') or exit_resp.get('orderId')}
+            elif hasattr(active, 'place_market_exit'):
                 exit_resp = active.place_market_exit(position.symbol, position.side, float(position.quantity))
+                mark_price = active.average_fill_price(exit_resp, fallback=mark_price) if hasattr(active, 'average_fill_price') else mark_price
+                status = str(exit_resp.get('status', 'filled')).lower()
+                meta = {'mode': 'live', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('orderId')}
             elif position.side == 'long' and hasattr(active, 'place_market_sell'):
                 exit_resp = active.place_market_sell(position.symbol, float(position.quantity))
+                mark_price = active.average_fill_price(exit_resp, fallback=mark_price) if hasattr(active, 'average_fill_price') else mark_price
+                status = str(exit_resp.get('status', 'filled')).lower()
+                meta = {'mode': 'live', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('orderId')}
             else:
                 raise RuntimeError('live momentum sell is not supported by the configured execution adapter')
-            mark_price = active.average_fill_price(exit_resp, fallback=mark_price) if hasattr(active, 'average_fill_price') else mark_price
-            status = str(exit_resp.get('status', 'filled')).lower()
-            meta = {'mode': 'live', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('orderId')}
         else:
             exit_resp = {}
             status = 'filled'
@@ -312,7 +370,7 @@ class ExecutorService:
         mark_price = self._current_price_for_candidate(candidate, requested_mode=requested_mode)
         if not self._price_before_target(candidate, mark_price):
             return {**base, 'status': 'skipped', 'reason': 'current_price_past_or_missing_target', 'mark_price': mark_price, 'target_price': candidate.target_price}
-        result = self._execute_live_candidate(candidate, quantity) if requested_mode == 'live' else self._execute_paper_candidate(candidate, quantity)
+        result = self._execute_live_momentum_leveraged_buy(candidate, quantity) if requested_mode == 'live' else self._execute_paper_candidate(candidate, quantity)
         order_ids = [result.get('order_id'), result.get('entry_order_id'), result.get('tp_order_id'), result.get('stop_order_id')]
         fill_ids = [result.get('fill_id')]
         return {**base, 'status': 'executed', 'order_ids': [item for item in order_ids if item], 'fill_ids': [item for item in fill_ids if item], 'reason': 'momentum_candidate_executed', 'result': result}
@@ -330,6 +388,8 @@ class ExecutorService:
             return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
         if action in {'WAIT', 'HOLD'}:
             return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_noop'}
+        if str(decision.get('status') or '').lower() != 'ready':
+            return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_not_ready'}
         if action == 'BUY':
             try:
                 return self._execute_momentum_buy(decision, symbol=decision.get('target_symbol') or decision.get('symbol'), quantity=quantity, requested_mode=requested_mode)
