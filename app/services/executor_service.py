@@ -193,7 +193,7 @@ class ExecutorService:
         skipped = []
         requested_mode = (mode or 'paper').lower()
         for candidate in self.candidates.get_open_candidates(limit=limit):
-            if candidate.stage == 'momentum' and not sync_momentum_first:
+            if candidate.stage == 'momentum':
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'momentum_candidate_handled_by_momentum_executor'})
                 continue
             if candidate.entry_price is None:
