@@ -142,7 +142,11 @@ def test_momentum_candidates_skip_assets_that_are_not_momentum_entry_ready() -> 
     assert candidates == []
 
 
-def test_momentum_engine_decision_route_is_removed() -> None:
-    paths = {getattr(route, "path", None) for route in momentum_engine_route.router.routes}
+def test_momentum_engine_decision_route_is_registered() -> None:
+    route = next(
+        route
+        for route in momentum_engine_route.router.routes
+        if getattr(route, "path", None) == "/decision"
+    )
 
-    assert "/decision" not in paths
+    assert "GET" in route.methods

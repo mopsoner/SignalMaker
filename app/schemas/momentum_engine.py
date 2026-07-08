@@ -37,6 +37,28 @@ class MomentumEngineTradeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MomentumEngineDecision(BaseModel):
+    strategy: str
+    mode: str = "paper"
+    cadence_hours: int
+    starting_capital: float
+    cash: float
+    equity: float
+    total_pnl: float
+    total_pnl_pct: float
+    action: str
+    symbol: str | None = None
+    target_symbol: str | None = None
+    recommendation: str
+    reason: str
+    due_now: bool
+    open_position: MomentumEnginePositionRead | None = None
+    best_asset: dict | None = None
+    top_watch_asset: dict | None = None
+    last_check_at: datetime | None = None
+    next_check_at: datetime | None = None
+
+
 class MomentumEngineStatus(BaseModel):
     strategy: str
     mode: str = "paper"
@@ -48,6 +70,7 @@ class MomentumEngineStatus(BaseModel):
     total_pnl_pct: float
     open_position: MomentumEnginePositionRead | None = None
     best_asset: dict | None = None
+    top_watch_asset: dict | None = None
     last_check_at: datetime | None = None
     next_check_at: datetime | None = None
     due_now: bool

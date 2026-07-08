@@ -5,7 +5,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.momentum_engine import MomentumEngineRunRequest, MomentumEngineStatus
+from app.schemas.momentum_engine import MomentumEngineDecision, MomentumEngineRunRequest, MomentumEngineStatus
 from app.services.momentum_engine_service import MomentumEngineService
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 
@@ -20,6 +20,20 @@ def momentum_engine_status(
     db: Session = Depends(get_db),
 ) -> MomentumEngineStatus:
     return MomentumEngineService(db).status(
+        cadence_hours=cadence_hours,
+        starting_capital=starting_capital,
+        min_momentum_score=min_momentum_score,
+    )
+
+
+@router.get("/decision", response_model=MomentumEngineDecision)
+def momentum_engine_decision(
+    cadence_hours: int = 4,
+    starting_capital: float = 1000.0,
+    min_momentum_score: float = 0.0,
+    db: Session = Depends(get_db),
+) -> MomentumEngineDecision:
+    return MomentumEngineService(db).decision(
         cadence_hours=cadence_hours,
         starting_capital=starting_capital,
         min_momentum_score=min_momentum_score,

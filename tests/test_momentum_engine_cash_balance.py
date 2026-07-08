@@ -246,3 +246,83 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
     assert position.quantity == pytest.approx(240.0 / 130.0)
     assert trade.price == 130.0
     assert trade.price_source == "market_candle:4h"
+
+
+def test_decision_buy_does_not_write_trade() -> None:
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumCurrent(
+                    symbol="ETHUSDC",
+                    price=100.0,
+                    momentum_score=12.0,
+                    classification="strong_bull",
+                    rsi_1h=50.0,
+                    rank=1,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="ETHUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        decision = MomentumEngineService(db).decision(starting_capital=1000.0)
+        trades = list(db.scalars(select(MomentumEngineTrade)).all())
+        positions = list(db.scalars(select(MomentumEnginePosition)).all())
+
+    assert decision["action"] == "buy"
+    assert decision["symbol"] == "ETHUSDC"
+    assert decision["target_symbol"] == "ETHUSDC"
+    assert decision["best_asset"]["entry_status"] == "ready"
+    assert trades == []
+    assert positions == []
+
+
+def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumCurrent(
+                    symbol="BTCUSDC",
+                    price=100.0,
+                    momentum_score=12.0,
+                    classification="strong_bull",
+                    rsi_1h=70.0,
+                    rank=1,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="BTCUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumEnginePosition(
+                    position_id="pos-1",
+                    strategy=MomentumEngineService.STRATEGY,
+                    symbol="BTCUSDC",
+                    status="open",
+                    quantity=1.0,
+                    entry_price=100.0,
+                    entry_value=100.0,
+                    opened_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        decision = MomentumEngineService(db).decision(starting_capital=100.0)
+        trades = list(db.scalars(select(MomentumEngineTrade)).all())
+
+    assert decision["action"] == "hold"
+    assert decision["symbol"] == "BTCUSDC"
+    assert decision["target_symbol"] == "BTCUSDC"
+    assert decision["open_position"]["symbol"] == "BTCUSDC"
+    assert trades == []
