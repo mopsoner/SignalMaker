@@ -45,6 +45,16 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
 
+    def decision(self, *, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+        rankings = self._rankings()
+        status = self._build_status(
+            rankings=rankings,
+            cadence_hours=cadence_hours,
+            starting_capital=starting_capital,
+            min_momentum_score=min_momentum_score,
+        )
+        return self._decision_from_status(status)
+
     def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         before = self._build_status(
@@ -190,6 +200,67 @@ class MomentumEngineService:
             "due_now": due_now,
             "recommendation": recommendation,
             "trades": self._recent_trades(limit=50),
+        }
+
+
+    def _decision_from_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        open_position = status.get("open_position")
+        best_asset = status.get("best_asset")
+        top_watch_asset = status.get("top_watch_asset")
+        due_now = bool(status.get("due_now"))
+        recommendation = str(status.get("recommendation") or "")
+
+        action = "no_entry"
+        symbol = None
+        target_symbol = None
+        reason = recommendation
+
+        if open_position:
+            symbol = open_position.get("symbol")
+            if open_position.get("structure_broken"):
+                if best_asset:
+                    action = "rotate"
+                    target_symbol = best_asset.get("symbol")
+                    reason = f"15m structure is broken on {symbol}; rotate to entry-ready momentum asset {target_symbol}."
+                else:
+                    action = "sell"
+                    target_symbol = "CASH"
+                    reason = f"15m structure is broken on {symbol}; sell and stay in cash because no replacement is entry-ready."
+            elif best_asset:
+                action = "rotate" if due_now else "wait"
+                target_symbol = best_asset.get("symbol")
+                reason = (
+                    f"Replacement asset {target_symbol} is entry-ready now."
+                    if due_now
+                    else f"Replacement asset {target_symbol} is entry-ready, but the next scheduled momentum check is not due yet."
+                )
+            else:
+                action = "hold"
+                target_symbol = symbol
+                reason = "Current position structure is holding and no alternate top-pool asset is entry-ready."
+        elif best_asset:
+            action = "buy" if due_now else "wait"
+            symbol = best_asset.get("symbol")
+            target_symbol = symbol
+            reason = (
+                f"Momentum asset {symbol} is entry-ready and the engine check is due now."
+                if due_now
+                else f"Momentum asset {symbol} is entry-ready, but the next scheduled momentum check is not due yet."
+            )
+        elif top_watch_asset:
+            action = "wait"
+            symbol = top_watch_asset.get("symbol")
+            target_symbol = symbol
+            reason = f"Best watched asset is not entry-ready yet: {top_watch_asset.get('entry_status')}."
+        else:
+            reason = recommendation or "No eligible momentum asset is entry-ready."
+
+        return {
+            **status,
+            "action": action,
+            "symbol": symbol,
+            "target_symbol": target_symbol,
+            "reason": reason,
         }
 
 
