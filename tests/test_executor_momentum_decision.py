@@ -297,3 +297,50 @@ def test_momentum_executor_wait_and_hold_are_explicit_noops(client, monkeypatch,
     assert result["reason"] == f"test_{action.lower()}"
     assert result["order_ids"] == []
     assert result["fill_ids"] == []
+
+
+def test_momentum_decision_schema_defines_expected_actions_and_statuses():
+    from app.schemas.momentum import (
+        ALLOWED_MOMENTUM_DECISION_ACTIONS,
+        EXPECTED_MOMENTUM_DECISION_STATUSES,
+        MomentumDecision,
+    )
+
+    assert ALLOWED_MOMENTUM_DECISION_ACTIONS == {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
+    assert EXPECTED_MOMENTUM_DECISION_STATUSES == {"ready", "idle", "waiting", "skipped", "executed", "error"}
+
+    for action in ALLOWED_MOMENTUM_DECISION_ACTIONS:
+        payload = MomentumDecision(
+            decision_action=action,
+            symbol="ALLUSDC",
+            target_symbol="BTCUSDC" if action == "ROTATE" else "ALLUSDC",
+            status="ready",
+            reason=f"test_{action.lower()}",
+        ).model_dump()
+        for field in ("decision_action", "symbol", "target_symbol", "status", "reason"):
+            assert field in payload
+
+
+def test_momentum_executor_rejects_unsupported_action_before_execution(client, monkeypatch):
+    _, session_factory = client
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "CANCEL",
+            "symbol": "ALLUSDC",
+            "target_symbol": "ALLUSDC",
+            "status": "ready",
+            "reason": "test_unsupported",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == "CANCEL"
+    assert result["status"] == "skipped"
+    assert result["reason"] == "unsupported_momentum_decision_action:CANCEL"
+    assert result["order_ids"] == []
+    assert result["fill_ids"] == []
