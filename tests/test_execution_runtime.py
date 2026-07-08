@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.base import Base
 from app.models.app_setting import AppSetting
 from app.models.order import Order
+from app.models.position import Position
 from app.services.executor_service import ExecutorService
 from app.services.trade_candidate_service import TradeCandidateService
 
@@ -90,6 +91,145 @@ def test_executor_live_uses_take_profit_order_without_stop_loss(db_session, monk
     orders = db_session.query(Order).order_by(Order.created_at).all()
     assert [order.order_type for order in orders] == ["market", "take_profit"]
     assert all(order.order_type != "stop_loss" for order in orders)
+
+
+def _enable_live_settings(db_session):
+    db_session.add_all([
+        AppSetting(category="live", key="live_trading_enabled", value=True),
+        AppSetting(category="live", key="live_require_tp_sl", value=False),
+        AppSetting(category="live", key="live_max_open_positions", value=10),
+        AppSetting(category="live", key="live_max_notional_per_trade", value=1000.0),
+    ])
+    db_session.commit()
+
+
+def _add_live_candidate(db_session, candidate_id="BTCUSDC-margin-trade"):
+    TradeCandidateService(db_session).upsert_open_candidate(
+        candidate_id=candidate_id,
+        symbol="BTCUSDC",
+        side="long",
+        stage="trade",
+        score=8.0,
+        entry_price=100.0,
+        stop_price=None,
+        target_price=120.0,
+        rr_ratio=2.0,
+        execution_target=None,
+        liquidity_context=None,
+        notes=None,
+        payload={"source": "test"},
+    )
+
+
+class _FakeLiveKraken:
+    exchange_name = "kraken"
+
+    def __init__(self):
+        self.client = type("Client", (), {"dry_run": False})()
+
+    def is_configured(self):
+        return True
+
+    def normalize_order(self, symbol, quantity, target_price, stop_price):
+        return {"quantity": quantity, "mark_price": 100.0, "target_price": target_price, "stop_price": stop_price}
+
+    def current_price(self, symbol):
+        return 100.0
+
+
+class _SequencedMarginManager:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def open_long_with_margin_take_profit(self, **kwargs):
+        self.calls.append(kwargs)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        leverage = kwargs["leverage"]
+        return {
+            "quantity": "0.2",
+            "entry_price": 100.0,
+            "entry_order_id": f"margin-entry-{leverage}",
+            "tp_order_id": f"margin-tp-{leverage}",
+            "entry_payload": {"orderId": f"margin-entry-{leverage}", "status": "FILLED"},
+            "tp_payload": {"orderId": f"margin-tp-{leverage}", "status": "OPEN"},
+        }
+
+
+def test_executor_live_candidate_margin_retries_shared_leverages(db_session, monkeypatch):
+    _enable_live_settings(db_session)
+    _add_live_candidate(db_session)
+    manager = _SequencedMarginManager([RuntimeError("leverage rejected"), "success"])
+
+    monkeypatch.setattr("app.services.executor_service.margin_enabled", lambda: True)
+    monkeypatch.setattr("app.services.executor_service.margin_leverage_attempts", lambda: (5, 3))
+    monkeypatch.setattr("app.services.executor_service.KrakenSymbolRules", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.executor_service.KrakenMarginClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.executor_service.MarginOrderManager", lambda *args, **kwargs: manager)
+
+    service = ExecutorService(db_session)
+    service.kraken = _FakeLiveKraken()
+
+    result = service.execute_open_candidates(limit=10, quantity=0.2, mode="live")
+
+    assert result["executed"], result
+    assert [call["leverage"] for call in manager.calls] == [5, 3]
+    assert result["executed"][0]["mode"] == "cross_margin"
+    position = db_session.query(Position).one()
+    entry_order = db_session.query(Order).filter_by(order_type="market").one()
+    assert position.meta["leverage"] == 3
+    assert position.meta["margin_attempts"] == [{"leverage": 5, "error": "leverage rejected"}]
+    assert entry_order.meta["leverage"] == 3
+    assert entry_order.meta["margin_attempts"] == [{"leverage": 5, "error": "leverage rejected"}]
+
+
+def test_executor_live_candidate_spot_fallback_records_margin_attempts(db_session, monkeypatch):
+    _enable_live_settings(db_session)
+    _add_live_candidate(db_session)
+    manager = _SequencedMarginManager([RuntimeError("leverage 5 rejected"), RuntimeError("leverage 3 rejected")])
+    spot_calls = []
+
+    class FakeSpotOrderManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def open_long_with_take_profit(self, **kwargs):
+            spot_calls.append(kwargs)
+            return {
+                "quantity": "0.2",
+                "entry_price": 100.0,
+                "entry_payload": {"orderId": "spot-entry", "status": "FILLED"},
+                "tp_payload": {"orderId": "spot-tp", "status": "OPEN"},
+            }
+
+    monkeypatch.setattr("app.services.executor_service.margin_enabled", lambda: True)
+    monkeypatch.setattr("app.services.executor_service.margin_leverage_attempts", lambda: (5, 3))
+    monkeypatch.setattr("app.services.executor_service.KrakenSymbolRules", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.executor_service.KrakenMarginClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.services.executor_service.MarginOrderManager", lambda *args, **kwargs: manager)
+    monkeypatch.setattr("app.services.executor_service.SpotOrderManager", FakeSpotOrderManager)
+
+    service = ExecutorService(db_session)
+    service.kraken = _FakeLiveKraken()
+
+    result = service.execute_open_candidates(limit=10, quantity=0.2, mode="live")
+
+    assert result["executed"], result
+    assert [call["leverage"] for call in manager.calls] == [5, 3]
+    assert len(spot_calls) == 1
+    position = db_session.query(Position).one()
+    entry_order = db_session.query(Order).filter_by(order_type="market").one()
+    expected_attempts = [
+        {"leverage": 5, "error": "leverage 5 rejected"},
+        {"leverage": 3, "error": "leverage 3 rejected"},
+    ]
+    assert position.meta["mode"] == "spot"
+    assert position.meta["leverage"] is None
+    assert position.meta["margin_attempts"] == expected_attempts
+    assert entry_order.meta["margin_attempts"] == expected_attempts
+    assert "margin attempts failed" in entry_order.meta["margin_error"]
 
 
 def test_momentum_business_listing_excludes_smoke_and_dry_run_candidates(db_session):
