@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.router import api_router
+from app.api.router import api_router, public_router
 from app.core.config import settings
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -37,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(public_router)
 
 
 @app.get("/healthz", tags=["health"])
