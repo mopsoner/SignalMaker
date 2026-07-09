@@ -69,6 +69,14 @@ class MarginOrderManager:
         return payload.get("orderId") or payload.get("order_id")
 
     @staticmethod
+    def _merge_entry_metadata(payload: dict, submitted_payload: dict) -> dict:
+        merged = dict(payload or {})
+        for key in ("leverage", "requested_leverage", "margin_multiplier", "exchange", "entry_request_payload"):
+            if key not in merged and key in (submitted_payload or {}):
+                merged[key] = submitted_payload[key]
+        return merged
+
+    @staticmethod
     def _executed_qty(payload: dict, fallback: str | None = None) -> str:
         raw = payload.get("executedQty")
         try:
@@ -118,7 +126,7 @@ class MarginOrderManager:
             raise RuntimeError(f"margin_order_missing_order_id symbol={symbol} side={expected_side} payload={submitted_payload}")
 
         if self.margin.dry_run:
-            payload = {**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}
+            payload = self._merge_entry_metadata({**submitted_payload, "status": "FILLED", "confirmed_dry_run": True}, submitted_payload)
             return {
                 "entry_confirmed": True,
                 "entry_confirm_status": "FILLED",
@@ -130,7 +138,7 @@ class MarginOrderManager:
             return {
                 "entry_confirmed": True,
                 "entry_confirm_status": "FILLED",
-                "entry_confirm_payload": submitted_payload,
+                "entry_confirm_payload": self._merge_entry_metadata(submitted_payload, submitted_payload),
                 "entry_price": self._avg_price_from_order(submitted_payload, fallback_price),
                 "executed_qty": self._executed_qty(submitted_payload, submitted_payload.get("quantity")),
             }
@@ -139,7 +147,7 @@ class MarginOrderManager:
         deadline = time.monotonic() + self._entry_confirm_timeout_seconds()
         last_payload = submitted_payload
         while time.monotonic() <= deadline:
-            payload = self.margin.get_margin_order(symbol, order_id)
+            payload = self._merge_entry_metadata(self.margin.get_margin_order(symbol, order_id), submitted_payload)
             last_payload = payload
             status = str(payload.get("status") or "").upper()
             side = str(payload.get("side") or "").upper()

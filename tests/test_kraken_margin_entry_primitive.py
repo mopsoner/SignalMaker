@@ -154,3 +154,38 @@ def test_candidate_and_momentum_reuse_same_margin_entry_primitive(tmp_path, monk
 
     assert calls == ["BTCUSDC", "ETHUSDC"]
     assert result.startswith("bought_cross_margin:ETHUSDC")
+
+
+def test_confirmed_entry_payload_keeps_submitted_leverage_metadata():
+    kraken = FakeKraken()
+    margin = NoBorrowKrakenMargin(kraken, dry_run=False, leverage=2)
+    manager = MarginOrderManager(kraken, margin, FakeRules())
+
+    result = manager.place_margin_market_entry(symbol="BTCUSDC", quote_amount=10.0, leverage=2)
+
+    assert result["entry_payload"]["leverage"] == "2"
+    assert result["entry_confirm_payload"]["leverage"] == "2"
+    assert result["entry_confirm_payload"]["entry_request_payload"]["leverage"] == "2"
+
+
+class RejectingKraken(FakeKraken):
+    def _signed(self, method: str, path: str, params: dict) -> dict:
+        self.signed_calls.append({"method": method, "path": path, "params": params})
+        raise RuntimeError("Kraken POST /0/private/AddOrder failed errors=['EOrder:Insufficient initial margin']")
+
+
+def test_kraken_margin_order_error_includes_leverage_and_payload():
+    kraken = RejectingKraken()
+    margin = KrakenMarginClient(kraken, dry_run=False, leverage=5)
+
+    try:
+        margin.margin_order("BTCUSDC", "BUY", "0.1", "MARKET", leverage=3)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected margin order rejection")
+
+    assert "kraken_margin_add_order_failed" in message
+    assert "leverage=3" in message
+    assert "'leverage': '3'" in message
+    assert "Insufficient initial margin" in message

@@ -89,7 +89,14 @@ class KrakenMarginClient:
         if self.dry_run:
             order_prefix = "dry-kraken-margin-entry" if type_lower == "market" else "dry-kraken-margin-tp"
             status = "FILLED" if type_lower == "market" else "NEW"
-            return {"orderId": f"{order_prefix}-{int(time.time())}", "status": status, "executedQty": str(quantity) if type_lower == "market" else "0", "dry_run": True, "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage}
+            request_payload = {"pair": symbol.upper(), "type": side_lower, "ordertype": type_lower, "volume": quantity, "leverage": effective_leverage}
+            if price is not None:
+                request_payload["price"] = price
+            if time_in_force:
+                request_payload["timeinforce"] = time_in_force.upper()
+            if type_lower != "market":
+                request_payload["reduce_only"] = True
+            return {"orderId": f"{order_prefix}-{int(time.time())}", "status": status, "executedQty": str(quantity) if type_lower == "market" else "0", "dry_run": True, "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage, "requested_leverage": effective_leverage, "entry_request_payload": request_payload}
         params: dict[str, Any] = {"pair": self.kraken._pair_key(symbol), "type": side_lower, "ordertype": type_lower, "volume": quantity, "leverage": effective_leverage}
         if price is not None:
             params["price"] = price
@@ -97,9 +104,13 @@ class KrakenMarginClient:
             params["timeinforce"] = time_in_force.upper()
         if type_lower != "market":
             params["reduce_only"] = True
-        result = self.kraken._signed("POST", "/0/private/AddOrder", params)
+        request_payload = dict(params)
+        try:
+            result = self.kraken._signed("POST", "/0/private/AddOrder", params)
+        except Exception as exc:
+            raise RuntimeError(f"kraken_margin_add_order_failed symbol={symbol.upper()} side={side.upper()} type={order_type} leverage={effective_leverage} payload={request_payload} error={exc}") from exc
         txid = (result.get("txid") or [None])[0]
-        return {"orderId": txid, "txid": result.get("txid"), "status": "NEW", "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage, "result": result}
+        return {"orderId": txid, "txid": result.get("txid"), "status": "NEW", "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage, "requested_leverage": effective_leverage, "entry_request_payload": request_payload, "result": result}
 
     def get_margin_order(self, symbol: str, order_id: str | int) -> dict:
         return self.kraken.get_order(symbol, order_id)
