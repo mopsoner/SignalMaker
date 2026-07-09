@@ -328,17 +328,24 @@ class MarginOrderManager:
     def open_short_cross_margin(self, *, symbol: str, quote_amount: float) -> dict:
         return self.open_short_with_margin_borrow_sell(symbol=symbol, quote_amount=quote_amount)
 
-    def sell_all_margin_base(self, *, symbol: str) -> dict:
+    def sell_all_margin_base(self, *, symbol: str, quantity: float | str | None = None) -> dict:
         symbol = symbol.upper()
         self.margin.ensure_isolated_account(symbol)
         base = self.rules.base_asset(symbol)
-        free_qty = self.margin.margin_free_balance(symbol, base)
-        if free_qty <= 0:
-            return {"status": "skipped", "reason": f"no_margin_free_balance:{base}", "symbol": symbol, "base_asset": base}
+        requested_qty = None if quantity is None else float(quantity)
+        try:
+            free_qty = self.margin.margin_free_balance(symbol, base)
+        except Exception:
+            free_qty = None
+        source_qty = requested_qty if requested_qty is not None else free_qty
+        quantity_source = "position_quantity" if requested_qty is not None else "margin_free_balance"
+        if source_qty is None or float(source_qty) <= 0:
+            reason = "position_quantity_missing" if requested_qty is not None else f"no_margin_free_balance:{base}"
+            return {"status": "skipped", "reason": reason, "symbol": symbol, "base_asset": base, "margin_free_balance": free_qty, "quantity_source": quantity_source}
         price = self.kraken.current_price(symbol)
-        qty = self.rules.normalize_market_quantity(symbol, free_qty)
+        qty = self.rules.normalize_market_quantity(symbol, source_qty)
         self.rules.ensure_exit_notional(symbol, qty, price, label="margin_sell_on_short")
         order = self.margin.margin_order(symbol, "SELL", qty, "MARKET")
         order_id = self._order_id(order)
         confirm = self.confirm_margin_order(symbol=symbol, order_id=order_id, submitted_payload=order, fallback_price=price, expected_side="SELL")
-        return {"status": "sold", "symbol": symbol, "base_asset": base, "quantity": confirm.get("executed_qty"), "price": float(confirm.get("entry_price") or price), "order_id": order_id, "order": order, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "timestamp": int(time.time())}
+        return {"status": "sold", "symbol": symbol, "base_asset": base, "quantity": confirm.get("executed_qty"), "requested_quantity": requested_qty, "normalized_quantity": qty, "quantity_source": quantity_source, "margin_free_balance": free_qty, "price": float(confirm.get("entry_price") or price), "order_id": order_id, "order": order, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "timestamp": int(time.time())}
