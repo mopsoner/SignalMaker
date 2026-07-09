@@ -381,8 +381,8 @@ class FakeMomentumMarginManager:
             "tp_payload": {"orderId": f"tp-{symbol}-{leverage}", "status": "OPEN"},
         }
 
-    def sell_all_margin_base(self, *, symbol):
-        self.sell_calls.append(symbol)
+    def sell_all_margin_base(self, *, symbol, quantity=None):
+        self.sell_calls.append({"symbol": symbol, "quantity": quantity})
         return {"status": "FILLED", "symbol": symbol, "quantity": "2.0", "price": 12.5, "order_id": f"sell-{symbol}"}
 
 
@@ -444,7 +444,7 @@ def test_momentum_executor_sell_uses_leveraged_close_for_margin_position(client,
     )
 
     assert result["status"] == "executed"
-    assert manager.sell_calls == ["ETHUSDC"]
+    assert manager.sell_calls == [{"symbol": "ETHUSDC", "quantity": 2.0}]
     db = session_factory()
     try:
         assert db.get(Position, position_id).status == "closed"
@@ -472,6 +472,6 @@ def test_momentum_executor_rotate_uses_margin_sell_then_leveraged_buy(client, mo
     )
 
     assert result["status"] == "executed"
-    assert manager.sell_calls == ["SOLUSDC"]
+    assert manager.sell_calls == [{"symbol": "SOLUSDC", "quantity": 2.0}]
     assert [call["leverage"] for call in manager.open_calls] == [5, 3]
     assert result["reason"] == "momentum_rotated"

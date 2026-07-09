@@ -327,7 +327,15 @@ class ExecutorService:
                 raise RuntimeError(f'{exchange_name} live trading requested but API credentials are missing')
             position_mode = str((position.meta or {}).get('mode') or '').lower()
             if position_mode in {'cross_margin', 'isolated_margin', 'margin'}:
-                exit_resp = self._kraken_margin_order_manager().sell_all_margin_base(symbol=position.symbol)
+                if position.quantity is None or float(position.quantity or 0) <= 0:
+                    raise RuntimeError('position_quantity_missing')
+                try:
+                    exit_resp = self._kraken_margin_order_manager().sell_all_margin_base(symbol=position.symbol, quantity=float(position.quantity))
+                except Exception as exc:
+                    raise RuntimeError(f'exchange_close_rejected:{exc}') from exc
+                if str(exit_resp.get('status', '')).lower() not in {'sold', 'filled'}:
+                    reject_reason = exit_resp.get('reason') or exit_resp.get('status') or 'unknown'
+                    raise RuntimeError(f'exchange_close_rejected:{reject_reason}')
                 mark_price = float(exit_resp.get('price') or mark_price or 0.0)
                 status = str(exit_resp.get('status', 'filled')).lower()
                 meta = {'mode': position_mode or 'cross_margin', 'reason': reason, 'exchange_payload': exit_resp, 'exchange_order_id': exit_resp.get('order_id') or exit_resp.get('orderId')}
