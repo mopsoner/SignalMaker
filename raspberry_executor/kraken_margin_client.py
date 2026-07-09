@@ -94,16 +94,12 @@ class KrakenMarginClient:
                 request_payload["price"] = price
             if time_in_force:
                 request_payload["timeinforce"] = time_in_force.upper()
-            if type_lower != "market":
-                request_payload["reduce_only"] = True
             return {"orderId": f"{order_prefix}-{int(time.time())}", "status": status, "executedQty": str(quantity) if type_lower == "market" else "0", "dry_run": True, "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage, "requested_leverage": effective_leverage, "entry_request_payload": request_payload}
         params: dict[str, Any] = {"pair": self.kraken._pair_key(symbol), "type": side_lower, "ordertype": type_lower, "volume": quantity, "leverage": effective_leverage}
         if price is not None:
             params["price"] = price
         if time_in_force:
             params["timeinforce"] = time_in_force.upper()
-        if type_lower != "market":
-            params["reduce_only"] = True
         request_payload = dict(params)
         try:
             result = self.kraken._signed("POST", "/0/private/AddOrder", params)
