@@ -95,20 +95,23 @@ class ExecutorService:
 
         entry_resp = margin_result.get('entry_payload') or {}
         tp_resp = margin_result.get('tp_payload') or {}
+        tp_exchange_order_id = margin_result.get('tp_order_id') or tp_resp.get('orderId')
+        if not tp_exchange_order_id:
+            raise RuntimeError('momentum_margin_take_profit_missing_exchange_order_id')
         avg_fill = float(margin_result['entry_price'])
         filled_qty = float(margin_result['quantity'])
         position = self.positions.create_position(
             symbol=candidate.symbol, side=candidate.side, quantity=filled_qty, entry_price=avg_fill, mark_price=avg_fill, stop_price=normalized.get('stop_price'), target_price=normalized.get('target_price'),
-            meta={'candidate_id': candidate.candidate_id, 'mode': 'cross_margin', 'margin_isolated': False, 'symbol': candidate.symbol, 'exchange': exchange_name, 'entry_exchange_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'tp_exchange_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts},
+            meta={'candidate_id': candidate.candidate_id, 'mode': 'cross_margin', 'margin_isolated': False, 'symbol': candidate.symbol, 'exchange': exchange_name, 'entry_exchange_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'tp_exchange_order_id': tp_exchange_order_id, 'leverage': used_leverage, 'margin_attempts': attempts},
         )
         entry_order = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', order_type='market', quantity=filled_qty, requested_price=candidate.entry_price, filled_price=avg_fill, status=str(entry_resp.get('status', margin_result.get('entry_confirm_status', 'filled'))).lower(), meta={'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_payload': entry_resp, 'exchange_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts})
         fill = self.fills.create_fill(order_id=entry_order.order_id, position_id=position.position_id, symbol=candidate.symbol, side='buy', quantity=filled_qty, price=avg_fill)
-        tp_local = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side='sell', order_type='take_profit', quantity=filled_qty, requested_price=normalized['target_price'], filled_price=None, status=str(tp_resp.get('status', 'open')).lower(), meta={'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId')})
+        tp_local = self.orders.create_order(candidate_id=candidate.candidate_id, position_id=position.position_id, symbol=candidate.symbol, side='sell', order_type='take_profit', quantity=filled_qty, requested_price=normalized['target_price'], filled_price=None, status=str(tp_resp.get('status', 'open')).lower(), meta={'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': tp_exchange_order_id})
         position.meta = {**(position.meta or {}), 'tp_local_order_id': tp_local.order_id, 'exit_strategy': 'take_profit_only'}
         self.db.commit()
         self.db.refresh(position)
         self.candidates.mark_executed(candidate.candidate_id)
-        return {'candidate_id': candidate.candidate_id, 'position_id': position.position_id, 'entry_order_id': entry_order.order_id, 'fill_id': fill.fill_id, 'tp_order_id': tp_local.order_id, 'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_entry_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'exchange_tp_order_id': margin_result.get('tp_order_id') or tp_resp.get('orderId'), 'leverage': used_leverage, 'margin_attempts': attempts}
+        return {'candidate_id': candidate.candidate_id, 'position_id': position.position_id, 'entry_order_id': entry_order.order_id, 'fill_id': fill.fill_id, 'tp_order_id': tp_local.order_id, 'mode': 'cross_margin', 'exchange': exchange_name, 'exchange_entry_order_id': margin_result.get('entry_order_id') or entry_resp.get('orderId'), 'exchange_tp_order_id': tp_exchange_order_id, 'leverage': used_leverage, 'margin_attempts': attempts}
 
     def _execute_live_candidate(self, candidate, quantity: float) -> dict:
         self.risk.validate_live_candidate(symbol=candidate.symbol, side=candidate.side, entry_price=candidate.entry_price, stop_price=candidate.stop_price, target_price=candidate.target_price, quantity=quantity)
@@ -125,6 +128,7 @@ class ExecutorService:
         margin_error = None
         margin_attempts = []
         used_leverage = None
+        tp_exchange_order_id = None
         if candidate.side == 'long' and margin_enabled() and hasattr(active, 'client'):
             rules = KrakenSymbolRules(str(self._runtime_section('kraken').get('kraken_base_url')), quote_assets=self._runtime_csv('market_data', 'kraken_quote_assets'))
             margin = KrakenMarginClient(active.client, isolated=False, dry_run=active.client.dry_run, leverage=margin_multiplier())
@@ -137,12 +141,17 @@ class ExecutorService:
                         raise RuntimeError(margin_result['tp_error'])
                     entry_resp = margin_result.get('entry_payload') or {}
                     tp_resp = margin_result.get('tp_payload') or {}
+                    tp_exchange_order_id = margin_result.get('tp_order_id') or tp_resp.get('orderId')
+                    if not tp_exchange_order_id:
+                        raise RuntimeError('margin_take_profit_missing_exchange_order_id')
                     avg_fill = float(margin_result['entry_price'])
                     filled_qty = float(margin_result['quantity'])
                     execution_mode = 'cross_margin'
                     used_leverage = leverage
                     break
                 except Exception as exc:
+                    if str(exc) == 'margin_take_profit_missing_exchange_order_id':
+                        raise
                     margin_attempts.append({'leverage': leverage, 'error': str(exc)})
             if execution_mode != 'cross_margin' and margin_attempts:
                 margin_error = f'margin attempts failed: {margin_attempts}'
@@ -153,6 +162,9 @@ class ExecutorService:
                     spot_result = SpotOrderManager(active.client, rules).open_long_with_take_profit(symbol=candidate.symbol, quote_amount=float(quantity) * float(candidate.entry_price or normalized['mark_price']), target_price=float(normalized['target_price']))
                     entry_resp = spot_result.get('entry_payload') or {}
                     tp_resp = spot_result.get('tp_payload') or {}
+                    tp_exchange_order_id = spot_result.get('tp_order_id') or tp_resp.get('orderId')
+                    if not tp_exchange_order_id:
+                        raise RuntimeError('spot_take_profit_missing_exchange_order_id')
                     avg_fill = float(spot_result['entry_price'])
                     filled_qty = float(spot_result['quantity'])
                 elif hasattr(active, 'place_market_entry'):
@@ -160,11 +172,17 @@ class ExecutorService:
                     avg_fill = active.average_fill_price(entry_resp, fallback=candidate.entry_price or normalized['mark_price']) or candidate.entry_price or normalized['mark_price']
                     filled_qty = float(entry_resp.get('executedQty') or normalized['quantity'])
                     tp_resp = active.place_exit_limit(candidate.symbol, candidate.side, quantity=filled_qty, price=normalized['target_price'])
+                    tp_exchange_order_id = tp_resp.get('orderId')
+                    if not tp_exchange_order_id:
+                        raise RuntimeError('take_profit_missing_exchange_order_id')
                 else:
                     entry_resp = active.place_market_buy(candidate.symbol, normalized['quantity'])
                     avg_fill = active.average_fill_price(entry_resp) or candidate.entry_price or normalized['mark_price']
                     filled_qty = float(entry_resp.get('executedQty') or normalized['quantity'])
                     tp_resp = active.place_limit_sell(candidate.symbol, quantity=filled_qty, price=normalized['target_price'])
+                    tp_exchange_order_id = tp_resp.get('orderId')
+                    if not tp_exchange_order_id:
+                        raise RuntimeError('take_profit_missing_exchange_order_id')
             except Exception as exc:
                 if margin_error:
                     raise RuntimeError(f'margin failed ({margin_error}); spot fallback failed ({exc}); margin_attempts={margin_attempts}') from exc
@@ -212,12 +230,12 @@ class ExecutorService:
             requested_price=normalized['target_price'],
             filled_price=None,
             status=str(tp_resp.get('status', 'open')).lower(),
-            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': tp_resp.get('orderId')},
+            meta={'mode': execution_mode, 'exchange': exchange_name, 'exchange_payload': tp_resp, 'exchange_order_id': tp_exchange_order_id},
         )
         position.meta = {
             **(position.meta or {}),
             'tp_local_order_id': tp_local.order_id,
-            'tp_exchange_order_id': tp_resp.get('orderId'),
+            'tp_exchange_order_id': tp_exchange_order_id,
             'exit_strategy': 'take_profit_stop' if normalized.get('stop_price') else 'take_profit_only',
         }
         stop_local = None
@@ -248,7 +266,7 @@ class ExecutorService:
             'mode': execution_mode,
             'exchange': exchange_name,
             'exchange_entry_order_id': entry_resp.get('orderId'),
-            'exchange_tp_order_id': tp_resp.get('orderId'),
+            'exchange_tp_order_id': tp_exchange_order_id,
             'stop_order_id': stop_local.order_id if stop_local else None,
         }
 
