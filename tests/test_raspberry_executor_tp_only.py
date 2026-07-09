@@ -96,3 +96,102 @@ def test_raspberry_executor_final_report_checks_take_profit_only(tmp_path, monke
     assert state.open_positions() == {}
     closed = state.closed_positions()
     assert closed[-1]["close_reason"] == "take_profit_filled"
+
+
+def test_run_once_invokes_position_sync_for_position_without_take_profit(monkeypatch):
+    import raspberry_executor.run_once as run_once_module
+
+    calls = []
+
+    class FakeSignalMaker:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_open_candidates(self, limit: int) -> list[dict]:
+            calls.append(("fetch", limit))
+            return []
+
+    class FakeState:
+        def open_positions(self) -> dict:
+            return {
+                "candidate-btc": {
+                    "candidate_id": "candidate-btc",
+                    "execution_symbol": "BTCUSDT",
+                    "tp_order_id": None,
+                }
+            }
+
+    settings = SimpleNamespace(
+        signalmaker_base_url="http://signalmaker.local",
+        gateway_id="gateway-test",
+        allowed_symbols=["USDT"],
+        max_candidate_age_seconds=3600,
+        exchange="fake",
+    )
+    exchange = SimpleNamespace(exchange_name="fake")
+
+    monkeypatch.setattr(run_once_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(run_once_module, "SignalMakerClient", FakeSignalMaker)
+    monkeypatch.setattr(run_once_module, "create_spot_exchange", lambda _settings: (exchange, None))
+    monkeypatch.setattr(run_once_module, "StateStore", FakeState)
+    monkeypatch.setattr(run_once_module, "execute_candidate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(run_once_module.position_sync_v2, "sync_open_positions", lambda: calls.append(("sync",)) or {"missing_tp": 1})
+
+    summary = run_once_module.run_once(limit=3)
+
+    assert calls == [("fetch", 3), ("sync",)]
+    assert summary["open_positions"] == 1
+
+
+def test_main_loop_invokes_position_sync_for_position_without_take_profit(monkeypatch):
+    import raspberry_executor.main as main_module
+
+    calls = []
+
+    class FakeSignalMaker:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_open_candidates(self, limit: int) -> list[dict]:
+            calls.append(("fetch", limit))
+            return []
+
+    class FakeState:
+        def open_positions(self) -> dict:
+            return {
+                "candidate-btc": {
+                    "candidate_id": "candidate-btc",
+                    "execution_symbol": "BTCUSDT",
+                    "tp_order_id": None,
+                }
+            }
+
+    settings = SimpleNamespace(
+        signalmaker_base_url="http://signalmaker.local",
+        gateway_id="gateway-test",
+        allowed_symbols=["USDT"],
+        max_candidate_age_seconds=3600,
+        exchange="fake",
+        dry_run=True,
+        order_quote_amount=25.0,
+        poll_seconds=0,
+    )
+    exchange = SimpleNamespace(exchange_name="fake")
+
+    monkeypatch.setattr(main_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "SignalMakerClient", FakeSignalMaker)
+    monkeypatch.setattr(main_module, "create_spot_exchange", lambda _settings: (exchange, None))
+    monkeypatch.setattr(main_module, "SpotOrderManager", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(main_module, "StateStore", FakeState)
+    monkeypatch.setattr(main_module, "execute_candidate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main_module.position_sync_v2, "sync_open_positions", lambda: calls.append(("sync",)) or {"missing_tp": 1})
+    monkeypatch.setattr(main_module.time, "sleep", lambda _seconds: (_ for _ in ()).throw(RuntimeError("stop loop")))
+
+    try:
+        main_module.main()
+    except RuntimeError as exc:
+        assert str(exc) == "stop loop"
+    else:
+        raise AssertionError("main loop did not stop")
+
+    assert calls == [("fetch", 10), ("sync",)]
