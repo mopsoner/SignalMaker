@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timezone
 
 from raspberry_executor.exchange_factory import create_margin_exchange
-from raspberry_executor.candidate_levels import latest_levels_for_symbol
+from raspberry_executor.candidate_levels import levels_for_position
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_order_manager import MarginOrderManager
@@ -204,9 +204,9 @@ def _order(kraken, margin, symbol, order_id, *, use_margin: bool):
 def _levels(position, symbol):
     if position.get("target_price") is not None:
         return {"target_price": position.get("target_price"), "source": "local_position"}
-    latest = latest_levels_for_symbol(symbol)
-    if latest and latest.get("target_price") is not None:
-        return {"target_price": latest.get("target_price"), "source": latest.get("source") or "latest_candidate_levels", **latest}
+    matched = levels_for_position(position, symbol)
+    if matched and matched.get("target_price") is not None:
+        return {"target_price": matched.get("target_price"), "source": matched.get("source") or "candidate_levels", **matched}
     return None
 
 
