@@ -182,7 +182,8 @@ def _save_position(state: StateStore, normalized: NormalizedCandidate, candidate
         "execution_symbol": normalized.symbol,
         "side": normalized.side,
         "mode": mode,
-        "margin_isolated": False if mode == "cross_margin" else None,
+        "margin_account_mode": "cross" if mode == "margin" else None,
+        "margin_isolated": False if mode == "margin" else None,
         "quantity": result["quantity"],
         "entry_price": float(result["entry_price"]),
         "stop_price": candidate.get("stop_price"),
@@ -193,7 +194,7 @@ def _save_position(state: StateStore, normalized: NormalizedCandidate, candidate
         "candidate": candidate,
         "entry_payload": result.get("entry_payload") or {},
         "tp_payload": result.get("tp_payload") or {},
-        "margin_payload": result if mode == "cross_margin" else {},
+        "margin_payload": result if mode == "margin" else {},
         "exchange": exchange,
         "needs_tp_replay": bool(result.get("needs_tp_replay")),
         "tp_error": result.get("tp_error"),
@@ -207,7 +208,9 @@ def _open_margin_long(manager: MarginOrderManager, symbol: str, quote_amount: fl
         target_price=target_price,
         leverage=leverage,
     )
-    result["mode"] = "cross_margin"
+    result["mode"] = "margin"
+    result["margin_account_mode"] = "cross"
+    result["margin_isolated"] = False
 
     # If the margin entry succeeded but TP placement failed, keep/save the
     # position locally so position_sync_v2 can detect tp_order_id=None and
@@ -262,7 +265,7 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
         for leverage in margin_leverage_attempts():
             try:
                 result = _open_margin_long(margin_manager, normalized.symbol, float(settings.order_quote_amount), normalized.target_price, leverage=leverage)
-                _save_position(state, normalized, candidate, result, "cross_margin", exchange_name)
+                _save_position(state, normalized, candidate, result, "margin", exchange_name)
                 logger.info("classic candidate opened on margin candidate=%s symbol=%s leverage=%s qty=%s tp=%s", normalized.candidate_id, normalized.symbol, leverage, result.get("quantity"), result.get("tp_order_id"))
                 return "opened"
             except Exception as exc:

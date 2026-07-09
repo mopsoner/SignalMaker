@@ -323,7 +323,7 @@ class MarginOrderManager:
         confirm = self.confirm_margin_order(symbol=symbol, order_id=sell_order_id, submitted_payload=sell, fallback_price=price, expected_side="SELL")
         sold_qty = confirm["executed_qty"]
         entry_price = float(confirm["entry_price"])
-        return {"status": "sold", "symbol": symbol, "side": "short", "mode": "isolated_margin" if self.margin.isolated else "cross_margin", "margin_isolated": self.margin.isolated, "base_asset": base, "borrow_base_amount": qty, "quantity": sold_qty, "entry_price": entry_price, "margin_multiplier": margin_multiplier(), "borrow_payload": borrow, "entry_order_id": sell_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "entry_payload": sell, "timestamp": int(time.time())}
+        return {"status": "sold", "symbol": symbol, "side": "short", "mode": "margin", "margin_account_mode": "cross", "margin_isolated": False, "base_asset": base, "borrow_base_amount": qty, "quantity": sold_qty, "entry_price": entry_price, "margin_multiplier": margin_multiplier(), "borrow_payload": borrow, "entry_order_id": sell_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "entry_payload": sell, "timestamp": int(time.time())}
 
     def open_short_cross_margin(self, *, symbol: str, quote_amount: float) -> dict:
         return self.open_short_with_margin_borrow_sell(symbol=symbol, quote_amount=quote_amount)

@@ -31,7 +31,7 @@ def main() -> int:
 
     result = {
         "status": "pending",
-        "mode": "cross_margin",
+        "mode": "margin", "margin_account_mode": "cross",
         "symbol": symbol,
         "quote_asset": quote,
         "margin_settings": read_margin_settings(),

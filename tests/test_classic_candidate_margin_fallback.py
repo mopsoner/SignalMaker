@@ -214,7 +214,7 @@ def test_classic_margin_succeeds_on_first_shared_leverage(monkeypatch):
     assert result == "opened"
     assert [call["leverage"] for call in margin.calls] == [5]
     assert spot.calls == []
-    assert state.positions["cand-1"]["mode"] == "cross_margin"
+    assert state.positions["cand-1"]["mode"] == "margin"
     assert state.positions["cand-1"]["margin_payload"]["leverage"] == "5"
     assert [event for _, event, _ in state.events_log] == ["position_opened"]
 
@@ -239,7 +239,7 @@ def test_classic_margin_entry_with_tp_error_is_saved_for_replay(monkeypatch):
     assert result == "opened"
     assert spot.calls == []
     position = state.positions["cand-1"]
-    assert position["mode"] == "cross_margin"
+    assert position["mode"] == "margin"
     assert position["entry_order_id"] == "margin-entry-without-tp"
     assert position["tp_order_id"] is None
     assert position["needs_tp_replay"] is True

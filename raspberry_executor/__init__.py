@@ -90,7 +90,7 @@ def _bootstrap_runtime_from_admin() -> None:
     elif kraken.get("kraken_rest_base"):
         os.environ["KRAKEN_BASE_URL"] = str(kraken.get("kraken_rest_base")).rstrip("/")
 
-    os.environ.setdefault("EXECUTION_MODE", "cross")
+    os.environ.setdefault("EXECUTION_MODE", "margin")
     os.environ.setdefault("MARGIN_MODE_ENABLED", "true")
     os.environ.setdefault("MARGIN_ACCOUNT_MODE", "cross")
     os.environ.setdefault("MARGIN_ISOLATED", "false")

@@ -38,16 +38,11 @@ def _execution_mode(values: dict[str, str]) -> str:
     mode = str(values.get("EXECUTION_MODE") or "").strip().lower()
     if mode in {"spot", "cash"}:
         return "spot"
-    if mode in {"isolated", "isolated_margin", "isole", "isolé", "isolee", "isolée"}:
-        return "isolated"
-    if mode in {"cross", "cross_margin", "croise", "croisée", "croisee"}:
-        return "cross"
+    if mode in {"margin", "isolated", "isolated_margin", "isole", "isolé", "isolee", "isolée", "cross", "cross_margin", "croise", "croisée", "croisee"}:
+        return "margin"
     if not _bool(values.get("MARGIN_MODE_ENABLED"), default=False):
         return "spot"
-    account_mode = str(values.get("MARGIN_ACCOUNT_MODE") or "").strip().lower()
-    if account_mode in {"isolated", "isolated_margin", "isole", "isolé", "isolee", "isolée"}:
-        return "isolated"
-    return "cross"
+    return "margin"
 
 
 def read_margin_settings() -> dict[str, str]:
@@ -57,8 +52,8 @@ def read_margin_settings() -> dict[str, str]:
     mode = _execution_mode(out)
     out["EXECUTION_MODE"] = mode
     out["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
-    out["MARGIN_ACCOUNT_MODE"] = "isolated" if mode == "isolated" else "cross"
-    out["MARGIN_ISOLATED"] = "true" if mode == "isolated" else "false"
+    out["MARGIN_ACCOUNT_MODE"] = "cross"
+    out["MARGIN_ISOLATED"] = "false"
     # DRY_RUN is the only source of truth. Keep a display-only compatibility field.
     out["MARGIN_DRY_RUN"] = values.get("DRY_RUN", "true")
     return out
@@ -76,8 +71,8 @@ def write_margin_settings(values: dict[str, str]) -> None:
     mode = _execution_mode(merged)
     merged["EXECUTION_MODE"] = mode
     merged["MARGIN_MODE_ENABLED"] = "false" if mode == "spot" else "true"
-    merged["MARGIN_ACCOUNT_MODE"] = "isolated" if mode == "isolated" else "cross"
-    merged["MARGIN_ISOLATED"] = "true" if mode == "isolated" else "false"
+    merged["MARGIN_ACCOUNT_MODE"] = "cross"
+    merged["MARGIN_ISOLATED"] = "false"
 
     existing_keys = set()
     new_lines = []
@@ -101,7 +96,7 @@ def write_margin_settings(values: dict[str, str]) -> None:
     if missing:
         if new_lines and new_lines[-1].strip():
             new_lines.append("")
-        new_lines.append("# Execution mode: spot | isolated | cross")
+        new_lines.append("# Execution mode: spot | margin")
         for key in missing:
             new_lines.append(f"{key}={merged[key]}")
     ENV_PATH.write_text("\n".join(new_lines) + "\n")
@@ -112,7 +107,7 @@ def execution_mode() -> str:
 
 
 def margin_enabled() -> bool:
-    return execution_mode() in {"isolated", "cross"}
+    return execution_mode() == "margin"
 
 
 def margin_dry_run() -> bool:
@@ -125,12 +120,11 @@ def shorts_enabled() -> bool:
 
 
 def margin_account_mode() -> str:
-    mode = execution_mode()
-    return "isolated" if mode == "isolated" else "cross"
+    return "cross"
 
 
 def margin_isolated() -> bool:
-    return execution_mode() == "isolated"
+    return False
 
 
 def margin_multiplier() -> float:

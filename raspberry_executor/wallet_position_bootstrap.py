@@ -48,6 +48,8 @@ def _add_position(state, existing, *, symbol, side, mode, quantity, price, sourc
         "execution_symbol": symbol,
         "side": side,
         "mode": mode,
+        "margin_account_mode": "cross" if mode == "margin" else None,
+        "margin_isolated": False if mode == "margin" else None,
         "quantity": str(quantity),
         "entry_price": price,
         "stop_price": None,
@@ -134,7 +136,7 @@ def _bootstrap_cross(client, state, existing, quote_assets, min_notional):
         if qty <= 0 or notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="cross_margin", quantity=qty, price=price, source="kraken_cross_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side=side, mode="margin", quantity=qty, price=price, source="kraken_cross_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
             created += 1
     return seen, created, skipped
 
@@ -170,7 +172,7 @@ def _bootstrap_isolated(client, state, existing, quote_assets, min_notional):
         if qty <= 0 or notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="isolated_margin", quantity=qty, price=price, source="kraken_isolated_margin_bootstrap", extra={"margin_asset": base, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side=side, mode="margin", quantity=qty, price=price, source="kraken_isolated_margin_bootstrap", extra={"margin_asset": base, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
             created += 1
     return seen, created, skipped
 

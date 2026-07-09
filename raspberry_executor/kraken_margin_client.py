@@ -59,8 +59,8 @@ class KrakenMarginClient:
 
     def isolated_account(self, symbol: str) -> dict:
         if self.dry_run:
-            return {"assets": [], "exchange": "kraken", "mode": "cross_margin"}
-        return {"balances": self.kraken.account(), "exchange": "kraken", "mode": "cross_margin", "symbol": symbol.upper()}
+            return {"assets": [], "exchange": "kraken", "mode": "margin", "margin_account_mode": "cross"}
+        return {"balances": self.kraken.account(), "exchange": "kraken", "mode": "margin", "margin_account_mode": "cross", "symbol": symbol.upper()}
 
     def margin_free_balance(self, symbol: str, asset: str) -> float:
         return self.kraken.free_balance(asset)
@@ -90,12 +90,16 @@ class KrakenMarginClient:
             order_prefix = "dry-kraken-margin-entry" if type_lower == "market" else "dry-kraken-margin-tp"
             status = "FILLED" if type_lower == "market" else "NEW"
             request_payload = {"pair": symbol.upper(), "type": side_lower, "ordertype": type_lower, "volume": quantity, "leverage": effective_leverage}
+            if side_lower == "sell" and type_lower != "market":
+                request_payload["reduce_only"] = True
             if price is not None:
                 request_payload["price"] = price
             if time_in_force:
                 request_payload["timeinforce"] = time_in_force.upper()
             return {"orderId": f"{order_prefix}-{int(time.time())}", "status": status, "executedQty": str(quantity) if type_lower == "market" else "0", "dry_run": True, "exchange": "kraken", "symbol": symbol.upper(), "side": side.upper(), "type": order_type, "quantity": quantity, "price": price, "leverage": effective_leverage, "requested_leverage": effective_leverage, "entry_request_payload": request_payload}
         params: dict[str, Any] = {"pair": self.kraken._pair_key(symbol), "type": side_lower, "ordertype": type_lower, "volume": quantity, "leverage": effective_leverage}
+        if side_lower == "sell" and type_lower != "market":
+            params["reduce_only"] = True
         if price is not None:
             params["price"] = price
         if time_in_force:

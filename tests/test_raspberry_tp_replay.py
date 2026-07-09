@@ -234,7 +234,7 @@ def test_track_momentum_uses_margin_balance_for_cross_margin_position(tmp_path, 
         "side": "long",
         "quantity": "250",
         "entry_price": 0.4,
-        "mode": "cross_margin",
+        "mode": "margin",
         "margin_isolated": False,
         "momentum_decision": {"buy_symbol": "TIAUSDC"},
     }
@@ -263,7 +263,7 @@ def test_track_momentum_defers_recent_missing_balance(tmp_path, monkeypatch):
         "side": "long",
         "quantity": "250",
         "entry_price": 0.4,
-        "mode": "cross_margin",
+        "mode": "margin",
         "margin_isolated": False,
         "momentum_decision": {"buy_symbol": "TIAUSDC"},
     }

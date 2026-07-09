@@ -399,7 +399,7 @@ def _classic_candidate_business_workflow_smoke(settings: Settings, symbol: str, 
             if margin_ok["outcome"] != "opened" or margin_ok["spot_calls"]:
                 raise RuntimeError(f"business_margin_success_failed:{margin_ok}")
             margin_position = next(iter(margin_ok["positions"].values()))
-            if margin_position.get("mode") != "cross_margin" or margin_position.get("entry_payload", {}).get("leverage") != "5" or margin_position.get("tp_payload", {}).get("type") != "LIMIT":
+            if margin_position.get("mode") != "margin" or margin_position.get("entry_payload", {}).get("leverage") != "5" or margin_position.get("tp_payload", {}).get("type") != "LIMIT":
                 raise RuntimeError(f"business_margin_payload_invalid:{margin_position}")
 
             fallback = run_case(tmpdir, "spot-fallback", margin_fail="margin unavailable for pair")

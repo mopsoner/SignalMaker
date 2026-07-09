@@ -22,7 +22,7 @@ DEFAULTS = {
     "MAX_CANDIDATE_AGE_SECONDS": "1200",
     "ORDER_MONITOR_SECONDS": "60",
     "EXECUTION_EXCHANGE": "kraken",
-    "EXECUTION_MODE": "cross",
+    "EXECUTION_MODE": "margin",
     "MARGIN_MODE_ENABLED": "true",
     "MARGIN_ACCOUNT_MODE": "cross",
     "MARGIN_ISOLATED": "false",

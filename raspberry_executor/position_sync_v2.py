@@ -7,7 +7,7 @@ from raspberry_executor.candidate_levels import levels_for_position
 from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import margin_dry_run, margin_isolated
+from raspberry_executor.margin_settings import margin_dry_run
 from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
 
@@ -88,18 +88,17 @@ def _is_not_found_error(payload: dict | None) -> bool:
 
 
 def _is_momentum_position(candidate_id: str, position: dict) -> bool:
-    mode = str(position.get("mode") or "").lower()
     strategy = str(position.get("strategy") or "").lower()
-    return str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict) or strategy == "momentum_rotation" or mode.startswith("momentum")
+    return str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict) or strategy == "momentum_rotation"
 
 
 def _is_margin_position(position: dict) -> bool:
     mode = str(position.get("mode") or "").lower()
     if mode == "spot":
         return False
-    if "margin" in mode:
+    if mode == "margin":
         return True
-    if mode in {"cross", "isolated"}:
+    if mode in {"cross", "cross_margin", "isolated", "isolated_margin"}:
         return True
     if position.get("margin_isolated") is not None:
         return True
@@ -107,14 +106,7 @@ def _is_margin_position(position: dict) -> bool:
 
 
 def _is_isolated_position(position: dict) -> bool:
-    if position.get("margin_isolated") is not None:
-        return bool(position.get("margin_isolated"))
-    mode = str(position.get("mode") or "").lower()
-    if "cross" in mode:
-        return False
-    if "isolated" in mode:
-        return True
-    return margin_isolated()
+    return False
 
 
 
@@ -527,10 +519,7 @@ def sync_open_positions():
             continue
 
         use_margin = _is_margin_position(position)
-        if _is_isolated_position(position) == getattr(default_margin, "isolated", False):
-            margin = default_margin
-        else:
-            _, margin, _ = create_margin_exchange(settings, isolated=_is_isolated_position(position), dry_run=margin_dry_run())
+        margin = default_margin
         margin_manager = MarginOrderManager(kraken, margin, rules)
 
         if _is_momentum_position(candidate_id, position):
