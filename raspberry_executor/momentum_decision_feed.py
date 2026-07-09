@@ -361,16 +361,16 @@ def _explicit_cross_margin_requested() -> bool:
     configured_mode = _env("EXECUTION_MODE") or _env("MARGIN_ACCOUNT_MODE")
     if configured_mode is None:
         return False
-    return margin_enabled() and execution_mode() == "cross"
+    return margin_enabled() and execution_mode() == "margin"
 
 
 def _is_cross_margin_position(position: dict[str, Any] | None) -> bool:
     if not position:
         return False
     mode = str(position.get("mode") or "").lower()
-    if mode == "cross_margin":
+    if mode in {"margin", "cross", "cross_margin", "isolated", "isolated_margin"}:
         return True
-    if position.get("margin_isolated") is False and mode in {"margin", "momentum_rotation"}:
+    if position.get("margin_isolated") is False and mode == "margin":
         return True
     return False
 
@@ -507,7 +507,7 @@ def _buy_symbol_cross_margin(
     except RuntimeError as exc:
         if "margin_entry_notional_below_minimum" in str(exc) or "margin_insufficient_quote_balance" in str(exc):
             free_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else desired_notional
-            state.add_event(cid, "momentum_buy_skipped_margin_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": 0.0, "min_buy_notional": min_buy_notional, "decision": decision, "mode": "cross_margin"})
+            state.add_event(cid, "momentum_buy_skipped_margin_quote_balance", {"symbol": symbol, "quote": quote, "free_quote": free_quote, "usable_notional": 0.0, "min_buy_notional": min_buy_notional, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             return f"margin_quote_balance_wait:{quote}:free={float(free_quote):.4f}:usable=0.0000"
         raise
 
@@ -518,12 +518,12 @@ def _buy_symbol_cross_margin(
     acquired = float(qty) if margin.dry_run else margin.margin_free_balance(symbol, rules.base_asset(symbol))
     state.mark_executed(cid)
     state.add_open_position(cid, {
-        "candidate_id": cid, "signal_symbol": symbol, "execution_symbol": symbol, "side": "long", "strategy": "momentum_rotation", "mode": "cross_margin", "margin_isolated": False,
+        "candidate_id": cid, "signal_symbol": symbol, "execution_symbol": symbol, "side": "long", "strategy": "momentum_rotation", "mode": "margin", "margin_account_mode": "cross", "margin_isolated": False,
         "quantity": qty, "entry_price": fill_price, "stop_price": None, "target_price": None, "entry_order_id": entry.get("entry_order_id"), "momentum_decision": decision, "entry_payload": order,
         "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "implicit_margin": True, "leverage_notional": entry.get("leverage_notional"),
         "borrow_payload": entry.get("implicit_leverage_payload") or {}, "borrow_error": None, "notional_used": total_quote, "own_quote_amount": entry.get("own_quote_amount"), "borrow_quote_amount": entry.get("leverage_notional"), "quote_asset": quote, "leverage": entry.get("leverage"), "confirmed_base_balance": acquired,
     })
-    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "decision": decision, "mode": "cross_margin", "leverage": entry.get("leverage")})
+    state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "decision": decision, "mode": "margin", "margin_account_mode": "cross", "leverage": entry.get("leverage")})
     return f"bought_cross_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
 
 
@@ -564,7 +564,7 @@ def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, s
         "execution_symbol": symbol,
         "side": "long",
         "strategy": "momentum_rotation",
-        "mode": "momentum_rotation",
+        "mode": "spot",
         "quantity": qty,
         "entry_price": float(fill_price),
         "stop_price": None,
@@ -607,20 +607,20 @@ def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, st
     details: list[dict[str, Any]] = []
 
     if qty <= 0 or value < dust_value:
-        state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "cross_margin"})
+        state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
         return f"sell_confirmed_cross_margin:no_balance:{base}:value={value:.4f}"
 
     for attempt in range(1, max_attempts + 1):
         before_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else 0.0
         base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
         if qty <= 0 or value < dust_value:
-            state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision, "mode": "cross_margin"})
+            state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
 
         sell_qty = _market_sell_quantity(rules, symbol, qty * chunk_ratio, price) or _market_sell_quantity(rules, symbol, qty, price)
         if sell_qty is None:
             message = f"sell_quantity_not_tradeable_cross_margin:{symbol}:qty={qty}:value={value:.4f}"
-            state.add_event(cid, "momentum_sell_not_tradeable", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "cross_margin"})
+            state.add_event(cid, "momentum_sell_not_tradeable", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             if require_confirmed:
                 raise RuntimeError(message)
             return message
@@ -629,16 +629,16 @@ def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, st
             order = margin.margin_order(symbol, "SELL", sell_qty, "MARKET")
             after_base, after_qty, after_price, after_value = _margin_wallet_value(margin, rules, kraken, symbol)
             after_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else before_quote
-            detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order, "mode": "cross_margin"}
+            detail = {"attempt": attempt, "symbol": symbol, "base": base, "quote": quote, "sell_qty": sell_qty, "before_qty": qty, "before_value": value, "before_quote": before_quote, "after_qty": after_qty, "after_value": after_value, "after_quote": after_quote, "order": order, "mode": "margin", "margin_account_mode": "cross"}
             details.append(detail)
             state.add_event(cid, "momentum_sell_attempt", {"decision": decision, **detail})
             if margin.dry_run or after_value < dust_value:
-                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details, "mode": "cross_margin"}, record_event=False)
-                state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote, "mode": "cross_margin"})
+                state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details, "mode": "margin", "margin_account_mode": "cross"}, record_event=False)
+                state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote, "mode": "margin", "margin_account_mode": "cross"})
                 return f"sell_confirmed_cross_margin:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
         except Exception as exc:
-            details.append({"attempt": attempt, "symbol": symbol, "qty": sell_qty, "error": str(exc), "mode": "cross_margin"})
-            state.add_event(cid, "momentum_sell_attempt_failed", {"symbol": symbol, "base": base, "qty": sell_qty, "attempt": attempt, "error": str(exc), "decision": decision, "mode": "cross_margin"})
+            details.append({"attempt": attempt, "symbol": symbol, "qty": sell_qty, "error": str(exc), "mode": "margin", "margin_account_mode": "cross"})
+            state.add_event(cid, "momentum_sell_attempt_failed", {"symbol": symbol, "base": base, "qty": sell_qty, "attempt": attempt, "error": str(exc), "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             if attempt >= max_attempts:
                 if require_confirmed:
                     raise RuntimeError(f"sell_not_confirmed_cross_margin:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
@@ -646,10 +646,10 @@ def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, st
 
     base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     if value < dust_value:
-        state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "cross_margin"})
+        state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
         return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
     message = f"sell_not_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}:attempts={max_attempts}"
-    state.add_event(cid, "momentum_sell_not_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "cross_margin"})
+    state.add_event(cid, "momentum_sell_not_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
     if require_confirmed:
         raise RuntimeError(message)
     return message

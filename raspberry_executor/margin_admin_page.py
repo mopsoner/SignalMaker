@@ -18,14 +18,13 @@ def checked(value: str) -> str:
 
 def margin_admin_box() -> str:
     vals = read_margin_settings()
-    mode = vals.get("EXECUTION_MODE", "cross")
+    mode = vals.get("EXECUTION_MODE", "margin")
     body = "<div class='box'><h2>Execution mode</h2>"
     body += "<p class='pill ok'>Recommended: Cross Margin. Spot remains available as fallback/safety.</p>"
     body += "<form method='post' action='/admin/margin'>"
     body += "<label>EXECUTION_MODE</label>"
     body += "<select name='EXECUTION_MODE' style='width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box'>"
-    body += f"<option value='cross'{selected(mode, 'cross')}>cross - primary margin mode</option>"
-    body += f"<option value='isolated'{selected(mode, 'isolated')}>isolated - per-symbol margin</option>"
+    body += f"<option value='margin'{selected(mode, 'margin')}>margin - Kraken cross margin</option>"
     body += f"<option value='spot'{selected(mode, 'spot')}>spot - no borrow</option>"
     body += "</select>"
     body += f"<label>MARGIN_DRY_RUN</label><input type='text' name='MARGIN_DRY_RUN' value='{c(vals.get('MARGIN_DRY_RUN'))}'>"

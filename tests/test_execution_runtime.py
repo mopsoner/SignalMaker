@@ -176,7 +176,7 @@ def test_executor_live_candidate_margin_retries_shared_leverages(db_session, mon
 
     assert result["executed"], result
     assert [call["leverage"] for call in manager.calls] == [5, 3]
-    assert result["executed"][0]["mode"] == "cross_margin"
+    assert result["executed"][0]["mode"] == "margin"
     position = db_session.query(Position).one()
     entry_order = db_session.query(Order).filter_by(order_type="market").one()
     assert position.meta["leverage"] == 3
@@ -362,7 +362,7 @@ def test_reconcile_live_positions_checks_cross_margin_take_profit(db_session):
         entry_price=100.0,
         mark_price=100.0,
         target_price=120.0,
-        meta={"mode": "cross_margin", "tp_exchange_order_id": "margin-tp-3"},
+        meta={"mode": "margin", "tp_exchange_order_id": "margin-tp-3"},
     )
     db_session.add(position)
     db_session.commit()
@@ -405,7 +405,7 @@ def test_reconcile_live_positions_reports_missing_take_profit_for_margin(db_sess
         entry_price=50.0,
         mark_price=50.0,
         target_price=60.0,
-        meta={"mode": "cross_margin"},
+        meta={"mode": "margin"},
     )
     db_session.add(position)
     db_session.commit()

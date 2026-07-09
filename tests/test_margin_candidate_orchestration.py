@@ -140,7 +140,7 @@ def test_process_candidate_long_margin_available_opens_margin_tp_without_spot_fa
     assert margin_manager.calls == [{"symbol": "BTCUSD", "quote_amount": 20.0, "target_price": 110.0, "leverage": 5}]
     assert spot_manager.calls == []
     position = state.open_positions()["margin-ok"]
-    assert position["mode"] == "cross_margin"
+    assert position["mode"] == "margin"
     assert position["entry_payload"] == {
         "orderId": "margin-entry-1",
         "symbol": "BTCUSD",

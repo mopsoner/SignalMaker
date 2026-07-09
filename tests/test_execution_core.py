@@ -68,7 +68,7 @@ def test_place_leveraged_market_entry_calls_buy_market_and_returns_leverage_payl
 
     assert margin.orders == [("BTCUSDC", "BUY", "10.00000000", "MARKET", {"leverage": "5"})]
     assert margin.borrow_calls == []
-    assert result["mode"] == "cross_margin"
+    assert result["mode"] == "margin"
     assert result["symbol"] == "BTCUSDC"
     assert result["side"] == "long"
     assert result["quantity"] == "10.00000000"

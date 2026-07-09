@@ -220,7 +220,7 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
     assert kraken.orders == []
     assert instances[0].orders[0]["type"] == "MARKET"
     position = state.open_positions()["momentum-ALLUSDC"]
-    assert position["mode"] == "cross_margin"
+    assert position["mode"] == "margin"
     assert position["margin_isolated"] is False
     assert position["entry_payload"]["isIsolated"] == "FALSE"
     assert position["notional_used"] == 10.0
@@ -320,7 +320,7 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
 
     monkeypatch.setattr(momentum_module, "MarginClient", fake_margin_client)
     state = StateStore()
-    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
     kraken = FakeKraken(quote_balances=[0.0], base_balance=0.0)
 
     result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
@@ -331,14 +331,14 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
     assert state.open_positions() == {}
     sold_event = state.events()[-1]
     assert sold_event["event_type"] == "momentum_sold"
-    assert sold_event["payload"]["mode"] == "cross_margin"
+    assert sold_event["payload"]["mode"] == "margin"
 
 
 def test_rotate_sells_cross_margin_position_before_restarting_buy_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
-    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "cross_margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "mode": "margin", "margin_isolated": False, "quantity": "10", "entry_price": 1.2})
     calls = []
 
     monkeypatch.setattr(momentum_module, "StateStore", lambda: state)

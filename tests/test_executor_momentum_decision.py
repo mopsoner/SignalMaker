@@ -418,7 +418,7 @@ def test_momentum_executor_buy_uses_leveraged_fallback_attempts(client, monkeypa
     assert_decision_contract(result)
     assert result["status"] == "executed"
     assert [call["leverage"] for call in manager.open_calls] == [5, 3]
-    assert result["result"]["mode"] == "cross_margin"
+    assert result["result"]["mode"] == "margin"
     assert result["result"]["leverage"] == 3
     assert result["order_ids"]
     assert result["fill_ids"]
@@ -430,7 +430,7 @@ def test_momentum_executor_sell_uses_leveraged_close_for_margin_position(client,
     db = session_factory()
     try:
         position = db.get(Position, position_id)
-        position.meta = {**(position.meta or {}), "mode": "cross_margin"}
+        position.meta = {**(position.meta or {}), "mode": "margin"}
         db.commit()
     finally:
         db.close()
@@ -457,7 +457,7 @@ def test_momentum_executor_rotate_uses_margin_sell_then_leveraged_buy(client, mo
     source_position_id = seed_open_position(session_factory, symbol="SOLUSDC")
     db = session_factory()
     try:
-        db.get(Position, source_position_id).meta = {"mode": "cross_margin", "candidate_id": "momentum-SOLUSDC-open"}
+        db.get(Position, source_position_id).meta = {"mode": "margin", "candidate_id": "momentum-SOLUSDC-open"}
         db.commit()
     finally:
         db.close()

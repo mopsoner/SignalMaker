@@ -29,7 +29,7 @@ def _build_margin_position(symbol: str, quantity: str, current_price: float) -> 
         "signal_symbol": symbol,
         "execution_symbol": symbol,
         "side": "long",
-        "mode": "cross_margin",
+        "mode": "margin", "margin_account_mode": "cross",
         "margin_isolated": False,
         "quantity": quantity,
         "entry_price": current_price,
@@ -55,7 +55,7 @@ def main() -> int:
         "status": "pending",
         "test": "margin_tp_replay_smoke_test",
         "symbol": symbol,
-        "mode": "cross_margin",
+        "mode": "margin", "margin_account_mode": "cross",
         "dry_run": True,
         "checks": [],
     }

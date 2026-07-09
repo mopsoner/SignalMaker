@@ -122,7 +122,7 @@ def test_shared_entry_primitive_uses_implicit_kraken_leverage_without_borrow():
 
     result = manager.place_margin_market_entry(symbol="BTCUSDC", quote_amount=10.0, leverage=2)
 
-    assert result["mode"] == "cross_margin"
+    assert result["mode"] == "margin"
     assert result["leverage"] == "2"
     assert result["quantity"] == "2.00000000"
     assert result["entry_price"] == 10.0
