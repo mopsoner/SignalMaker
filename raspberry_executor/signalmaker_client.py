@@ -27,21 +27,22 @@ class SignalMakerClient:
             raise RuntimeError(f"Unexpected SignalMaker admin settings response: {type(data).__name__}")
         return data
 
-    def _candidate_params(self, limit: int, **extra) -> dict:
+    def _candidate_params(self, limit: int, use_cursor: bool = True, **extra) -> dict:
         params = {"limit": limit, **extra}
-        cursor = read_candidate_cursor()
-        if cursor:
-            params["since"] = cursor
-            params["created_after"] = cursor
-            params["updated_after"] = cursor
+        if use_cursor:
+            cursor = read_candidate_cursor()
+            if cursor:
+                params["since"] = cursor
+                params["created_after"] = cursor
+                params["updated_after"] = cursor
         return params
 
-    def _import_candidates(self, data: list[dict], limit: int) -> list[dict]:
-        cursor = read_candidate_cursor()
-        fresh = filter_candidates_after_cursor(data, cursor)
+    def _import_candidates(self, data: list[dict], limit: int, use_cursor: bool = True) -> list[dict]:
+        fresh = filter_candidates_after_cursor(data, read_candidate_cursor()) if use_cursor else data
         if fresh:
             upsert_remote_candidates(fresh)
-            advance_candidate_cursor(fresh)
+            if use_cursor:
+                advance_candidate_cursor(fresh)
         return list_local_candidates(limit=limit, include_executed=False)
 
     def get_open_candidates(self, limit: int = 10) -> list[dict]:
@@ -61,13 +62,14 @@ class SignalMakerClient:
         # compatibility but intentionally does not call the remote server.
         return {"status": "skipped", "reason": "local_execution_tracking_only", "candidate_id": candidate_id}
 
-    def get_recent_candidates(self, symbol: str | None = None, limit: int = 100) -> list[dict]:
+    def get_recent_candidates(self, symbol: str | None = None, limit: int = 100, use_cursor: bool = True) -> list[dict]:
         """Return local candidates refreshed from SignalMaker.
 
-        The Raspberry now uses a local cursor, so it does not keep importing the
-        same 50 old remote candidates after a local reset.
+        The Raspberry normally uses a local cursor, so it does not keep importing
+        the same 50 old remote candidates after a local reset. Repair lookups can
+        disable that cursor to fetch historical TP levels by symbol.
         """
-        params = self._candidate_params(limit)
+        params = self._candidate_params(limit, use_cursor=use_cursor)
         if symbol:
             params["symbol"] = symbol.upper()
 
@@ -88,7 +90,7 @@ class SignalMakerClient:
                 data = response.json()
                 if not isinstance(data, list):
                     raise RuntimeError(f"Unexpected SignalMaker candidates response: {type(data).__name__}")
-                rows = self._import_candidates(data, limit)
+                rows = self._import_candidates(data, limit, use_cursor=use_cursor)
                 if symbol:
                     wanted = symbol.upper()
                     rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
@@ -103,6 +105,16 @@ class SignalMakerClient:
             wanted = symbol.upper()
             rows = [row for row in rows if str(row.get("symbol") or "").upper() == wanted]
         return rows
+
+
+    def get_candidates_for_repair(self, symbol: str, limit: int = 100) -> list[dict]:
+        """Return candidates for TP repair without applying the local cursor.
+
+        Reconciliation may need a target_price from an older SignalMaker candidate
+        for a still-open position even when the normal execution cursor has already
+        advanced past that candidate.
+        """
+        return self.get_recent_candidates(symbol=symbol, limit=limit, use_cursor=False)
 
     def check_candle_ingest_endpoint(self, symbol: str | None = None, interval: str | None = None) -> dict:
         probe = {
