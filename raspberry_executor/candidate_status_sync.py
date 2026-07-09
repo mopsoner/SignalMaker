@@ -15,8 +15,64 @@ def sync_interval_seconds() -> int:
         return 30
 
 
+CONFIRMED_TP_STATUSES = {"NEW", "OPEN", "PARTIALLY_FILLED", "ACCEPTED", "PENDING", "PLACED"}
+
+
+def _truthy(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (dict, list, tuple, set)):
+        return bool(value)
+    return bool(value)
+
+
+def _positive_quantity(value) -> bool:
+    try:
+        return float(value or 0) > 0
+    except Exception:
+        return _truthy(value)
+
+
+def _tp_status(position: dict) -> str:
+    status = position.get("tp_exchange_status")
+    if not status and isinstance(position.get("tp_payload"), dict):
+        payload = position.get("tp_payload") or {}
+        status = payload.get("status") or payload.get("state") or payload.get("ordStatus")
+    return str(status or "").upper()
+
+
+def _tp_protection_state(position: dict) -> dict[str, bool | str]:
+    tp_order_id = position.get("tp_order_id")
+    tp_payload = position.get("tp_payload") if isinstance(position.get("tp_payload"), dict) else {}
+    local_tp_recorded = bool(
+        _truthy(tp_order_id)
+        and (
+            _truthy(position.get("execution_symbol"))
+            or _truthy(position.get("quantity"))
+            or _truthy(position.get("entry_order_id"))
+            or _truthy(tp_payload)
+            or _truthy(position.get("tp_exchange_status"))
+        )
+    )
+    status = _tp_status(position)
+    exchange_tp_confirmed = bool(local_tp_recorded and status in CONFIRMED_TP_STATUSES)
+    position_exists_on_asset = bool(
+        _truthy(position.get("execution_symbol") or position.get("signal_symbol"))
+        and (_positive_quantity(position.get("quantity")) or _truthy(position.get("entry_order_id")))
+    )
+    return {
+        "local_tp_recorded": local_tp_recorded,
+        "exchange_tp_confirmed": exchange_tp_confirmed,
+        "position_exists_on_asset": position_exists_on_asset,
+        "tp_exchange_status": status,
+    }
+
+
 def _protected(position: dict) -> bool:
-    return bool(position.get("tp_order_id"))
+    state = _tp_protection_state(position)
+    return bool(state["local_tp_recorded"] and state["exchange_tp_confirmed"] and state["position_exists_on_asset"])
 
 
 def _already_marked_local(state: StateStore, candidate_id: str, position: dict) -> bool:
@@ -26,14 +82,32 @@ def _already_marked_local(state: StateStore, candidate_id: str, position: dict) 
 
 
 def sync_executed_candidates() -> dict:
-    """Mark candidates with a take-profit order as executed in local Raspberry SQLite only."""
+    """Mark candidates with a confirmed take-profit order as executed in local Raspberry SQLite only."""
     state = StateStore()
     checked = protected = marked = skipped = errors = 0
 
     for candidate_id, position in list(state.open_positions().items()):
         checked += 1
         symbol = str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
+        protection_state = _tp_protection_state(position)
         if not _protected(position):
+            if protection_state["local_tp_recorded"] and not protection_state["exchange_tp_confirmed"]:
+                state.add_event(candidate_id, "candidate_tp_unconfirmed", {
+                    "symbol": symbol,
+                    "tp_order_id": position.get("tp_order_id"),
+                    "tp_exchange_status": protection_state["tp_exchange_status"],
+                    "local_tp_recorded": protection_state["local_tp_recorded"],
+                    "exchange_tp_confirmed": protection_state["exchange_tp_confirmed"],
+                    "position_exists_on_asset": protection_state["position_exists_on_asset"],
+                    "source": "candidate_status_sync",
+                })
+                logger.info(
+                    "candidate take-profit local record not exchange-confirmed candidate=%s symbol=%s tp_order_id=%s status=%s",
+                    candidate_id,
+                    symbol,
+                    position.get("tp_order_id"),
+                    protection_state["tp_exchange_status"],
+                )
             skipped += 1
             continue
         protected += 1
@@ -49,7 +123,10 @@ def sync_executed_candidates() -> dict:
             state.update_open_position(candidate_id, {
                 "local_candidate_status": "executed",
                 "local_candidate_executed_source": "candidate_status_sync",
-                "local_candidate_executed_reason": "position_has_take_profit",
+                "local_candidate_executed_reason": "position_has_confirmed_take_profit",
+                "local_tp_recorded": protection_state["local_tp_recorded"],
+                "exchange_tp_confirmed": protection_state["exchange_tp_confirmed"],
+                "position_exists_on_asset": protection_state["position_exists_on_asset"],
             }, event_type="candidate_marked_executed_local")
             logger.info("candidate marked executed locally after take-profit placement candidate=%s symbol=%s", candidate_id, symbol)
             marked += 1
