@@ -1049,6 +1049,23 @@ def _position_symbol(position: dict[str, Any] | None) -> str:
     return str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
 
 
+def _target_asset_symbol(target_asset: Any) -> str:
+    if isinstance(target_asset, dict):
+        return str(target_asset.get("buy_symbol") or target_asset.get("symbol") or target_asset.get("target_symbol") or "").upper()
+    return str(target_asset or "").upper()
+
+
+def _decision_expected_symbol(decision: dict[str, Any]) -> str:
+    """Resolve the momentum target from the central decision contract."""
+    return str(
+        decision.get("buy_symbol")
+        or decision.get("symbol")
+        or decision.get("target_symbol")
+        or _target_asset_symbol(decision.get("target_asset"))
+        or ""
+    ).upper()
+
+
 def _decision_targets_held_symbol(decision: dict[str, Any], held_symbol: str) -> bool:
     held_symbol = held_symbol.upper()
     sell_symbol = str(decision.get("sell_symbol") or "").upper()
@@ -1129,6 +1146,35 @@ def _rotation_order_sequence(sell_symbol: str | None, buy_symbol: str | None) ->
     return sequence
 
 
+def _buy_with_momentum_cadence(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, decision: dict[str, Any], *, exclude: set[str] | None = None) -> str:
+    cadence = _momentum_buy_cadence_status(state)
+    decision.setdefault("due_now", cadence["due_now"])
+    decision.setdefault("next_check_at", cadence["next_check_at"])
+    if not cadence["due_now"]:
+        state.add_event("momentum-decision", "momentum_decision_cadence_wait", {"cadence": cadence, "decision": decision})
+        return f"wait:momentum_cadence:next_check_at={cadence['next_check_at']}"
+    _mark_momentum_buy_cadence_checked(state, decision, cadence)
+    return buy_best_available(settings, kraken, rules, state, decision, exclude=exclude)
+
+
+def _rotate_momentum_position(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, held_symbol: str, buy_symbol: str, decision: dict[str, Any]) -> str:
+    rotation_decision = {
+        **decision,
+        "action": "ROTATE",
+        "raw_action": decision.get("raw_action") or decision.get("action") or "BUY",
+        "sell_symbol": held_symbol,
+        "buy_symbol": buy_symbol,
+        "symbol": buy_symbol,
+        "target_symbol": decision.get("target_symbol") or buy_symbol,
+        "should_trade": True,
+        "order_sequence": _rotation_order_sequence(held_symbol, buy_symbol),
+    }
+    state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy_symbol, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
+    sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+    buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
+    return f"rotate:{sell_result}:{buy_result}"
+
+
 def execute_decision(decision: dict[str, Any]) -> str:
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
@@ -1144,35 +1190,32 @@ def execute_decision(decision: dict[str, Any]) -> str:
     sell = str(decision.get("sell_symbol") or "").upper()
     held_position = current_momentum_position(state)
     held_symbol = _position_symbol(held_position) or sell
+    expected_symbol = _decision_expected_symbol(decision)
 
     if not should_trade or action in {"WAIT", "HOLD"}:
+        if held_symbol and (not expected_symbol or expected_symbol == held_symbol):
+            return f"hold_existing_momentum_position:{held_symbol}"
+        if not held_symbol and expected_symbol:
+            buy_decision = {
+                **decision,
+                "action": "BUY",
+                "raw_action": decision.get("raw_action") or action,
+                "buy_symbol": expected_symbol,
+                "symbol": expected_symbol,
+                "target_symbol": decision.get("target_symbol") or expected_symbol,
+                "should_trade": True,
+            }
+            return _buy_with_momentum_cadence(settings, kraken, rules, state, buy_decision, exclude={sell})
+        if held_symbol and expected_symbol and expected_symbol != held_symbol:
+            return _rotate_momentum_position(settings, kraken, rules, state, held_symbol, expected_symbol, decision)
         return f"wait:{action}"
     if action == "BUY":
-        buy = str(decision.get("buy_symbol") or decision.get("symbol") or "").upper()
+        buy = expected_symbol
         if held_symbol and (not buy or buy == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
         if held_symbol and buy != held_symbol:
-            rotation_decision = {
-                **decision,
-                "action": "ROTATE",
-                "raw_action": decision.get("raw_action") or "BUY",
-                "sell_symbol": held_symbol,
-                "buy_symbol": buy,
-                "symbol": buy,
-                "order_sequence": _rotation_order_sequence(held_symbol, buy),
-            }
-            state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
-            sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
-            buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
-            return f"rotate:{sell_result}:{buy_result}"
-        cadence = _momentum_buy_cadence_status(state)
-        decision.setdefault("due_now", cadence["due_now"])
-        decision.setdefault("next_check_at", cadence["next_check_at"])
-        if not cadence["due_now"]:
-            state.add_event("momentum-decision", "momentum_decision_cadence_wait", {"cadence": cadence, "decision": decision})
-            return f"wait:momentum_cadence:next_check_at={cadence['next_check_at']}"
-        _mark_momentum_buy_cadence_checked(state, decision, cadence)
-        return buy_best_available(settings, kraken, rules, state, decision, exclude={sell})
+            return _rotate_momentum_position(settings, kraken, rules, state, held_symbol, buy, decision)
+        return _buy_with_momentum_cadence(settings, kraken, rules, state, decision, exclude={sell})
     if action == "SELL":
         if not _decision_targets_held_symbol(decision, held_symbol):
             return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
