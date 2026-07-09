@@ -95,7 +95,15 @@ def _is_momentum_position(candidate_id: str, position: dict) -> bool:
 
 def _is_margin_position(position: dict) -> bool:
     mode = str(position.get("mode") or "").lower()
-    return "margin" in mode
+    if mode == "spot":
+        return False
+    if "margin" in mode:
+        return True
+    if mode in {"cross", "isolated"}:
+        return True
+    if position.get("margin_isolated") is not None:
+        return True
+    return False
 
 
 def _is_isolated_position(position: dict) -> bool:
