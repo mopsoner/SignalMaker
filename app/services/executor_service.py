@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.order import Order
 from app.models.trade_candidate import TradeCandidate
 from app.schemas.momentum import SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS
 
@@ -437,6 +438,25 @@ class ExecutorService:
                 return {**base, 'status': 'error', 'reason': str(exc)}
         return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
 
+    def _take_profit_exchange_order_id(self, position, meta: dict) -> str | None:
+        direct = meta.get('tp_exchange_order_id') or meta.get('exchange_tp_order_id')
+        if direct:
+            return str(direct)
+        local_order_id = meta.get('tp_local_order_id') or meta.get('take_profit_local_order_id')
+        local_order = self.db.get(Order, local_order_id) if local_order_id else None
+        if local_order is None:
+            local_order = self.db.scalars(
+                select(Order)
+                .where(Order.position_id == position.position_id, Order.order_type == 'take_profit')
+                .order_by(Order.created_at.desc())
+                .limit(1)
+            ).first()
+        if local_order is None:
+            return None
+        local_meta = local_order.meta or {}
+        local_exchange_id = local_meta.get('exchange_order_id') or local_meta.get('tp_exchange_order_id') or local_meta.get('orderId')
+        return str(local_exchange_id) if local_exchange_id else None
+
     def reconcile_live_positions(self) -> dict:
         if not self._runtime_section('live').get('live_reconcile_enabled'):
             return {'enabled': False, 'checked': 0, 'closed': [], 'updated': []}
@@ -445,7 +465,8 @@ class ExecutorService:
         updated = []
         for position in self.positions.list_positions(limit=500, status='open'):
             meta = position.meta or {}
-            if meta.get('mode') != 'live':
+            supported_live_modes = {'live', 'cross_margin', 'isolated_margin', 'margin', 'spot'}
+            if str(meta.get('mode') or '').lower() not in supported_live_modes:
                 continue
             checked += 1
             symbol = position.symbol
@@ -458,8 +479,11 @@ class ExecutorService:
                 self.db.refresh(position)
                 updated.append({'position_id': position.position_id, 'mark_price': mark})
 
-                tp_exchange_id = meta.get('tp_exchange_order_id')
-                tp_status = self.kraken.get_order(symbol, tp_exchange_id) if tp_exchange_id else None
+                tp_exchange_id = self._take_profit_exchange_order_id(position, meta)
+                if not tp_exchange_id:
+                    updated.append({'position_id': position.position_id, 'reason': 'missing_take_profit_order'})
+                    continue
+                tp_status = self.kraken.get_order(symbol, tp_exchange_id)
 
                 if tp_status and str(tp_status.get('status', '')).upper() == 'FILLED':
                     fill_price = float(tp_status.get('price') or position.target_price or mark)
