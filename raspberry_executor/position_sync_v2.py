@@ -418,9 +418,18 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
     original_qty = _entry_executed_quantity(entry_payload, quantity)
 
     available = None
-    if kraken is not None and rules is not None:
-        available = _available_base_balance(kraken, margin_manager.margin, rules, symbol, use_margin=use_margin)
-    qty_ok, base_qty, qty_reason = _repair_quantity({**position, "quantity": original_qty}, available)
+    if kraken is not None and rules is not None and not use_margin:
+        available = _available_base_balance(
+            kraken,
+            margin_manager.margin,
+            rules,
+            symbol,
+            use_margin=use_margin,
+        )
+    qty_ok, base_qty, qty_reason = _repair_quantity(
+        {**position, "quantity": original_qty},
+        available,
+    )
     if not qty_ok:
         payload = {"symbol": symbol, "mode": position.get("mode"), "reason": qty_reason, "entry_order_id": position.get("entry_order_id"), "entry_payload": entry_payload, "available_base": available, "levels": levels}
         _mark_replay_skip(state, candidate_id, position, "tp_replay_skipped_quantity_unavailable", payload)
