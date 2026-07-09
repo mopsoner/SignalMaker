@@ -348,3 +348,83 @@ def test_executor_reconcile_uses_live_runtime_app_setting(db_session, monkeypatc
     service.positions.list_positions = lambda limit, status: []
 
     assert service.reconcile_live_positions() == {"enabled": True, "checked": 0, "closed": [], "updated": []}
+
+
+def test_reconcile_live_positions_checks_cross_margin_take_profit(db_session):
+    db_session.add(AppSetting(category="live", key="live_reconcile_enabled", value=True))
+    db_session.commit()
+    position = Position(
+        position_id="pos-cross-margin-tp",
+        symbol="BTCUSDC",
+        side="long",
+        status="open",
+        quantity=0.2,
+        entry_price=100.0,
+        mark_price=100.0,
+        target_price=120.0,
+        meta={"mode": "cross_margin", "tp_exchange_order_id": "margin-tp-3"},
+    )
+    db_session.add(position)
+    db_session.commit()
+
+    class FakeKraken:
+        def __init__(self):
+            self.get_order_calls = []
+
+        def current_price(self, symbol):
+            return 121.0
+
+        def get_order(self, symbol, order_id):
+            self.get_order_calls.append((symbol, order_id))
+            return {"status": "FILLED", "price": "120.0"}
+
+    service = ExecutorService(db_session)
+    fake_kraken = FakeKraken()
+    service.kraken = fake_kraken
+
+    result = service.reconcile_live_positions()
+
+    assert result["enabled"] is True
+    assert result["checked"] == 1
+    assert result["closed"] == [{"position_id": "pos-cross-margin-tp", "reason": "tp", "fill_price": 120.0}]
+    assert fake_kraken.get_order_calls == [("BTCUSDC", "margin-tp-3")]
+    db_session.refresh(position)
+    assert position.status == "closed"
+    assert position.unrealized_pnl == pytest.approx(4.0)
+
+
+def test_reconcile_live_positions_reports_missing_take_profit_for_margin(db_session):
+    db_session.add(AppSetting(category="live", key="live_reconcile_enabled", value=True))
+    db_session.commit()
+    position = Position(
+        position_id="pos-cross-margin-missing-tp",
+        symbol="ETHUSDC",
+        side="long",
+        status="open",
+        quantity=1.0,
+        entry_price=50.0,
+        mark_price=50.0,
+        target_price=60.0,
+        meta={"mode": "cross_margin"},
+    )
+    db_session.add(position)
+    db_session.commit()
+
+    class FakeKraken:
+        def current_price(self, symbol):
+            return 55.0
+
+        def get_order(self, symbol, order_id):
+            raise AssertionError("missing TP exchange order id should not query exchange")
+
+    service = ExecutorService(db_session)
+    service.kraken = FakeKraken()
+
+    result = service.reconcile_live_positions()
+
+    assert result["checked"] == 1
+    assert result["closed"] == []
+    assert {"position_id": "pos-cross-margin-missing-tp", "reason": "missing_take_profit_order"} in result["updated"]
+    db_session.refresh(position)
+    assert position.status == "open"
+    assert position.mark_price == 55.0
