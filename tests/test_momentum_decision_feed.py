@@ -627,10 +627,6 @@ def test_buy_best_available_uses_only_central_target_without_ranking_fallback(tm
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
 
-    def fail_fetch(limit):
-        raise AssertionError("ranking fallback must not be fetched")
-
-    monkeypatch.setattr("raspberry_executor.momentum_decision_feed.fetch_momentum_candidates", fail_fetch)
     state = StateStore()
 
     result = buy_best_available(settings(), FakeKraken(quote_balances=[20.0]), FakeRules(), state, {"decision_action": "BUY", "target_symbol": "ALLUSDC"})
@@ -669,7 +665,6 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
     balances = iter([0.0, 20.0])
     monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[next(balances)]))
     monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
-    monkeypatch.setattr(momentum_module, "fetch_momentum_candidates", lambda limit: [{"symbol": "ALLUSDC", "rank": 1, "momentum_score": 10, "rsi_1h": 50}])
 
     decision = {"action": "BUY", "should_trade": True, "buy_symbol": "ALLUSDC", "symbol": "ALLUSDC"}
 
