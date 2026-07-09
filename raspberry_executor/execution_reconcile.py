@@ -44,14 +44,8 @@ def confirm_spot_long(kraken, rules, symbol: str, result: dict) -> tuple[bool, s
 
 
 def _margin_asset_rows(margin, symbol: str):
-    data = margin.isolated_account(symbol)
-    if margin.isolated:
-        rows = []
-        for row in data.get("assets") or []:
-            rows.append(row.get("baseAsset") or {})
-            rows.append(row.get("quoteAsset") or {})
-        return rows
-    return data.get("userAssets") or []
+    data = margin.margin_account(symbol)
+    return data.get("userAssets") or data.get("assets") or []
 
 
 def margin_asset_stats(margin, symbol: str, asset: str) -> dict:

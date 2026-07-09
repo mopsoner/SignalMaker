@@ -161,10 +161,10 @@ def test_run_smoke_exercises_signalmaker_candles_candidates_and_momentum(monkeyp
         def __init__(self, *args, **kwargs):
             pass
 
-        def ensure_isolated_account(self, symbol):
+        def ensure_margin_account(self, symbol):
             return {"status": "dry_run"}
 
-        def isolated_account(self, symbol):
+        def margin_account(self, symbol):
             return {"symbol": symbol}
 
         def borrow(self, *args):

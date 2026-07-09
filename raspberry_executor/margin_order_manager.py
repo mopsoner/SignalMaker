@@ -230,7 +230,7 @@ class MarginOrderManager:
         field, so this primitive intentionally does not call borrow/repay.
         """
         symbol = symbol.upper()
-        self.margin.ensure_isolated_account(symbol)
+        self.margin.ensure_margin_account(symbol)
         quote = self.quote_asset(symbol)
         effective_leverage = str(leverage if leverage is not None else (self.margin.leverage() if hasattr(self.margin, "leverage") else margin_multiplier()))
         requested_own_quote = float(quote_amount)
@@ -306,7 +306,7 @@ class MarginOrderManager:
 
     def open_short_with_margin_borrow_sell(self, *, symbol: str, quote_amount: float) -> dict:
         symbol = symbol.upper()
-        self.margin.ensure_isolated_account(symbol)
+        self.margin.ensure_margin_account(symbol)
         base = self.rules.base_asset(symbol)
         price = self.kraken.current_price(symbol)
         qty = self.rules.quantity_from_quote(symbol, float(quote_amount) * max(1.0, margin_multiplier()), price, market=True)
@@ -325,12 +325,12 @@ class MarginOrderManager:
         entry_price = float(confirm["entry_price"])
         return {"status": "sold", "symbol": symbol, "side": "short", "mode": "margin", "margin_account_mode": "cross", "margin_isolated": False, "base_asset": base, "borrow_base_amount": qty, "quantity": sold_qty, "entry_price": entry_price, "margin_multiplier": margin_multiplier(), "borrow_payload": borrow, "entry_order_id": sell_order_id, "entry_confirmed": confirm.get("entry_confirmed"), "entry_confirm_status": confirm.get("entry_confirm_status"), "entry_confirm_payload": confirm.get("entry_confirm_payload") or {}, "entry_payload": sell, "timestamp": int(time.time())}
 
-    def open_short_cross_margin(self, *, symbol: str, quote_amount: float) -> dict:
+    def open_short_margin(self, *, symbol: str, quote_amount: float) -> dict:
         return self.open_short_with_margin_borrow_sell(symbol=symbol, quote_amount=quote_amount)
 
     def sell_all_margin_base(self, *, symbol: str, quantity: float | str | None = None) -> dict:
         symbol = symbol.upper()
-        self.margin.ensure_isolated_account(symbol)
+        self.margin.ensure_margin_account(symbol)
         base = self.rules.base_asset(symbol)
         requested_qty = None if quantity is None else float(quantity)
         try:

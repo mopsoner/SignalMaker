@@ -184,8 +184,8 @@ def test_run_smoke_uses_env_credentials_for_private_checks(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def ensure_isolated_account(self, symbol): return {"status": "ok"}
-        def isolated_account(self, symbol): return {"assets": []}
+        def ensure_margin_account(self, symbol): return {"status": "ok"}
+        def margin_account(self, symbol): return {"assets": []}
         def borrow(self, *args): return {"status": "ok"}
         def repay(self, *args): return {"status": "ok"}
         def transfer_spot_to_margin(self, *args): return {"status": "ok"}
@@ -283,8 +283,8 @@ def test_missing_local_credentials_reports_when_admin_has_credentials(monkeypatc
 
     class FakeMargin:
         def __init__(self, *args, **kwargs): pass
-        def ensure_isolated_account(self, symbol): return {"status": "ok"}
-        def isolated_account(self, symbol): return {"assets": []}
+        def ensure_margin_account(self, symbol): return {"status": "ok"}
+        def margin_account(self, symbol): return {"assets": []}
         def borrow(self, *args): return {"status": "ok"}
         def repay(self, *args): return {"status": "ok"}
         def transfer_spot_to_margin(self, *args): return {"status": "ok"}

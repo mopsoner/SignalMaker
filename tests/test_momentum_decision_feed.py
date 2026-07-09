@@ -13,7 +13,7 @@ from raspberry_executor.state import StateStore
 @pytest.fixture(autouse=True)
 def default_momentum_env(monkeypatch):
     monkeypatch.setenv("MOMENTUM_DECISION_EXECUTE_ENABLED", "true")
-    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "false")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "false")
     monkeypatch.setenv("MARGIN_LEVERAGE_ATTEMPTS", "5,3")
     monkeypatch.delenv("MOMENTUM_DECISION_PATH", raising=False)
     monkeypatch.delenv("MOMENTUM_DECISION_METHOD", raising=False)
@@ -170,9 +170,9 @@ def test_buy_symbol_ignores_full_quote_env_and_keeps_order_quote(tmp_path, monke
     assert kraken.orders[0]["executedQty"] == "10.00000000"
 
 
-def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
+def test_buy_symbol_uses_margin_when_requested(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
@@ -180,16 +180,15 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
 
     class FakeMargin:
         dry_run = False
-        isolated = False
 
-        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+        def __init__(self, kraken, *, dry_run: bool) -> None:
             self.kraken = kraken
-            self.isolated = isolated
+            self.margin_account_mode_value = "cross"
             self.dry_run = dry_run
             self.orders = []
 
-        def ensure_isolated_account(self, symbol: str) -> dict:
-            return {"status": "cross_margin"}
+        def ensure_margin_account(self, symbol: str) -> dict:
+            return {"status": "margin"}
 
         def margin_free_balance(self, symbol: str, asset: str) -> float:
             if asset == "USDC":
@@ -216,7 +215,7 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
 
     result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert result == "bought_cross_margin:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert result == "bought_margin:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert kraken.orders == []
     assert instances[0].orders[0]["type"] == "MARKET"
     position = state.open_positions()["momentum-ALLUSDC"]
@@ -226,9 +225,9 @@ def test_buy_symbol_uses_cross_margin_when_requested(tmp_path, monkeypatch):
     assert position["notional_used"] == 10.0
 
 
-def test_cross_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_path, monkeypatch):
+def test_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
@@ -236,16 +235,15 @@ def test_cross_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_pa
 
     class FakeMargin:
         dry_run = False
-        isolated = False
 
-        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+        def __init__(self, kraken, *, dry_run: bool) -> None:
             self.kraken = kraken
-            self.isolated = isolated
+            self.margin_account_mode_value = "cross"
             self.dry_run = dry_run
             self.orders = []
 
-        def ensure_isolated_account(self, symbol: str) -> dict:
-            return {"status": "cross_margin"}
+        def ensure_margin_account(self, symbol: str) -> dict:
+            return {"status": "margin"}
 
         def margin_free_balance(self, symbol: str, asset: str) -> float:
             if asset == "USDC":
@@ -272,12 +270,12 @@ def test_cross_margin_buy_uses_available_quote_when_less_than_order_quote(tmp_pa
 
     result = buy_symbol(settings(), kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert result == "bought_cross_margin:ALLUSDC:qty=7.00000000:notional=7.0000"
+    assert result == "bought_margin:ALLUSDC:qty=7.00000000:notional=7.0000"
     assert instances[0].orders[0]["quantity"] == "7.00000000"
     assert state.open_positions()["momentum-ALLUSDC"]["notional_used"] == 7.0
 
 
-def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monkeypatch):
+def test_sell_symbol_uses_margin_for_margin_position(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
@@ -286,18 +284,17 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
 
     class FakeMargin:
         dry_run = False
-        isolated = False
 
-        def __init__(self, kraken, *, isolated: bool, dry_run: bool) -> None:
+        def __init__(self, kraken, *, dry_run: bool) -> None:
             self.kraken = kraken
-            self.isolated = isolated
+            self.margin_account_mode_value = "cross"
             self.dry_run = dry_run
             self.base_balance = 10.0
             self.quote_balance = 0.0
             self.orders = []
 
-        def ensure_isolated_account(self, symbol: str) -> dict:
-            return {"status": "cross_margin"}
+        def ensure_margin_account(self, symbol: str) -> dict:
+            return {"status": "margin"}
 
         def margin_free_balance(self, symbol: str, asset: str) -> float:
             if asset == "USDC":
@@ -325,7 +322,7 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
 
     result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "ROTATE"})
 
-    assert result.startswith("sell_confirmed_cross_margin:BANKUSDC"), result
+    assert result.startswith("sell_confirmed_margin:BANKUSDC"), result
     assert kraken.orders == []
     assert instances[0].orders[0]["side"] == "SELL"
     assert state.open_positions() == {}
@@ -334,7 +331,7 @@ def test_sell_symbol_uses_cross_margin_for_cross_margin_position(tmp_path, monke
     assert sold_event["payload"]["mode"] == "margin"
 
 
-def test_rotate_sells_cross_margin_position_before_restarting_buy_pattern(tmp_path, monkeypatch):
+def test_rotate_sells_margin_position_before_restarting_buy_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
@@ -346,20 +343,20 @@ def test_rotate_sells_cross_margin_position_before_restarting_buy_pattern(tmp_pa
     monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
 
     def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
-        calls.append(("sell", symbol, bool(decision.get("force_cross_margin")), list(store.open_positions())))
+        calls.append(("sell", symbol, bool(decision.get("force_margin")), list(store.open_positions())))
         store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
-        return "sell_confirmed_cross_margin:BANKUSDC:remaining_value=0.0000:quote=25.0000"
+        return "sell_confirmed_margin:BANKUSDC:remaining_value=0.0000:quote=25.0000"
 
     def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
-        calls.append(("buy", decision.get("buy_symbol"), bool(decision.get("force_cross_margin")), list(store.open_positions())))
-        return "fallback_buy:ALLUSDC:bought_cross_margin:ALLUSDC:qty=25.00000000:notional=25.0000"
+        calls.append(("buy", decision.get("buy_symbol"), bool(decision.get("force_margin")), list(store.open_positions())))
+        return "fallback_buy:ALLUSDC:bought_margin:ALLUSDC:qty=25.00000000:notional=25.0000"
 
     monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
     monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
 
     result = momentum_module.execute_decision({"action": "ROTATE", "should_trade": True, "symbol": "BANKUSDC", "sell_symbol": "BANKUSDC", "buy_symbol": "ALLUSDC"})
 
-    assert result.startswith("rotate:sell_confirmed_cross_margin:BANKUSDC"), result
+    assert result.startswith("rotate:sell_confirmed_margin:BANKUSDC"), result
     assert calls == [
         ("sell", "BANKUSDC", False, ["momentum-BANKUSDC"]),
         ("buy", "ALLUSDC", False, []),
@@ -682,7 +679,7 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
 
 def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
-    monkeypatch.setenv("MOMENTUM_DECISION_USE_CROSS_MARGIN", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
     monkeypatch.setenv("MOMENTUM_DECISION_BUY_BALANCE_RATIO", "1")
     monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
@@ -691,17 +688,16 @@ def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_
 
     class FakeMargin:
         dry_run = False
-        isolated = False
 
-        def __init__(self, kraken, *, isolated: bool, dry_run: bool, leverage=None) -> None:
+        def __init__(self, kraken, *, dry_run: bool, leverage=None) -> None:
             self.leverage_value = leverage
             self.dry_run = dry_run
 
         def leverage(self):
             return str(self.leverage_value)
 
-        def ensure_isolated_account(self, symbol: str) -> dict:
-            return {"status": "cross_margin"}
+        def ensure_margin_account(self, symbol: str) -> dict:
+            return {"status": "margin"}
 
         def margin_free_balance(self, symbol: str, asset: str) -> float:
             return 10.0

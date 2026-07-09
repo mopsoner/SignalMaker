@@ -228,7 +228,7 @@ def _last_recorded_buy_without_later_sell(state: StateStore) -> str:
             sold_symbols.add(sell_symbol)
 
         buy_symbol = _event_payload_buy_symbol(payload)
-        buy_confirmed = execution_result.startswith(("bought:", "bought_cross_margin:", "already_have:")) or (
+        buy_confirmed = execution_result.startswith(("bought:", "bought_margin:", "already_have:")) or (
             execution_result.startswith("rotate:") and ":bought" in execution_result
         )
         if buy_confirmed and buy_symbol and buy_symbol not in sold_symbols and not fallback_decision_buy:
@@ -354,8 +354,11 @@ def _safe_quote_notional(settings, kraken: KrakenClient, quote: str, desired: fl
     return min(desired, usable), free_quote
 
 
-def _explicit_cross_margin_requested() -> bool:
-    explicit = _env("MOMENTUM_DECISION_USE_CROSS_MARGIN")
+def _explicit_margin_requested() -> bool:
+    explicit = _env("MOMENTUM_DECISION_USE_MARGIN")
+    if explicit is None:
+        # Compatibility boundary for older environment names; active routing is normalized to margin.
+        explicit = _env("MOMENTUM_DECISION_USE_CROSS_MARGIN")
     if explicit is not None:
         return _bool(explicit, default=False)
     configured_mode = _env("EXECUTION_MODE") or _env("MARGIN_ACCOUNT_MODE")
@@ -364,23 +367,19 @@ def _explicit_cross_margin_requested() -> bool:
     return margin_enabled() and execution_mode() == "margin"
 
 
-def _is_cross_margin_position(position: dict[str, Any] | None) -> bool:
+def _is_margin_position(position: dict[str, Any] | None) -> bool:
     if not position:
         return False
     mode = str(position.get("mode") or "").lower()
-    if mode in {"margin", "cross", "cross_margin", "isolated", "isolated_margin"}:
-        return True
-    if position.get("margin_isolated") is False and mode == "margin":
-        return True
-    return False
+    return mode == "margin"
 
 
-def _cross_margin_stack(settings):
+def _margin_stack(settings):
     if hasattr(settings, "exchange"):
-        return create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
+        return create_margin_exchange(settings, dry_run=margin_dry_run())
     kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     rules = KrakenSymbolRules(settings.kraken_base_url)
-    margin = MarginClient(kraken, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    margin = MarginClient(kraken, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
     return kraken, margin, rules
 
 
@@ -474,7 +473,7 @@ def _place_confirmed_spot_market_entry(*, kraken: KrakenClient, rules: KrakenSym
         "entry_confirm_payload": confirm.get("entry_confirm_payload") or {},
     }
 
-def _buy_symbol_cross_margin(
+def _buy_symbol_margin(
     settings,
     kraken: KrakenClient,
     rules: KrakenSymbolRules,
@@ -487,7 +486,7 @@ def _buy_symbol_cross_margin(
     leverage: float | int | None = None,
 ) -> str:
     cid = _candidate_id(symbol)
-    margin_kwargs = {"isolated": False, "dry_run": getattr(settings, "dry_run", False) or margin_dry_run()}
+    margin_kwargs = {"dry_run": getattr(settings, "dry_run", False) or margin_dry_run()}
     if leverage is not None:
         margin_kwargs["leverage"] = leverage
     effective_leverage = leverage
@@ -524,7 +523,7 @@ def _buy_symbol_cross_margin(
         "borrow_payload": entry.get("implicit_leverage_payload") or {}, "borrow_error": None, "notional_used": total_quote, "own_quote_amount": entry.get("own_quote_amount"), "borrow_quote_amount": entry.get("leverage_notional"), "quote_asset": quote, "leverage": entry.get("leverage"), "confirmed_base_balance": acquired,
     })
     state.add_event(cid, "momentum_bought", {"symbol": symbol, "quantity": qty, "price": fill_price, "notional_used": total_quote, "quote": quote, "confirmed_base_balance": acquired, "order": order, "implicit_leverage_payload": entry.get("implicit_leverage_payload") or {}, "decision": decision, "mode": "margin", "margin_account_mode": "cross", "leverage": entry.get("leverage")})
-    return f"bought_cross_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
+    return f"bought_margin:{symbol}:qty={qty}:notional={total_quote:.4f}"
 
 
 def _buy_symbol_spot(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], quote: str, *, use_available_quote: bool = True) -> str:
@@ -590,16 +589,16 @@ def _margin_wallet_value(margin: MarginClient, rules: KrakenSymbolRules, kraken:
     return base, qty, price, qty * price
 
 
-def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
+def _sell_symbol_margin(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
     settings = load_settings()
     quote = _quote_asset(symbol, settings.quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
     if hasattr(settings, "exchange"):
-        kraken, margin, rules = _cross_margin_stack(settings)
+        kraken, margin, rules = _margin_stack(settings)
     else:
-        margin = MarginClient(kraken, isolated=False, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
-    margin.ensure_isolated_account(symbol)
+        margin = MarginClient(kraken, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+    margin.ensure_margin_account(symbol)
     base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
@@ -608,18 +607,18 @@ def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, st
 
     if qty <= 0 or value < dust_value:
         state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
-        return f"sell_confirmed_cross_margin:no_balance:{base}:value={value:.4f}"
+        return f"sell_confirmed_margin:no_balance:{base}:value={value:.4f}"
 
     for attempt in range(1, max_attempts + 1):
         before_quote = margin.margin_free_balance(symbol, quote) if not margin.dry_run else 0.0
         base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
         if qty <= 0 or value < dust_value:
             state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "attempts": attempt - 1, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
-            return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
+            return f"sell_confirmed_margin:{symbol}:remaining_value={value:.4f}"
 
         sell_qty = _market_sell_quantity(rules, symbol, qty * chunk_ratio, price) or _market_sell_quantity(rules, symbol, qty, price)
         if sell_qty is None:
-            message = f"sell_quantity_not_tradeable_cross_margin:{symbol}:qty={qty}:value={value:.4f}"
+            message = f"sell_quantity_not_tradeable_margin:{symbol}:qty={qty}:value={value:.4f}"
             state.add_event(cid, "momentum_sell_not_tradeable", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             if require_confirmed:
                 raise RuntimeError(message)
@@ -635,20 +634,20 @@ def _sell_symbol_cross_margin(kraken: KrakenClient, rules: KrakenSymbolRules, st
             if margin.dry_run or after_value < dust_value:
                 state.close_position(cid, "momentum_sell", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "details": details, "mode": "margin", "margin_account_mode": "cross"}, record_event=False)
                 state.add_event(cid, "momentum_sold", {"symbol": symbol, "base": base, "quantity": sell_qty, "order": order, "decision": decision, "remaining_qty": after_qty, "remaining_value": after_value, "quote_after": after_quote, "mode": "margin", "margin_account_mode": "cross"})
-                return f"sell_confirmed_cross_margin:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
+                return f"sell_confirmed_margin:{symbol}:remaining_value={after_value:.4f}:quote={after_quote:.4f}"
         except Exception as exc:
             details.append({"attempt": attempt, "symbol": symbol, "qty": sell_qty, "error": str(exc), "mode": "margin", "margin_account_mode": "cross"})
             state.add_event(cid, "momentum_sell_attempt_failed", {"symbol": symbol, "base": base, "qty": sell_qty, "attempt": attempt, "error": str(exc), "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
             if attempt >= max_attempts:
                 if require_confirmed:
-                    raise RuntimeError(f"sell_not_confirmed_cross_margin:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
-                return f"sell_failed_cross_margin:{symbol}:{exc}"
+                    raise RuntimeError(f"sell_not_confirmed_margin:{symbol}:attempts={max_attempts}:last_error={exc}") from exc
+                return f"sell_failed_margin:{symbol}:{exc}"
 
     base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     if value < dust_value:
         state.add_event(cid, "momentum_sell_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
-        return f"sell_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}"
-    message = f"sell_not_confirmed_cross_margin:{symbol}:remaining_value={value:.4f}:attempts={max_attempts}"
+        return f"sell_confirmed_margin:{symbol}:remaining_value={value:.4f}"
+    message = f"sell_not_confirmed_margin:{symbol}:remaining_value={value:.4f}:attempts={max_attempts}"
     state.add_event(cid, "momentum_sell_not_confirmed", {"symbol": symbol, "base": base, "remaining_qty": qty, "remaining_value": value, "details": details, "decision": decision, "mode": "margin", "margin_account_mode": "cross"})
     if require_confirmed:
         raise RuntimeError(message)
@@ -706,8 +705,8 @@ def sell_symbol(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStor
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
     position = state.open_positions().get(cid)
-    if _is_cross_margin_position(position):
-        return _sell_symbol_cross_margin(kraken, rules, state, symbol, decision, require_confirmed=require_confirmed)
+    if _is_margin_position(position):
+        return _sell_symbol_margin(kraken, rules, state, symbol, decision, require_confirmed=require_confirmed)
     quote = _quote_asset(symbol, load_settings().quote_assets) or str(decision.get("quote_asset") or "USDC").upper()
     base, qty, price, value = _wallet_value(kraken, rules, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
@@ -780,13 +779,14 @@ def buy_symbol(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: 
     if already:
         state.add_event(cid, "momentum_buy_skipped_already_have", {"symbol": symbol, "reason": reason, "decision": decision})
         return f"already_have:{reason}"
-    should_try_margin = bool(decision.get("force_cross_margin")) or _explicit_cross_margin_requested()
+    # Compatibility boundary for older decision payloads that still send force_cross_margin.
+    should_try_margin = bool(decision.get("force_margin")) or bool(decision.get("force_cross_margin")) or _explicit_margin_requested()
     if should_try_margin:
         margin_failures: list[dict[str, Any]] = []
         for leverage in margin_leverage_attempts():
             try:
-                result = _buy_symbol_cross_margin(settings, kraken, rules, state, symbol, decision, quote, use_available_quote=use_available_quote, leverage=leverage)
-                if result.startswith("bought_cross_margin:"):
+                result = _buy_symbol_margin(settings, kraken, rules, state, symbol, decision, quote, use_available_quote=use_available_quote, leverage=leverage)
+                if result.startswith("bought_margin:"):
                     return result
                 margin_failures.append({"leverage": leverage, "result": result})
             except Exception as exc:
@@ -802,7 +802,7 @@ def buy_symbol(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: 
 
 
 def _buy_result_ok(result: str) -> bool:
-    return str(result).startswith("bought:") or str(result).startswith("bought_cross_margin:") or str(result).startswith("already_have:")
+    return str(result).startswith("bought:") or str(result).startswith("bought_margin:") or str(result).startswith("already_have:")
 
 
 def _buy_result_balance_wait(result: str) -> bool:

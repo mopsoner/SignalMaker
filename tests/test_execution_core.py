@@ -46,8 +46,8 @@ class FakeMargin:
     def leverage(self) -> str:
         return self._leverage
 
-    def ensure_isolated_account(self, symbol: str) -> dict:
-        return {"status": "cross_margin", "symbol": symbol}
+    def ensure_margin_account(self, symbol: str) -> dict:
+        return {"status": "margin", "symbol": symbol}
 
     def borrow(self, *args, **kwargs):
         self.borrow_calls.append((args, kwargs))

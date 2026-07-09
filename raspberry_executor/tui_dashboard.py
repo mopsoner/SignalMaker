@@ -146,7 +146,7 @@ def position_strategy(candidate_id: str, row: dict) -> str:
     if str(candidate_id).startswith("momentum-") or isinstance(row.get("momentum_decision"), dict) or str(row.get("strategy") or "").lower() == "momentum_rotation":
         return "mom"
     mode = str(row.get("mode") or "").lower()
-    if "margin" in mode or mode in {"cross", "isolated"}:
+    if mode == "margin":
         return "mgn"
     return "sig"
 
