@@ -224,7 +224,7 @@ def test_momentum_executor_sell_closes_matching_open_position(client, monkeypatc
     assert result["decision_action"] == "SELL"
     assert result["symbol"] == "ALLUSDC"
     assert result["status"] == "executed"
-    assert result["reason"] == "momentum_position_closed"
+    assert result["reason"] == "position_closed"
     assert result["order_ids"]
     assert result["fill_ids"]
 
@@ -475,3 +475,56 @@ def test_momentum_executor_rotate_uses_margin_sell_then_leveraged_buy(client, mo
     assert manager.sell_calls == [{"symbol": "SOLUSDC", "quantity": 2.0}]
     assert [call["leverage"] for call in manager.open_calls] == [5, 3]
     assert result["reason"] == "momentum_rotated"
+
+
+def test_momentum_executor_hold_confirms_target_position_before_ready_gate(client, monkeypatch):
+    _, session_factory = client
+    position_id = seed_open_position(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "hold",
+            "symbol": "ALLUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "waiting",
+            "reason": "not_ready_but_target_is_held",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == "HOLD"
+    assert result["status"] == "skipped"
+    assert result["reason"] == "already_held"
+    assert result["symbol"] == "BTCUSDC"
+    assert result["target_symbol"] == "BTCUSDC"
+    assert result["position_id"] == position_id
+
+
+def test_momentum_executor_buy_still_requires_ready_status(client, monkeypatch):
+    _, session_factory = client
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "buy",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "waiting",
+            "reason": "signal_not_ready",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert_decision_contract(result)
+    assert result["decision_action"] == "BUY"
+    assert result["status"] == "skipped"
+    assert result["reason"] == "signal_not_ready"
+    assert result["order_ids"] == []
+    assert result["fill_ids"] == []
