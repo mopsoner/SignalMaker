@@ -24,6 +24,34 @@ class FakeSignalMakerClient:
         ]
 
 
+class FakeSignalMakerClientMultipleCandidates:
+    def __init__(self, base_url: str, gateway_id: str):
+        self.base_url = base_url
+        self.gateway_id = gateway_id
+
+    def get_recent_candidates(self, symbol: str, limit: int) -> list[dict]:
+        return [
+            {
+                "candidate_id": "older-candidate",
+                "remote_candidate_id": "remote-older",
+                "signal_fingerprint": "fingerprint-older",
+                "symbol": "BTCUSDT",
+                "entry_price": 100.0,
+                "target_price": 111.0,
+                "created_at": "2026-07-08T00:00:00Z",
+            },
+            {
+                "candidate_id": "newer-candidate",
+                "remote_candidate_id": "remote-newer",
+                "signal_fingerprint": "fingerprint-newer",
+                "symbol": "BTCUSDT",
+                "entry_price": 101.0,
+                "target_price": 130.0,
+                "created_at": "2026-07-09T00:00:00Z",
+            },
+        ]
+
+
 class FakeRules:
     def base_asset(self, symbol: str) -> str:
         return "BTC"
@@ -79,7 +107,7 @@ def test_latest_levels_accepts_take_profit_without_stop(monkeypatch):
 def test_tp_replay_uses_latest_take_profit_level_without_stop(tmp_path, monkeypatch):
     import raspberry_executor.position_sync_v2 as position_sync_v2
 
-    monkeypatch.setattr(position_sync_v2, "latest_levels_for_symbol", lambda symbol: {"target_price": 120.0, "stop_price": None, "source": "signalmaker_recent_candidate"})
+    monkeypatch.setattr(position_sync_v2, "levels_for_position", lambda position, symbol: {"target_price": 120.0, "stop_price": None, "source": "signalmaker_recent_candidate"})
     state = state_store(tmp_path, monkeypatch)
     candidate_id = "candidate-btc"
     state.add_open_position(candidate_id, {
@@ -105,3 +133,35 @@ def test_tp_replay_uses_latest_take_profit_level_without_stop(tmp_path, monkeypa
     assert position["target_price"] == 120.0
     assert position["tp_order_id"] == "tp-1"
     assert position["sl_order_id"] is None
+
+
+def test_tp_replay_uses_matched_older_candidate_instead_of_latest(tmp_path, monkeypatch):
+    monkeypatch.setattr(candidate_levels, "load_settings", lambda: SimpleNamespace(signalmaker_base_url="http://signalmaker.local", gateway_id="gateway-test"))
+    monkeypatch.setattr(candidate_levels, "SignalMakerClient", FakeSignalMakerClientMultipleCandidates)
+    state = state_store(tmp_path, monkeypatch)
+    candidate_id = "position-candidate"
+    state.add_open_position(candidate_id, {
+        "candidate_id": "older-candidate",
+        "remote_candidate_id": "remote-older",
+        "signal_fingerprint": "fingerprint-older",
+        "signal_symbol": "BTCUSDT",
+        "execution_symbol": "BTCUSDT",
+        "side": "long",
+        "quantity": "1.0",
+        "entry_price": 100.0,
+        "entry_order_id": "entry-1",
+        "entry_payload": {"orderId": "entry-1", "status": "FILLED", "executedQty": "1.0"},
+        "tp_order_id": None,
+        "exit_strategy": "take_profit_only",
+        "needs_tp_replay": True,
+    })
+    spot = FakeSpotManager()
+
+    result = _replay_take_profit(candidate_id, state.open_positions()[candidate_id], "BTCUSDT", spot, FakeMarginManager(), state, kraken=FakeKraken(), rules=FakeRules())
+
+    assert result == "replayed"
+    assert spot.calls == [{"symbol": "BTCUSDT", "quantity": 1.0, "target_price": 111.0}]
+    position = state.open_positions()[candidate_id]
+    assert position["target_price"] == 111.0
+    assert position["tp_replay_level_source"]["source"] == "signalmaker_matched_candidate"
+    assert position["tp_replay_level_source"]["source_candidate_id"] == "older-candidate"
