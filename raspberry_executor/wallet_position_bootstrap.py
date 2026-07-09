@@ -110,7 +110,7 @@ def _asset_values(asset_row):
     return free, locked, borrowed, interest, net, total, debt
 
 
-def _bootstrap_cross(client, state, existing, quote_assets, min_notional):
+def _bootstrap_margin(client, state, existing, quote_assets, min_notional):
     created = seen = skipped = 0
     account = client._signed("GET", "/sapi/v1/margin/account", {})
     for asset_row in account.get("userAssets") or []:
@@ -136,43 +136,7 @@ def _bootstrap_cross(client, state, existing, quote_assets, min_notional):
         if qty <= 0 or notional < min_notional:
             skipped += 1
             continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="margin", quantity=qty, price=price, source="kraken_cross_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
-            created += 1
-    return seen, created, skipped
-
-
-def _bootstrap_isolated(client, state, existing, quote_assets, min_notional):
-    created = seen = skipped = 0
-    account = client._signed("GET", "/sapi/v1/margin/isolated/account", {})
-    for row in account.get("assets") or []:
-        symbol = str(row.get("symbol") or "").upper()
-        base_row = row.get("baseAsset") or {}
-        quote_row = row.get("quoteAsset") or {}
-        base = str(base_row.get("asset") or "").upper()
-        quote = str(quote_row.get("asset") or "").upper()
-        if not symbol or not base or quote not in quote_assets:
-            continue
-        free, locked, borrowed, interest, net, total, debt = _asset_values(base_row)
-        if total <= 0 and debt <= 0 and abs(net) <= 0:
-            continue
-        seen += 1
-        try:
-            price = client.current_price(symbol)
-        except Exception:
-            skipped += 1
-            continue
-        if debt > 0 and net < 0:
-            qty = debt
-            side = "short"
-            notional = qty * price
-        else:
-            qty = max(total, net, 0.0)
-            side = "long"
-            notional = qty * price
-        if qty <= 0 or notional < min_notional:
-            skipped += 1
-            continue
-        if _add_position(state, existing, symbol=symbol, side=side, mode="margin", quantity=qty, price=price, source="kraken_isolated_margin_bootstrap", extra={"margin_asset": base, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
+        if _add_position(state, existing, symbol=symbol, side=side, mode="margin", quantity=qty, price=price, source="kraken_margin_bootstrap", extra={"margin_asset": asset, "margin_quote": quote, "margin_free": free, "margin_locked": locked, "margin_borrowed": borrowed, "margin_interest": interest, "margin_net_asset": net, "margin_notional": notional}):
             created += 1
     return seen, created, skipped
 
@@ -189,29 +153,13 @@ def bootstrap_wallet_positions(min_notional: float = 1.0):
     if not client.is_configured():
         return {"status": "missing_api_credentials", "mode": mode, "created": 0, "seen": 0, "skipped": 0}
 
-    if exchange == "kraken" and mode in {"cross", "isolated"}:
-        summary = {
-            "status": "skipped",
-            "mode": mode,
-            "reason": "kraken_margin_wallet_bootstrap_not_supported",
-            "created": 0,
-            "seen": 0,
-            "skipped": 0,
-        }
-        logger.info(
-            "wallet bootstrap skipped mode=%s reason=%s",
-            mode,
-            summary["reason"],
-        )
-        return summary
-
     try:
         if mode == "spot":
             seen, created, skipped = _bootstrap_spot(client, state, existing, quote_assets, min_notional)
-        elif mode == "isolated":
-            seen, created, skipped = _bootstrap_isolated(client, state, existing, quote_assets, min_notional)
+        elif mode == "margin":
+            seen, created, skipped = _bootstrap_margin(client, state, existing, quote_assets, min_notional)
         else:
-            seen, created, skipped = _bootstrap_cross(client, state, existing, quote_assets, min_notional)
+            return {"status": "skipped", "mode": mode, "reason": "unsupported_execution_mode", "created": 0, "seen": 0, "skipped": 0}
     except Exception as exc:
         logger.error("position bootstrap failed mode=%s error=%s", mode, str(exc))
         return {"status": "error", "mode": mode, "error": str(exc), "created": 0, "seen": 0, "skipped": 0}

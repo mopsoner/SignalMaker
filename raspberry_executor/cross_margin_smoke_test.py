@@ -26,7 +26,7 @@ def main() -> int:
 
     client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
     rules = KrakenSymbolRules(settings.kraken_base_url)
-    margin = MarginClient(client, isolated=False, dry_run=True)
+    margin = MarginClient(client, dry_run=True)
     manager = MarginOrderManager(client, margin, rules)
 
     result = {
@@ -80,9 +80,9 @@ def main() -> int:
 
     try:
         cross_account = client._signed("GET", "/sapi/v1/margin/account", {})
-        result["checks"].append(ok("cross_margin_account", borrow_enabled=cross_account.get("borrowEnabled"), trade_enabled=cross_account.get("tradeEnabled"), transfer_enabled=cross_account.get("transferEnabled"), margin_level=cross_account.get("marginLevel")))
+        result["checks"].append(ok("margin_account", borrow_enabled=cross_account.get("borrowEnabled"), trade_enabled=cross_account.get("tradeEnabled"), transfer_enabled=cross_account.get("transferEnabled"), margin_level=cross_account.get("marginLevel")))
     except Exception as exc:
-        result["checks"].append(fail("cross_margin_account", exc, note="API key may not have margin permission or margin account may not be enabled."))
+        result["checks"].append(fail("margin_account", exc, note="API key may not have margin permission or margin account may not be enabled."))
 
     try:
         max_borrow = client._signed("GET", "/sapi/v1/margin/maxBorrowable", {"asset": quote})
@@ -106,17 +106,17 @@ def main() -> int:
         current = client.current_price(symbol)
         qty = rules.quantity_from_quote(symbol, 20, current, market=True)
         order = margin.margin_order(symbol, "BUY", qty)
-        result["checks"].append(ok("dry_run_cross_margin_buy_payload", current_price=current, quantity=qty, payload=order))
+        result["checks"].append(ok("dry_run_margin_buy_payload", current_price=current, quantity=qty, payload=order))
     except Exception as exc:
-        result["checks"].append(fail("dry_run_cross_margin_buy_payload", exc))
+        result["checks"].append(fail("dry_run_margin_buy_payload", exc))
 
     try:
         current = client.current_price(symbol)
         qty = rules.quantity_from_quote(symbol, 20, current, market=False)
         oco = manager.create_margin_oco_sell(symbol=symbol, quantity=qty, target_price=current * 1.02, stop_price=current * 0.98)
-        result["checks"].append(ok("dry_run_cross_margin_oco_payload", payload=oco))
+        result["checks"].append(ok("dry_run_margin_oco_payload", payload=oco))
     except Exception as exc:
-        result["checks"].append(fail("dry_run_cross_margin_oco_payload", exc))
+        result["checks"].append(fail("dry_run_margin_oco_payload", exc))
 
     hard_fail_names = {"public_ping", "spot_symbol_info", "signed_spot_account"}
     hard_fail = any((not item.get("ok")) and item.get("name") in hard_fail_names for item in result["checks"])

@@ -38,19 +38,18 @@ def test_create_spot_exchange_rejects_unknown_exchange():
         create_spot_exchange(settings("unknown"))
 
 
-def test_create_margin_exchange_can_select_kraken_cross_margin_adapter():
-    client, margin, rules = create_margin_exchange(settings("kraken"), isolated=True, dry_run=False)
+def test_create_margin_exchange_uses_kraken_margin_adapter():
+    client, margin, rules = create_margin_exchange(settings("kraken"), dry_run=False)
 
     assert isinstance(client, KrakenClient)
     assert isinstance(margin, KrakenMarginClient)
     assert isinstance(rules, KrakenSymbolRules)
-    assert margin.isolated is False
-    assert margin.requested_isolated is True
-    assert margin.ensure_isolated_account("BTCUSDC")["status"] == "cross_margin_required"
+    assert margin.margin_account_mode() == "cross"
+    assert margin.ensure_margin_account("BTCUSDC")["margin_account_mode"] == "cross"
 
 
 def test_kraken_margin_borrow_and_repay_are_recorded_as_implicit_operations():
-    client, margin, _ = create_margin_exchange(settings("kraken"), isolated=False, dry_run=True)
+    client, margin, _ = create_margin_exchange(settings("kraken"), dry_run=True)
 
     borrow = margin.borrow("BTCUSDC", "USDC", "10")
     repay = margin.repay("BTCUSDC", "USDC", "10")

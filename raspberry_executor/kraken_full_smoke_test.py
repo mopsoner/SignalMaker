@@ -484,7 +484,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
 
     client = KrakenClient(base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
     rules = KrakenSymbolRules(base_url, quote_assets=quote_assets)
-    margin = KrakenMarginClient(client, isolated=False, dry_run=True)
+    margin = KrakenMarginClient(client, dry_run=True)
     result = SmokeResult(
         base_url=base_url,
         symbol=symbol,
@@ -627,16 +627,16 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         target = rules.normalize_exit_price(symbol, price * 1.02)
         stop = rules.normalize_exit_price(symbol, price * 0.98)
         quote_asset = rules.symbol_info(symbol).get("quoteAsset", "USD")
-        margin_x5 = KrakenMarginClient(client, isolated=False, dry_run=True, leverage=5)
-        margin_x3 = KrakenMarginClient(client, isolated=False, dry_run=True, leverage=3)
+        margin_x5 = KrakenMarginClient(client, dry_run=True, leverage=5)
+        margin_x3 = KrakenMarginClient(client, dry_run=True, leverage=3)
         entry_x5 = margin_x5.margin_order(symbol, "BUY", qty, "MARKET")
         tp_x5 = margin_x5.margin_order(symbol, "SELL", qty, "LIMIT", price=target)
         sl_x5 = margin_x5.margin_order(symbol, "SELL", qty, "STOP_LOSS", price=stop)
         reduce_only_close = margin_x5.margin_order(symbol, "SELL", qty, "MARKET")
         fallback_spot = client.place_market_entry(symbol, "long", qty)
         return {
-            "ensure_account": margin_x5.ensure_isolated_account(symbol),
-            "account": margin_x5.isolated_account(symbol),
+            "ensure_account": margin_x5.ensure_margin_account(symbol),
+            "account": margin_x5.margin_account(symbol),
             "borrow": margin_x5.borrow(symbol, quote_asset, str(args.order_quote)),
             "repay": margin_x5.repay(symbol, quote_asset, str(args.order_quote)),
             "transfer": margin_x5.transfer_spot_to_margin(symbol, quote_asset, str(args.order_quote)),

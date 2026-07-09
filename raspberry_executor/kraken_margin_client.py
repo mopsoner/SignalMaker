@@ -30,16 +30,15 @@ class KrakenMarginClient:
     records those operations as implicit borrow/repay payloads.
     """
 
-    def __init__(self, kraken: KrakenClient, *, isolated: bool = False, dry_run: bool = True, leverage: float | str | None = None) -> None:
+    def __init__(self, kraken: KrakenClient, *, dry_run: bool = True, leverage: float | str | None = None) -> None:
         self.kraken = kraken  # Compatibility with existing manager attribute names.
-        self.kraken = kraken
-        self.isolated = False
-        self.requested_isolated = isolated
+        self.margin_account_mode_value = "cross"
+        self.margin_isolated = False
         self.dry_run = dry_run or kraken.dry_run
         self.leverage_override = leverage
 
-    def is_isolated_value(self) -> str:
-        return "FALSE"
+    def margin_account_mode(self) -> str:
+        return "cross"
 
     @staticmethod
     def _format_leverage(leverage: float | str) -> str:
@@ -52,12 +51,10 @@ class KrakenMarginClient:
         configured = self.leverage_override if self.leverage_override is not None else margin_multiplier()
         return self._format_leverage(configured)
 
-    def ensure_isolated_account(self, symbol: str) -> dict:
-        if self.requested_isolated:
-            return {"status": "cross_margin_required", "exchange": "kraken", "symbol": symbol.upper(), "message": "Kraken Spot margin is cross-margin; isolated margin is not available."}
-        return {"status": "cross_margin", "exchange": "kraken", "symbol": symbol.upper()}
+    def ensure_margin_account(self, symbol: str) -> dict:
+        return {"status": "margin", "exchange": "kraken", "symbol": symbol.upper(), "margin_account_mode": "cross", "margin_isolated": False}
 
-    def isolated_account(self, symbol: str) -> dict:
+    def margin_account(self, symbol: str) -> dict:
         if self.dry_run:
             return {"assets": [], "exchange": "kraken", "mode": "margin", "margin_account_mode": "cross"}
         return {"balances": self.kraken.account(), "exchange": "kraken", "mode": "margin", "margin_account_mode": "cross", "symbol": symbol.upper()}

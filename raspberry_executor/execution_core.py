@@ -68,7 +68,7 @@ def place_leveraged_market_entry(
 ) -> dict:
     """Open a Kraken spot-margin BUY MARKET entry without explicit borrow."""
     symbol = symbol.upper()
-    margin.ensure_isolated_account(symbol)
+    margin.ensure_margin_account(symbol)
     quote = quote_asset_for_symbol(rules, symbol)
     effective_leverage = str(leverage if leverage is not None else (margin.leverage() if hasattr(margin, "leverage") else margin_multiplier()))
     requested_own_quote = float(quote_amount)

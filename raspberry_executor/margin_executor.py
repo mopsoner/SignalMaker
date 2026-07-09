@@ -8,7 +8,7 @@ from raspberry_executor.exchange_factory import create_margin_exchange
 from raspberry_executor.local_candidate_store import mark_candidate_executed, upsert_remote_candidates
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_order_manager import MarginOrderManager
-from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, margin_isolated, shorts_enabled
+from raspberry_executor.margin_settings import margin_dry_run, margin_enabled, shorts_enabled
 from raspberry_executor.pending_trade_queue import add_pending, bump_pending, list_pending, remove_pending
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
@@ -179,7 +179,7 @@ def queue_margin_token_limit(state: StateStore, candidate_id: str, candidate: di
 def process_candidate(settings, kraken, rules, manager: MarginOrderManager, spot_manager: SpotOrderManager, state: StateStore, guard: RiskGuard, candidate: dict, *, from_queue: bool = False) -> str:
     """Compatibility wrapper around the unified classic candidate executor.
 
-    Classic long candidates now use one path: validate once, try cross-margin
+    Classic long candidates now use one path: validate once, try margin
     BUY MARKET with leverage, fall back to spot BUY MARKET, then place the
     matching take-profit SELL LIMIT for the mode actually opened.
     """
@@ -221,13 +221,13 @@ def main() -> None:
     if not margin_enabled():
         logger.warning("margin executor started while MARGIN_MODE_ENABLED is false")
     signalmaker = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    kraken, margin, rules = create_margin_exchange(settings, isolated=margin_isolated(), dry_run=margin_dry_run())
+    kraken, margin, rules = create_margin_exchange(settings, dry_run=margin_dry_run())
     manager = MarginOrderManager(kraken, margin, rules)
     spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     guard = RiskGuard(settings.quote_assets, settings.max_candidate_age_seconds)
     limit = candidate_fetch_limit()
-    logger.info("Raspberry margin executor started exchange=%s dry_run=%s isolated=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=enabled", getattr(kraken, "exchange_name", "kraken"), margin.dry_run, margin.isolated, shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
+    logger.info("Raspberry margin executor started exchange=%s dry_run=%s margin_account_mode=%s shorts_enabled=%s signal_fingerprint_dedupe=%s token_retry_seconds=%s token_max_attempts=%s spot_fallback=enabled", getattr(kraken, "exchange_name", "kraken"), margin.dry_run, margin.margin_account_mode(), shorts_enabled(), signal_fingerprint_enabled(), token_limit_retry_seconds(), token_limit_max_attempts())
     while True:
         try:
             candidates = signalmaker.get_open_candidates(limit=limit)

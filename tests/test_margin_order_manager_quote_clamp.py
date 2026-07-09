@@ -25,7 +25,7 @@ class FakeMargin:
         self.transfers = []
         self.orders = []
 
-    def ensure_isolated_account(self, symbol: str) -> dict:
+    def ensure_margin_account(self, symbol: str) -> dict:
         return {"status": "already_enabled", "symbol": symbol}
 
     def margin_free_balance(self, symbol: str, asset: str) -> float:

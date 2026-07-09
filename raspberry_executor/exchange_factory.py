@@ -28,11 +28,11 @@ def create_spot_exchange(settings: Settings) -> tuple[Any, Any]:
     raise RuntimeError(f"unsupported_execution_exchange:{name}")
 
 
-def create_margin_exchange(settings: Settings, *, isolated: bool, dry_run: bool) -> tuple[Any, Any, Any]:
+def create_margin_exchange(settings: Settings, *, dry_run: bool) -> tuple[Any, Any, Any]:
     """Create the configured margin execution client, margin adapter and rules.
 
-    Kraken keeps the existing explicit borrow/repay implementation. Kraken uses
-    Kraken Spot margin semantics: cross-margin only, implicit borrow on leveraged
+    Kraken uses
+    Kraken Spot margin semantics: margin only, implicit borrow on leveraged
     AddOrder, and implicit repay when the position is closed/settled.
     """
     name = exchange_name(settings)
@@ -40,5 +40,5 @@ def create_margin_exchange(settings: Settings, *, isolated: bool, dry_run: bool)
     if name in {"kraken", "kraken_pro"}:
         client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=effective_dry_run)
         rules = KrakenSymbolRules(settings.kraken_base_url, quote_assets=settings.quote_assets)
-        return client, KrakenMarginClient(client, isolated=isolated, dry_run=effective_dry_run), rules
+        return client, KrakenMarginClient(client, dry_run=effective_dry_run), rules
     raise RuntimeError(f"unsupported_execution_exchange:{name}")

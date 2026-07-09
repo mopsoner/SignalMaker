@@ -69,8 +69,8 @@ class FakeMomentumKraken(FakeKraken):
 class FakeMomentumMargin(NoBorrowKrakenMargin):
     instances: list["FakeMomentumMargin"] = []
 
-    def __init__(self, kraken, *, isolated: bool, dry_run: bool, leverage=None) -> None:
-        super().__init__(kraken, isolated=isolated, dry_run=True, leverage=leverage)
+    def __init__(self, kraken, *, dry_run: bool, leverage=None) -> None:
+        super().__init__(kraken, dry_run=True, leverage=leverage)
         self.dry_run = True
         FakeMomentumMargin.instances.append(self)
 
@@ -148,12 +148,12 @@ def test_candidate_and_momentum_reuse_same_margin_entry_primitive(tmp_path, monk
     monkeypatch.setattr(MarginOrderManager, "place_margin_market_entry", spy)
 
     kraken = FakeMomentumKraken()
-    candidate_manager = MarginOrderManager(kraken, FakeMomentumMargin(kraken, isolated=False, dry_run=True, leverage=2), FakeRules())
+    candidate_manager = MarginOrderManager(kraken, FakeMomentumMargin(kraken, dry_run=True, leverage=2), FakeRules())
     candidate_manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=10.0, target_price=12.0)
     result = buy_symbol(SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], exchange="kraken"), kraken, FakeRules(), StateStore(), "ETHUSDC", {"action": "BUY"})
 
     assert calls == ["BTCUSDC", "ETHUSDC"]
-    assert result.startswith("bought_cross_margin:ETHUSDC")
+    assert result.startswith("bought_margin:ETHUSDC")
 
 
 def test_confirmed_entry_payload_keeps_submitted_leverage_metadata():

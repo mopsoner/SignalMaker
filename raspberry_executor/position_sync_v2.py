@@ -92,22 +92,33 @@ def _is_momentum_position(candidate_id: str, position: dict) -> bool:
     return str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict) or strategy == "momentum_rotation"
 
 
+LEGACY_MARGIN_MODES = {"cross", "cross_margin", "isolated", "isolated_margin", "margin"}
+LEGACY_SPOT_MODES = {"spot", "cash"}
+
+
+def normalize_position_execution_mode(position: dict) -> dict:
+    """Normalize legacy persisted execution modes at the migration boundary."""
+    mode = str(position.get("mode") or "").strip().lower()
+    normalized = dict(position)
+    if mode in LEGACY_MARGIN_MODES:
+        normalized["mode"] = "margin"
+        normalized["margin_account_mode"] = "cross"
+        normalized["margin_isolated"] = False
+    elif mode in LEGACY_SPOT_MODES:
+        normalized["mode"] = "spot"
+        normalized.pop("margin_account_mode", None)
+        normalized.pop("margin_isolated", None)
+    return normalized
+
+
 def _is_margin_position(position: dict) -> bool:
     mode = str(position.get("mode") or "").lower()
     if mode == "spot":
         return False
     if mode == "margin":
         return True
-    if mode in {"cross", "cross_margin", "isolated", "isolated_margin"}:
-        return True
-    if position.get("margin_isolated") is not None:
-        return True
+    logger.warning("unknown_position_execution_mode mode=%s candidate=%s", mode, position.get("candidate_id"))
     return False
-
-
-def _is_isolated_position(position: dict) -> bool:
-    return False
-
 
 
 def momentum_balance_missing_grace_seconds() -> float:
@@ -378,6 +389,11 @@ def _place_take_profit(use_margin: bool, spot_manager, margin_manager, *, symbol
 
 
 def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=None, rules=None):
+    normalized_position = normalize_position_execution_mode(position)
+    if normalized_position != position:
+        updates = {k: normalized_position.get(k) for k in ("mode", "margin_account_mode", "margin_isolated") if normalized_position.get(k) != position.get(k)}
+        state.update_open_position(candidate_id, updates, event_type="position_execution_mode_normalized")
+        position = normalized_position
     if _is_replay_blocked(position):
         return "blocked"
     side = str(position.get("side") or "long").lower()
@@ -507,12 +523,17 @@ def _handle_filled_take_profit(candidate_id: str, position: dict, tp: dict, stat
 
 def sync_open_positions():
     settings = load_settings()
-    kraken, default_margin, rules = create_margin_exchange(settings, isolated=False, dry_run=margin_dry_run())
+    kraken, default_margin, rules = create_margin_exchange(settings, dry_run=margin_dry_run())
     spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     checked = closed = missing_tp = replayed_tp = attached_existing = replay_skipped = replay_blocked = ghost_removed = momentum_tracked = partial_filled = 0
 
     for candidate_id, position in list(state.open_positions().items()):
+        normalized_position = normalize_position_execution_mode(position)
+        if normalized_position != position:
+            updates = {k: normalized_position.get(k) for k in ("mode", "margin_account_mode", "margin_isolated") if normalized_position.get(k) != position.get(k)}
+            state.update_open_position(candidate_id, updates, event_type="position_execution_mode_normalized")
+            position = normalized_position
         checked += 1
         symbol = str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
         if not symbol:

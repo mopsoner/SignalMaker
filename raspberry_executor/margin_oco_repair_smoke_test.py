@@ -67,7 +67,7 @@ def main() -> int:
             client = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=True)
             rules = KrakenSymbolRules(settings.kraken_base_url)
             spot_manager = SpotOrderManager(client, rules)
-            margin = MarginClient(client, isolated=False, dry_run=True)
+            margin = MarginClient(client, dry_run=True)
             margin_manager = MarginOrderManager(client, margin, rules)
             state = StateStore()
 
@@ -96,9 +96,9 @@ def main() -> int:
                 position = _build_margin_position(symbol, quantity, current)
                 candidate_id = position["candidate_id"]
                 state.add_open_position(candidate_id, position)
-                result["checks"].append(ok("seed_cross_margin_position_without_tp", candidate_id=candidate_id, quantity=quantity, current_price=current))
+                result["checks"].append(ok("seed_margin_position_without_tp", candidate_id=candidate_id, quantity=quantity, current_price=current))
             except Exception as exc:
-                result["checks"].append(fail("seed_cross_margin_position_without_tp", exc))
+                result["checks"].append(fail("seed_margin_position_without_tp", exc))
                 result["status"] = "failed"
                 print(json.dumps(result, indent=2))
                 return 1
