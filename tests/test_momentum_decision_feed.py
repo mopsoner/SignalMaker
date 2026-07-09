@@ -481,6 +481,77 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
     ]
 
 
+def test_execute_hold_initializes_missing_momentum_position_from_target_asset(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "0")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    state = StateStore()
+    calls = []
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
+        calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"]))
+        return "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+
+    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
+
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert calls == [("BUY", "ALLUSDC", "ALLUSDC", "ALLUSDC")]
+    assert [event["event_type"] for event in state.events()] == ["momentum_decision_cadence_checked"]
+
+
+def test_execute_wait_rotates_when_target_differs_from_held_momentum_position(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"candidate_id": "momentum-BANKUSDC", "execution_symbol": "BANKUSDC", "signal_symbol": "BANKUSDC", "side": "long", "quantity": "10", "entry_price": 1.2})
+    calls = []
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[0.0], base_balance=0.0))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
+        calls.append(("sell", symbol, decision["action"], decision["buy_symbol"]))
+        store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
+        return "sell_confirmed:BANKUSDC:remaining_value=0.0000:quote=25.0000"
+
+    def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
+        calls.append(("buy", decision["buy_symbol"], decision["action"], sorted(exclude or [])))
+        return "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
+
+    assert result.startswith("rotate:sell_confirmed:BANKUSDC"), result
+    assert calls == [
+        ("sell", "BANKUSDC", "ROTATE", "ALLUSDC"),
+        ("buy", "ALLUSDC", "ROTATE", ["BANKUSDC"]),
+    ]
+
+
+def test_execute_wait_holds_existing_momentum_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    state = StateStore()
+    state.add_open_position("momentum-ALLUSDC", {"candidate_id": "momentum-ALLUSDC", "execution_symbol": "ALLUSDC", "signal_symbol": "ALLUSDC", "side": "long", "quantity": "10", "entry_price": 1.0})
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0], base_balance=10.0))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
+
+    assert result == "hold_existing_momentum_position:ALLUSDC"
+
+
 def test_confirmed_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     state = StateStore()
