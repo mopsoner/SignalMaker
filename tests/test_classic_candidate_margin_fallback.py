@@ -86,6 +86,7 @@ def candidate(candidate_id: str = "cand-1") -> dict:
 
 def run_candidate(monkeypatch, margin_error: str, *, spot_free: float = 100.0, spot_fail: bool = False):
     monkeypatch.setattr(executor, "margin_enabled", lambda: True)
+    monkeypatch.setattr(executor, "margin_leverage_attempts", lambda: (5, 3))
     monkeypatch.setattr(executor, "_ensure_candidate_visible", lambda candidate: None)
     monkeypatch.setattr(executor, "_mark_remote_executed", lambda candidate_id: None)
     monkeypatch.setattr(executor, "remove_pending", lambda candidate_id: None)
@@ -118,8 +119,24 @@ def test_recoverable_margin_unavailable_falls_back_to_spot(monkeypatch):
     ]
 
 
-def test_margin_insufficient_balance_requires_spot_quote_before_fallback(monkeypatch):
+def test_margin_insufficient_balance_is_recoverable_but_requires_spot_fallback_possible(monkeypatch):
     result, state, spot = run_candidate(monkeypatch, "margin_insufficient_quote_balance", spot_free=0.0)
+
+    assert result == "error"
+    assert spot.calls == []
+    assert [event for _, event, _ in state.events_log] == [
+        "candidate_margin_attempt_failed",
+        "candidate_margin_attempt_failed",
+        "execution_error",
+    ]
+    first_attempt = state.events_log[0][2]
+    assert first_attempt["margin_recoverable"] is True
+    assert first_attempt["spot_fallback_possible"] is False
+    assert first_attempt["margin_error_reason"] == "margin_insufficient_balance"
+
+
+def test_invalid_margin_take_profit_is_not_spot_recoverable(monkeypatch):
+    result, state, spot = run_candidate(monkeypatch, "tp_error: EOrder:Invalid price")
 
     assert result == "error"
     assert spot.calls == []
@@ -127,6 +144,10 @@ def test_margin_insufficient_balance_requires_spot_quote_before_fallback(monkeyp
         "candidate_margin_attempt_failed",
         "execution_error",
     ]
+    first_attempt = state.events_log[0][2]
+    assert first_attempt["margin_recoverable"] is False
+    assert first_attempt["spot_fallback_possible"] is True
+    assert first_attempt["margin_error_reason"] == "invalid_take_profit"
 
 
 def test_recoverable_margin_spot_fallback_failure_is_explicit(monkeypatch):
@@ -166,6 +187,7 @@ class SequencedMarginManager:
 
 def run_candidate_with_margin(monkeypatch, margin_manager):
     monkeypatch.setattr(executor, "margin_enabled", lambda: True)
+    monkeypatch.setattr(executor, "margin_leverage_attempts", lambda: (5, 3))
     monkeypatch.setattr(executor, "_ensure_candidate_visible", lambda candidate: None)
     monkeypatch.setattr(executor, "_mark_remote_executed", lambda candidate_id: None)
     monkeypatch.setattr(executor, "remove_pending", lambda candidate_id: None)

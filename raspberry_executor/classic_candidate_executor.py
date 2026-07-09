@@ -81,22 +81,53 @@ def _quote_asset(rules: Any, symbol: str) -> str | None:
         return None
 
 
-def _spot_quote_balance_available(exchange: Any, rules: Any, symbol: str, quote_amount: float) -> bool:
+def _spot_fallback_possible(exchange: Any, rules: Any, symbol: str, quote_amount: float) -> bool:
     if getattr(exchange, "dry_run", False):
         return True
     quote_asset = _quote_asset(rules, symbol)
-    if not quote_asset or not hasattr(exchange, "free_balance"):
+    if not quote_asset:
         return False
+    if not hasattr(exchange, "free_balance"):
+        return True
     try:
         return float(exchange.free_balance(quote_asset)) >= float(quote_amount)
     except Exception:
         return False
 
 
-def _recoverable_margin_error(text: str, *, spot_quote_available: bool) -> bool:
-    if is_margin_unavailable(text) or is_leverage_unavailable(text) or is_margin_token_collateral_limit(text):
-        return True
-    return is_insufficient_balance(text) and spot_quote_available
+def _is_invalid_take_profit(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in ["tp_error", "take profit", "target price", "invalid price", "invalid stop", "would trigger immediately", "post only", "eorder:invalid price"])
+
+
+def _is_order_rejected(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(x in low for x in ["order rejected", "rejected", "eorder:invalid order", "eorder:orders limit exceeded", "order minimum not met", "minimum order", "min order", "eorder:order minimum not met"])
+
+
+def _margin_error_reason(text: str) -> str:
+    if is_leverage_unavailable(text):
+        return "leverage_unavailable"
+    if is_margin_unavailable(text):
+        return "pair_not_marginable"
+    if is_margin_token_collateral_limit(text):
+        return "margin_collateral_limit"
+    if is_insufficient_balance(text):
+        return "margin_insufficient_balance"
+    if _is_invalid_take_profit(text):
+        return "invalid_take_profit"
+    if _is_order_rejected(text):
+        return "order_rejected"
+    return "unknown_margin_error"
+
+
+def _recoverable_margin_error(text: str) -> bool:
+    return _margin_error_reason(text) in {
+        "leverage_unavailable",
+        "pair_not_marginable",
+        "margin_collateral_limit",
+        "margin_insufficient_balance",
+    }
 
 def _ensure_candidate_visible(candidate: dict) -> None:
     try:
@@ -209,7 +240,7 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
     margin_error = None
     if margin_manager is not None and margin_enabled():
         margin_attempts: list[dict[str, Any]] = []
-        spot_quote_available = _spot_quote_balance_available(exchange, rules, normalized.symbol, float(settings.order_quote_amount))
+        spot_fallback_possible = _spot_fallback_possible(exchange, rules, normalized.symbol, float(settings.order_quote_amount))
         for leverage in margin_leverage_attempts():
             try:
                 result = _open_margin_long(margin_manager, normalized.symbol, float(settings.order_quote_amount), normalized.target_price, leverage=leverage)
@@ -218,15 +249,21 @@ def execute_classic_candidate(settings, exchange: Any, rules: Any, margin_manage
                 return "opened"
             except Exception as exc:
                 margin_error = str(exc)
-                recoverable = _recoverable_margin_error(margin_error, spot_quote_available=spot_quote_available)
-                attempt = {"leverage": leverage, "error": margin_error, "recoverable": recoverable}
+                margin_recoverable = _recoverable_margin_error(margin_error)
+                margin_error_reason = _margin_error_reason(margin_error)
+                attempt = {"leverage": leverage, "error": margin_error, "margin_recoverable": margin_recoverable, "spot_fallback_possible": spot_fallback_possible, "margin_error_reason": margin_error_reason}
                 margin_attempts.append(attempt)
-                state.add_event(normalized.candidate_id, "candidate_margin_attempt_failed", {"error": margin_error, "leverage": leverage, "symbol": normalized.symbol, "side": normalized.side, "recoverable": recoverable, "spot_quote_available": spot_quote_available, "candidate": candidate})
+                state.add_event(normalized.candidate_id, "candidate_margin_attempt_failed", {"error": margin_error, "leverage": leverage, "symbol": normalized.symbol, "side": normalized.side, "margin_recoverable": margin_recoverable, "spot_fallback_possible": spot_fallback_possible, "margin_error_reason": margin_error_reason, "candidate": candidate})
+                recoverable = margin_recoverable
                 if not recoverable:
                     state.add_event(normalized.candidate_id, "execution_error", {"error": margin_error, "leverage": leverage, "symbol": normalized.symbol, "side": normalized.side, "candidate": candidate})
                     logger.exception("classic margin execution failed with blocking error candidate=%s leverage=%s", normalized.candidate_id, leverage)
                     return "error"
-        state.add_event(normalized.candidate_id, "candidate_margin_fallback_spot", {"error": margin_error, "margin_attempts": margin_attempts, "symbol": normalized.symbol, "side": normalized.side, "spot_quote_available": spot_quote_available, "candidate": candidate})
+        if not spot_fallback_possible:
+            state.add_event(normalized.candidate_id, "execution_error", {"error": margin_error, "margin_attempts": margin_attempts, "symbol": normalized.symbol, "side": normalized.side, "spot_fallback_possible": spot_fallback_possible, "candidate": candidate})
+            logger.warning("recoverable margin errors but spot fallback is not possible candidate=%s attempts=%s", normalized.candidate_id, margin_attempts)
+            return "error"
+        state.add_event(normalized.candidate_id, "candidate_margin_fallback_spot", {"error": margin_error, "margin_attempts": margin_attempts, "symbol": normalized.symbol, "side": normalized.side, "spot_fallback_possible": spot_fallback_possible, "candidate": candidate})
         logger.warning("recoverable margin errors, falling back to spot candidate=%s attempts=%s", normalized.candidate_id, margin_attempts)
 
     try:
