@@ -13,7 +13,7 @@ class FakeSignalMakerClient:
         self.base_url = base_url
         self.gateway_id = gateway_id
 
-    def get_recent_candidates(self, symbol: str, limit: int) -> list[dict]:
+    def get_recent_candidates(self, symbol: str, limit: int, use_cursor: bool = True) -> list[dict]:
         return [
             {
                 "candidate_id": "candidate-btc",
@@ -29,7 +29,7 @@ class FakeSignalMakerClientMultipleCandidates:
         self.base_url = base_url
         self.gateway_id = gateway_id
 
-    def get_recent_candidates(self, symbol: str, limit: int) -> list[dict]:
+    def get_recent_candidates(self, symbol: str, limit: int, use_cursor: bool = True) -> list[dict]:
         return [
             {
                 "candidate_id": "older-candidate",
@@ -165,3 +165,57 @@ def test_tp_replay_uses_matched_older_candidate_instead_of_latest(tmp_path, monk
     assert position["target_price"] == 111.0
     assert position["tp_replay_level_source"]["source"] == "signalmaker_matched_candidate"
     assert position["tp_replay_level_source"]["source_candidate_id"] == "older-candidate"
+
+
+def test_repair_candidate_lookup_ignores_advanced_cursor(tmp_path, monkeypatch):
+    from raspberry_executor.candidate_cursor_store import read_candidate_cursor, set_candidate_cursor
+    from raspberry_executor.signalmaker_client import SignalMakerClient
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None, timeout=None):
+            self.calls.append({"url": url, "params": dict(params or {}), "timeout": timeout})
+            return FakeResponse([
+                {
+                    "candidate_id": "old-remote-candidate",
+                    "symbol": "BTCUSDT",
+                    "side": "buy",
+                    "entry_price": 100.0,
+                    "target_price": 125.0,
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                }
+            ])
+
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    sqlite_db.init_db()
+    advanced_cursor = set_candidate_cursor("2026-07-09T00:00:00+00:00")
+
+    client = SignalMakerClient("http://signalmaker.local", "gateway-test")
+    fake_session = FakeSession()
+    client.session = fake_session
+
+    candidates = client.get_candidates_for_repair("BTCUSDT", limit=100)
+
+    assert fake_session.calls == [
+        {
+            "url": "http://signalmaker.local/api/v1/trade-candidates",
+            "params": {"limit": 100, "symbol": "BTCUSDT"},
+            "timeout": 15,
+        }
+    ]
+    assert read_candidate_cursor() == advanced_cursor
+    assert len(candidates) == 1
+    assert candidates[0]["remote_candidate_id"] == "old-remote-candidate"
+    assert candidates[0]["target_price"] == 125.0

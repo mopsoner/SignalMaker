@@ -51,7 +51,10 @@ def position_has_candidate_identity(position: dict) -> bool:
 def _recent_candidates_for_symbol(symbol: str) -> list[dict]:
     settings = load_settings()
     client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    candidates = client.get_recent_candidates(symbol=symbol, limit=100)
+    if hasattr(client, "get_candidates_for_repair"):
+        candidates = client.get_candidates_for_repair(symbol=symbol, limit=100)
+    else:
+        candidates = client.get_recent_candidates(symbol=symbol, limit=100, use_cursor=False)
     return [c for c in candidates if str(c.get("symbol") or "").upper() == symbol.upper() and _has_take_profit_level(c)]
 
 
