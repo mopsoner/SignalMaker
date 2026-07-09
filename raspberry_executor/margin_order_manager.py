@@ -223,7 +223,7 @@ class MarginOrderManager:
 
 
 
-    def place_margin_market_entry(self, *, symbol: str, quote_amount: float, min_notional: float | None = None, leverage: float | str | None = None, clamp_to_available: bool = True) -> dict:
+    def place_margin_market_entry(self, *, symbol: str, quote_amount: float, min_notional: float | None = None, leverage: float | str | None = None, clamp_to_available: bool = False) -> dict:
         """Open a leveraged long margin entry with a BUY MARKET order.
 
         Kraken Spot margin borrows implicitly from the AddOrder `leverage`
@@ -238,7 +238,15 @@ class MarginOrderManager:
             own_quote, balance_guard = self._clamp_own_quote_to_available(symbol=symbol, quote=quote, requested_quote=requested_own_quote)
         else:
             own_quote = max(0.0, requested_own_quote)
-            balance_guard = {"requested_quote_amount": requested_own_quote, "adjusted_quote_amount": own_quote, "quote_balance_guard": "not_checked", "quote_balance_source": "caller"}
+            available = self._available_margin_quote(symbol, quote)
+            balance_guard = {
+                "requested_quote_amount": requested_own_quote,
+                "available_quote_amount": available,
+                "adjusted_quote_amount": own_quote,
+                "quote_balance_guard": "diagnostic_only" if available is not None else "not_checked",
+                "quote_balance_source": "margin" if available is not None else "caller",
+                "clamp_to_available": False,
+            }
         if min_notional is not None and own_quote < float(min_notional):
             raise RuntimeError(f"margin_entry_notional_below_minimum symbol={symbol} quote={quote} usable={own_quote} minimum={float(min_notional)} balance_guard={balance_guard}")
         try:

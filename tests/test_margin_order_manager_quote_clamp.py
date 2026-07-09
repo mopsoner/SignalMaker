@@ -70,25 +70,30 @@ class FakeRules:
         return None
 
 
-def test_take_profit_long_uses_available_margin_quote_without_spot_transfer(monkeypatch):
+def test_take_profit_long_uses_requested_quote_without_default_margin_balance_clamp(monkeypatch):
     monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
     monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
     kraken = FakeKraken()
     margin = FakeMargin(margin_free=15.0)
     manager = MarginOrderManager(kraken, margin, FakeRules())
 
+    def fail_clamp(**kwargs):
+        raise AssertionError("default Kraken margin entry must not clamp quote to free balance")
+
+    monkeypatch.setattr(manager, "_clamp_own_quote_to_available", fail_clamp)
+
     result = manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)
 
     assert margin.transfers == []
-    assert margin.orders[0]["quantity"] == "1.5"
+    assert margin.orders[0]["quantity"] == "10.0"
     assert result["transfer_payload"] == {}
-    assert result["own_quote_amount"] == 15.0
+    assert result["own_quote_amount"] == 100.0
     assert result["requested_own_quote_amount"] == 100.0
-    assert result["total_quote_amount"] == 15.0
+    assert result["total_quote_amount"] == 100.0
     assert result["quote_balance_guard"]["quote_balance_source"] == "margin"
-    assert result["quote_balance_guard"]["quote_balance_guard"] == "clamped"
+    assert result["quote_balance_guard"]["quote_balance_guard"] == "diagnostic_only"
     assert result["quote_balance_guard"]["available_quote_amount"] == 15.0
-    assert result["quote_balance_guard"]["quote_reserve_pct"] == 0.0
+    assert result["quote_balance_guard"]["clamp_to_available"] is False
 
 
 def test_take_profit_long_keeps_order_quote_when_margin_balance_is_enough(monkeypatch):
@@ -105,13 +110,33 @@ def test_take_profit_long_keeps_order_quote_when_margin_balance_is_enough(monkey
     assert result["transfer_payload"] == {}
     assert result["own_quote_amount"] == 100.0
     assert result["quote_balance_guard"]["quote_balance_source"] == "margin"
-    assert result["quote_balance_guard"]["quote_balance_guard"] == "ok"
+    assert result["quote_balance_guard"]["quote_balance_guard"] == "diagnostic_only"
 
 
-def test_take_profit_long_raises_when_no_margin_quote_available(monkeypatch):
+def test_take_profit_long_does_not_raise_margin_insufficient_quote_balance_by_default(monkeypatch):
+    monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
+    monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
+    manager = MarginOrderManager(FakeKraken(), FakeMargin(margin_free=0.0), FakeRules())
+
+    result = manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)
+
+    assert result["own_quote_amount"] == 100.0
+    assert result["quote_balance_guard"]["available_quote_amount"] == 0.0
+    assert result["quote_balance_guard"]["quote_balance_guard"] == "diagnostic_only"
+
+
+def test_take_profit_long_can_still_raise_margin_insufficient_quote_balance_when_clamp_requested(monkeypatch):
     monkeypatch.setattr(manager_module, "margin_transfer_spot_balance", lambda: True)
     monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 1.0)
     manager = MarginOrderManager(FakeKraken(), FakeMargin(margin_free=0.0), FakeRules())
 
     with pytest.raises(RuntimeError, match="margin_insufficient_quote_balance"):
-        manager.open_long_with_margin_take_profit(symbol="BTCUSDC", quote_amount=100.0, target_price=12.0)
+        manager.place_margin_market_entry(symbol="BTCUSDC", quote_amount=100.0, clamp_to_available=True)
+
+
+def test_place_margin_market_entry_zero_quote_still_reports_margin_long_no_quote_available(monkeypatch):
+    monkeypatch.setattr(manager_module, "margin_multiplier", lambda: 2.0)
+    manager = MarginOrderManager(FakeKraken(), FakeMargin(margin_free=15.0), FakeRules())
+
+    with pytest.raises(RuntimeError, match="margin_long_no_quote_available"):
+        manager.place_margin_market_entry(symbol="BTCUSDC", quote_amount=0.0)
