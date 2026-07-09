@@ -88,6 +88,14 @@ class FakeMarginManager:
 
     margin = Margin()
 
+    def __init__(self):
+        self.calls = []
+
+    def create_margin_take_profit_sell(self, *, symbol, quantity, target_price):
+        qty = float(quantity)
+        self.calls.append({"symbol": symbol, "quantity": qty, "target_price": target_price})
+        return {"symbol": symbol, "quantity": str(qty), "tp_order_id": "margin-tp", "tp_payload": {"orderId": "margin-tp", "status": "NEW"}}
+
 
 def state_store(tmp_path, monkeypatch) -> StateStore:
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
@@ -126,6 +134,69 @@ def test_tp_replay_halves_quantity_after_full_size_failure(tmp_path, monkeypatch
     assert position["sl_order_id"] is None
     assert position["oco_order_list_id"] is None
 
+
+def test_tp_replay_uses_margin_for_cross_mode(tmp_path, monkeypatch):
+    state = state_store(tmp_path, monkeypatch)
+    candidate_id = "candidate-cross"
+    state.add_open_position(candidate_id, {
+        "candidate_id": candidate_id,
+        "signal_symbol": "BTCUSDT",
+        "execution_symbol": "BTCUSDT",
+        "side": "long",
+        "quantity": "1.0",
+        "entry_price": 100.0,
+        "target_price": 120.0,
+        "entry_order_id": "entry-1",
+        "entry_payload": {"orderId": "entry-1", "status": "FILLED", "executedQty": "1.0"},
+        "tp_order_id": "invalid-tp",
+        "exit_strategy": "take_profit_only",
+        "needs_tp_replay": True,
+        "mode": "cross",
+        "margin_isolated": False,
+    })
+    spot = FakeSpotManager()
+    margin = FakeMarginManager()
+
+    result = _replay_take_profit(candidate_id, state.open_positions()[candidate_id], "BTCUSDT", spot, margin, state, kraken=FakeKraken(), rules=FakeRules())
+
+    assert result == "replayed"
+    assert spot.calls == []
+    assert margin.calls == [{"symbol": "BTCUSDT", "quantity": 1.0, "target_price": 120.0}]
+    position = state.open_positions()[candidate_id]
+    assert position["tp_order_id"] == "margin-tp"
+    assert position["tp_replay_mode"] == "margin"
+
+
+def test_tp_replay_uses_margin_for_isolated_mode(tmp_path, monkeypatch):
+    state = state_store(tmp_path, monkeypatch)
+    candidate_id = "candidate-isolated"
+    state.add_open_position(candidate_id, {
+        "candidate_id": candidate_id,
+        "signal_symbol": "BTCUSDT",
+        "execution_symbol": "BTCUSDT",
+        "side": "long",
+        "quantity": "1.0",
+        "entry_price": 100.0,
+        "target_price": 120.0,
+        "entry_order_id": "entry-1",
+        "entry_payload": {"orderId": "entry-1", "status": "FILLED", "executedQty": "1.0"},
+        "tp_order_id": "invalid-tp",
+        "exit_strategy": "take_profit_only",
+        "needs_tp_replay": True,
+        "mode": "isolated",
+        "margin_isolated": True,
+    })
+    spot = FakeSpotManager()
+    margin = FakeMarginManager()
+
+    result = _replay_take_profit(candidate_id, state.open_positions()[candidate_id], "BTCUSDT", spot, margin, state, kraken=FakeKraken(), rules=FakeRules())
+
+    assert result == "replayed"
+    assert spot.calls == []
+    assert margin.calls == [{"symbol": "BTCUSDT", "quantity": 1.0, "target_price": 120.0}]
+    position = state.open_positions()[candidate_id]
+    assert position["tp_order_id"] == "margin-tp"
+    assert position["tp_replay_mode"] == "margin"
 
 def test_partial_take_profit_fill_keeps_position_open_for_replay(tmp_path, monkeypatch):
     state = state_store(tmp_path, monkeypatch)
