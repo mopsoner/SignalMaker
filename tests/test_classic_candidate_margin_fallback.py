@@ -219,6 +219,34 @@ def test_classic_margin_succeeds_on_first_shared_leverage(monkeypatch):
     assert [event for _, event, _ in state.events_log] == ["position_opened"]
 
 
+class MarginEntryWithTpErrorManager:
+    def open_long_with_margin_take_profit(self, **kwargs):
+        return {
+            "quantity": "2.0",
+            "entry_price": 10.0,
+            "entry_order_id": "margin-entry-without-tp",
+            "entry_payload": {"leverage": str(kwargs.get("leverage"))},
+            "tp_error": "EOrder:Invalid price",
+            "needs_tp_replay": True,
+        }
+
+
+def test_classic_margin_entry_with_tp_error_is_saved_for_replay(monkeypatch):
+    margin = MarginEntryWithTpErrorManager()
+
+    result, state, spot = run_candidate_with_margin(monkeypatch, margin)
+
+    assert result == "opened"
+    assert spot.calls == []
+    position = state.positions["cand-1"]
+    assert position["mode"] == "cross_margin"
+    assert position["entry_order_id"] == "margin-entry-without-tp"
+    assert position["tp_order_id"] is None
+    assert position["needs_tp_replay"] is True
+    assert position["tp_payload"] == {}
+    assert position["margin_payload"]["needs_tp_replay"] is True
+
+
 def test_classic_margin_succeeds_on_second_shared_leverage(monkeypatch):
     margin = SequencedMarginManager([RuntimeError("leverage unavailable at 5"), "success"])
 

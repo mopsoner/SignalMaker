@@ -195,14 +195,32 @@ def _save_position(state: StateStore, normalized: NormalizedCandidate, candidate
         "tp_payload": result.get("tp_payload") or {},
         "margin_payload": result if mode == "cross_margin" else {},
         "exchange": exchange,
+        "needs_tp_replay": bool(result.get("needs_tp_replay")),
+        "tp_error": result.get("tp_error"),
     })
 
 
 def _open_margin_long(manager: MarginOrderManager, symbol: str, quote_amount: float, target_price: float, *, leverage: float | int | None = None) -> dict:
-    result = manager.open_long_with_margin_take_profit(symbol=symbol, quote_amount=quote_amount, target_price=target_price, leverage=leverage)
+    result = manager.open_long_with_margin_take_profit(
+        symbol=symbol,
+        quote_amount=quote_amount,
+        target_price=target_price,
+        leverage=leverage,
+    )
+    result["mode"] = "cross_margin"
+
+    # If the margin entry succeeded but TP placement failed, keep/save the
+    # position locally so position_sync_v2 can detect tp_order_id=None and
+    # replay the missing take-profit.
+    if result.get("tp_error") and result.get("entry_order_id"):
+        result["needs_tp_replay"] = True
+        result.setdefault("tp_order_id", None)
+        result.setdefault("tp_payload", {})
+        return result
+
     if result.get("tp_error"):
         raise RuntimeError(result.get("tp_error"))
-    result["mode"] = "cross_margin"
+
     return result
 
 
