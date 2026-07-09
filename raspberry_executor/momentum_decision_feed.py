@@ -23,8 +23,6 @@ DEFAULT_DECISION_PATH = "/api/v1/momentum-engine/decision"
 DEFAULT_DECISION_METHOD = "GET"
 DEFAULT_DECISION_LIMIT = 25
 DEFAULT_EXECUTOR_RUN_ONCE_PATH = "/api/v1/executor/momentum/run-once"
-LEGACY_CANDIDATES_PATH = "/api/v1/momentum"
-LEGACY_DECISION_SOURCE = "legacy_momentum_rankings"
 
 
 def _bool(value: str | None, default: bool = True) -> bool:
@@ -83,10 +81,6 @@ def _decision_limit() -> int:
 
 def _executor_run_once_path() -> str:
     return (_env("MOMENTUM_EXECUTOR_RUN_ONCE_PATH", DEFAULT_EXECUTOR_RUN_ONCE_PATH) or DEFAULT_EXECUTOR_RUN_ONCE_PATH).strip()
-
-
-def _candidates_path() -> str:
-    return (_env("MOMENTUM_CANDIDATES_PATH", LEGACY_CANDIDATES_PATH) or LEGACY_CANDIDATES_PATH).strip()
 
 
 def _read_json_payload(response: requests.Response) -> Any:
@@ -674,215 +668,11 @@ def _candidate_symbol(row: dict[str, Any]) -> str:
     return str(row.get("symbol") or row.get("buy_symbol") or "").upper()
 
 
-def _candidate_score(row: dict[str, Any]) -> float:
-    try:
-        return float(row.get("momentum_score") if row.get("momentum_score") is not None else row.get("score") or 0.0)
-    except Exception:
-        return 0.0
-
-
-def _nested_dict(row: dict[str, Any], key: str) -> dict[str, Any]:
-    value = row.get(key)
-    return value if isinstance(value, dict) else {}
-
-
-def _candidate_payload(row: dict[str, Any]) -> dict[str, Any]:
-    return _nested_dict(row, "payload")
-
-
-def _candidate_remote(row: dict[str, Any]) -> dict[str, Any]:
-    payload = _candidate_payload(row)
-    return _nested_dict(payload, "remote_candidate") or _nested_dict(payload, "momentum_trade_candidate")
-
-
-def _candidate_rank(row: dict[str, Any]) -> int | None:
-    remote = _candidate_remote(row)
-    for value in (row.get("rank"), remote.get("rank"), _candidate_payload(row).get("rank")):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _candidate_rsi_1h(row: dict[str, Any]) -> float | None:
-    remote = _candidate_remote(row)
-    for value in (row.get("rsi_1h"), remote.get("rsi_1h"), _candidate_payload(row).get("rsi_1h")):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _rsi_buy_range() -> tuple[float, float]:
-    lower = _float_env("MOMENTUM_BUYABLE_RSI_1H_MIN", 50.0)
-    upper = _float_env("MOMENTUM_BUYABLE_RSI_1H_MAX", 65.0)
-    return (min(lower, upper), max(lower, upper))
-
-
-def _candidate_buyable(row: dict[str, Any]) -> tuple[bool, str]:
-    rsi = _candidate_rsi_1h(row)
-    lower, upper = _rsi_buy_range()
-    if rsi is None:
-        return False, "missing_rsi_1h"
-    if not lower <= rsi <= upper:
-        return False, f"rsi_1h_out_of_range:{rsi:g}:range={lower:g}-{upper:g}"
-    return True, "buyable_rsi_1h"
-
-
-def _ordered_momentum_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    indexed = []
-    for index, row in enumerate(candidates):
-        rank = _candidate_rank(row)
-        indexed.append((rank if rank is not None else 10_000 + index, -_candidate_score(row), index, row))
-    indexed.sort(key=lambda item: (item[0], item[1], item[2]))
-    return [row for _, _, _, row in indexed]
-
-
-def _enrich_candidate(row: dict[str, Any], *, buyable: bool, reason: str) -> dict[str, Any]:
-    return {
-        **row,
-        "buyable": buyable,
-        "buyable_reason": reason,
-        "rsi_1h": _candidate_rsi_1h(row),
-        "rank": _candidate_rank(row) or row.get("rank"),
-    }
-
-
-def _candidate_quote_supported(row: dict[str, Any], quote_assets: list[str]) -> bool:
-    return _quote_asset(_candidate_symbol(row), quote_assets) is not None
-
-
-def _extract_candidate_rows(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, dict):
-        raw_candidates = payload.get("candidates") or payload.get("items") or payload.get("data") or payload.get("rankings") or []
-    elif isinstance(payload, list):
-        raw_candidates = payload
-    else:
-        raw_candidates = []
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in raw_candidates:
-        if not isinstance(row, dict):
-            continue
-        symbol = _candidate_symbol(row)
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
-        rows.append({**row, "symbol": symbol, "source": row.get("source") or "momentum_endpoint"})
-    return rows
-
-
-def fetch_momentum_candidates(limit: int = 50) -> list[dict[str, Any]]:
-    settings = load_settings()
-    response = requests.get(
-        _url(settings.signalmaker_base_url, _candidates_path()),
-        params={"limit": limit},
-        timeout=30,
-        headers={"accept": "application/json", "cache-control": "no-cache"},
-    )
-    data = _read_json_payload(response)
-    if not response.ok:
-        raise RuntimeError(f"momentum_rankings_http_error status={response.status_code} url={response.url} payload={data}")
-    min_score = _float_env("MOMENTUM_DECISION_MIN_SCORE", 0.0)
-    candidates = _extract_candidate_rows(data)
-    return [
-        row
-        for row in candidates
-        if _candidate_quote_supported(row, settings.quote_assets) and _candidate_score(row) >= min_score
-    ]
-
-
-def legacy_build_decision_from_candidates(candidates: list[dict[str, Any]], *, source: str = LEGACY_DECISION_SOURCE) -> dict[str, Any]:
-    state = StateStore()
-    held_symbol = _position_symbol(current_momentum_position(state)) or _last_recorded_buy_without_later_sell(state)
-    ordered_candidates = _ordered_momentum_candidates([row for row in candidates if _candidate_symbol(row)])
-    buy_candidates: list[dict[str, Any]] = []
-    skipped_candidates: list[dict[str, Any]] = []
-    held_candidate: dict[str, Any] | None = None
-
-    for row in ordered_candidates:
-        symbol = _candidate_symbol(row)
-        if symbol == held_symbol:
-            held_candidate = row
-        buyable, reason = _candidate_buyable(row)
-        enriched = _enrich_candidate(row, buyable=buyable, reason=reason)
-        if buyable:
-            buy_candidates.append(enriched)
-        else:
-            skipped_candidates.append({"symbol": symbol, "rank": _candidate_rank(row), "rsi_1h": _candidate_rsi_1h(row), "reason": reason})
-
-    top = buy_candidates[0] if buy_candidates else {}
-    buy_symbol = _candidate_symbol(top)
-    top_rank = _candidate_rank(top) if top else None
-    held_rank = _candidate_rank(held_candidate) if held_candidate else None
-    if not buy_symbol:
-        action = "WAIT"
-        should_trade = False
-        reason = "no_buyable_momentum_candidates_rsi_1h_50_65"
-    elif not held_symbol:
-        action = "BUY"
-        should_trade = True
-        reason = f"buy_best_buyable_momentum:{buy_symbol}:rsi_1h={_candidate_rsi_1h(top)}"
-    elif held_symbol == buy_symbol:
-        action = "HOLD"
-        should_trade = False
-        reason = f"hold_best_buyable_momentum:{held_symbol}:rank={held_rank or top_rank or '-'}"
-    elif held_rank is None or top_rank is None or top_rank < held_rank:
-        action = "ROTATE"
-        should_trade = True
-        rank_text = f"rank={held_rank or 'unknown'}->{top_rank or 'unknown'}"
-        reason = f"rotate_to_better_buyable_momentum:{held_symbol}->{buy_symbol}:{rank_text}:rsi_1h={_candidate_rsi_1h(top)}"
-    else:
-        action = "HOLD"
-        should_trade = False
-        reason = f"hold_current_momentum_rank:{held_symbol}:held_rank={held_rank}:best_buyable_rank={top_rank}"
-
-    sell_symbol = held_symbol if action == "ROTATE" else None
-    decision_buy_symbol = buy_symbol if action in {"BUY", "ROTATE", "HOLD"} else None
-    order_sequence = _rotation_order_sequence(sell_symbol, decision_buy_symbol) if action == "ROTATE" else []
-    decision = {
-        "mode": "momentum_rotation",
-        "action": action,
-        "raw_action": action,
-        "symbol": buy_symbol or held_symbol or None,
-        "buy_symbol": decision_buy_symbol,
-        "sell_symbol": sell_symbol,
-        "order_sequence": order_sequence,
-        "should_trade": should_trade,
-        "reason": reason,
-        "source": source,
-        "buy_candidates": buy_candidates,
-        "skipped_candidates": skipped_candidates,
-        "target_asset": top or None,
-        "fallback_policy": {
-            "source": _candidates_path(),
-            "min_score": _float_env("MOMENTUM_DECISION_MIN_SCORE", 0.0),
-            "rsi_1h_min": _rsi_buy_range()[0],
-            "rsi_1h_max": _rsi_buy_range()[1],
-        },
-    }
-    decision["executor_contract"] = {
-        "action": action,
-        "raw_action": action,
-        "symbol": decision["symbol"],
-        "buy_symbol": decision["buy_symbol"],
-        "sell_symbol": decision["sell_symbol"],
-        "order_sequence": order_sequence,
-        "should_trade": should_trade,
-        "reason": reason,
-        "buy_candidates": buy_candidates,
-        "skipped_candidates": skipped_candidates,
-        "fallback_policy": decision["fallback_policy"],
-    }
-    return normalize_decision(decision)
-
 def decision_buy_candidates(decision: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
     """Return the ordered buy candidates embedded in the persisted main decision.
 
-    Local fallback for older main deployments. The preferred source is now
-    /api/v1/momentum, fetched immediately before buying.
+    The central momentum engine owns ranking and buyability. Older decisions may
+    still embed candidate rows, but no ranking endpoint fallback is fetched here.
     """
     exclude = {item.upper() for item in (exclude or set()) if item}
     contract = decision.get("executor_contract") if isinstance(decision.get("executor_contract"), dict) else {}

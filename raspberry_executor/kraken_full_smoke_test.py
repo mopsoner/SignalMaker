@@ -22,7 +22,6 @@ from raspberry_executor.env_store import ensure_env, read_env
 from raspberry_executor.kraken_client import KrakenClient
 from raspberry_executor.kraken_margin_client import KrakenMarginClient
 from raspberry_executor.kraken_symbol_rules import KrakenSymbolRules
-from raspberry_executor.momentum_decision_feed import legacy_build_decision_from_candidates
 from raspberry_executor.signalmaker_client import SignalMakerClient
 
 
@@ -597,8 +596,7 @@ def run_smoke(args: argparse.Namespace) -> SmokeResult:
         def optional_momentum_ranking_diagnostic() -> dict[str, Any]:
             try:
                 rankings = signalmaker.list_momentum(limit=args.momentum_limit)
-                decision = legacy_build_decision_from_candidates(rankings, source="kraken_full_smoke_test")
-                return {"optional": True, "ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]], "decision_action": decision.get("action"), "decision_should_trade": decision.get("should_trade"), "decision_reason": decision.get("reason")}
+                return {"optional": True, "ranking_count": len(rankings), "top_symbols": [row.get("symbol") for row in rankings[:5]]}
             except Exception as exc:
                 details = _error_details(exc)
                 status = details.get("status_code")
