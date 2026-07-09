@@ -557,13 +557,59 @@ def sync_open_positions():
             continue
 
         tp = _order(kraken, margin, symbol, tp_id, use_margin=use_margin)
+        status = _status(tp)
         state.update_open_position(candidate_id, {"kraken_tp_status": tp, "order_monitor_mode": "margin" if use_margin else "spot"})
-        if _status(tp) == "FILLED":
+        if status == "FILLED":
             fill_result = _handle_filled_take_profit(candidate_id, position, tp, state)
             if fill_result == "closed":
                 closed += 1
             else:
                 partial_filled += 1
+            continue
+
+        if status in {"CANCELED", "REJECTED", "EXPIRED"} or _is_not_found_error(tp):
+            missing_tp += 1
+            state.update_open_position(
+                candidate_id,
+                {
+                    "tp_order_id": None,
+                    "tp_payload": {},
+                    "needs_tp_replay": True,
+                    "invalid_tp_order_id": tp_id,
+                    "invalid_tp_status": status,
+                    "invalid_tp_payload": tp,
+                },
+                event_type="tp_invalid_missing_replay",
+            )
+            position = {**position, "tp_order_id": None, "tp_payload": {}, "needs_tp_replay": True}
+            try:
+                replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
+            except Exception as exc:
+                replay_skipped += 1
+                state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
+                logger.warning("tp replay failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
+                continue
+            if replay_result == "replayed":
+                replayed_tp += 1
+            elif replay_result == "attached_existing_tp":
+                attached_existing += 1
+            elif replay_result == "blocked":
+                replay_blocked += 1
+            else:
+                replay_skipped += 1
+            continue
+
+        if _has_sync_error(tp):
+            state.update_open_position(
+                candidate_id,
+                {
+                    "kraken_tp_status": tp,
+                    "order_monitor_mode": "margin" if use_margin else "spot",
+                    "last_tp_sync_error": tp.get("sync_error"),
+                },
+            )
+            logger.warning("tp sync error candidate=%s symbol=%s tp=%s error=%s", candidate_id, symbol, tp_id, tp.get("sync_error"))
+            continue
 
     summary = {"checked": checked, "closed": closed, "partial_filled": partial_filled, "ghost_removed": ghost_removed, "momentum_tracked": momentum_tracked, "missing_tp": missing_tp, "replayed_tp": replayed_tp, "attached_existing_tp": attached_existing, "replay_skipped": replay_skipped, "replay_blocked": replay_blocked}
     if any(summary.values()):
