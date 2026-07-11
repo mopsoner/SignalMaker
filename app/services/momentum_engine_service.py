@@ -127,6 +127,7 @@ class MomentumEngineService:
                     reason=self._break_reason(current_asset) or "15m structure broken bearish",
                 )
                 if next_entry:
+                    self.db.flush()
                     cash = self._cash_balance(starting_capital=starting_capital)
                     if cash > 0 and float(next_entry.get("price") or 0) > 0:
                         self._open_new_position(next_entry, cash, action="BUY_AFTER_STRUCTURE_BREAK")
@@ -140,6 +141,7 @@ class MomentumEngineService:
                     rankings=rankings,
                     reason=f"Rotate into top-pool entry-ready asset {next_entry['symbol']} with RSI 1h {next_entry.get('rsi_1h')}",
                 )
+                self.db.flush()
                 cash = self._cash_balance(starting_capital=starting_capital)
                 if cash > 0 and float(next_entry.get("price") or 0) > 0:
                     self._open_new_position(next_entry, cash, action="BUY_NEXT_ENTRY_READY")

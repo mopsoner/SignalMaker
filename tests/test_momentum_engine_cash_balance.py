@@ -482,3 +482,65 @@ def test_current_decision_returns_fallback_when_current_snapshot_payload_is_empt
     assert fallback["status"] == "no_persisted_decision"
     assert fallback["action"] == "WAIT"
     assert fallback["source"] == "persisted_current_decision"
+
+
+def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush_disabled() -> None:
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumCurrent(
+                    symbol="BTCUSDC",
+                    price=100.0,
+                    momentum_score=10.0,
+                    classification="bull",
+                    rsi_1h=70.0,
+                    rank=2,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="BTCUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumCurrent(
+                    symbol="ETHUSDC",
+                    price=50.0,
+                    momentum_score=12.0,
+                    classification="strong_bull",
+                    rsi_1h=50.0,
+                    rank=1,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="ETHUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumEnginePosition(
+                    position_id="pos-btc",
+                    strategy=MomentumEngineService.STRATEGY,
+                    symbol="BTCUSDC",
+                    status="open",
+                    quantity=10.0,
+                    entry_price=100.0,
+                    entry_value=1000.0,
+                    opened_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+        db.autoflush = False
+
+        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
+        open_position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
+
+    assert "SELL_ROTATE_OR_STRUCTURE_BREAK" in actions
+    assert "BUY_NEXT_ENTRY_READY" in actions
+    assert "CHECK_NO_CASH" not in actions
+    assert open_position.symbol == "ETHUSDC"
+    assert status["open_position"]["symbol"] == "ETHUSDC"
