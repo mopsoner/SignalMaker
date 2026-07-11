@@ -31,3 +31,11 @@ The Raspberry installer registers a single user crontab entry so `bash run.sh` s
 ## Safety
 
 The app keeps a local SQLite state database to avoid duplicate execution after restart. The Raspberry reads `/api/v1/momentum` diagnostic rankings from `main` and creates BUY/HOLD/ROTATE decisions locally, unless `MOMENTUM_DECISION_PATH` is explicitly set to a custom decision endpoint.
+
+## UI contract source of truth
+
+`raspberry_executor/ui_contract.py` is the source of truth for normalized local
+terminal and web views. When adding or changing local navigation screens, define
+or update the contract view there first so Terminal UIs and FastAPI-backed web
+pages share the same `title`, `labels`, `keys`, `rows`, `summary`,
+`empty_message`, and `errors` field names.

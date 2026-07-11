@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_multiplier, shorts_enabled
 from raspberry_executor.tui_api import BASE_URL, api_get, as_rows
+from raspberry_executor.ui_contract import market_candles_summary_view, momentum_view
 
 REFRESH_SECONDS = 5
 
@@ -201,8 +202,10 @@ def snapshot():
     settings_payload = get("/api/v1/admin/settings", default={})
     candidates = as_rows(get("/api/v1/trade-candidates", {"limit": limit}, default=[]))
     positions = [normalize_position(row) for row in as_rows(get("/api/v1/positions", {"limit": 100}, default=[])) if isinstance(row, dict)]
-    momentum_candidates = as_rows(get("/api/v1/momentum", {"limit": 100}, default=[]))
-    candle_rows = [row for row in as_rows(get("/api/v1/market-data/candles/summary", default=[])) if isinstance(row, dict)]
+    momentum_contract = momentum_view(get("/api/v1/momentum", {"limit": 100}, default=[]), [errors["/api/v1/momentum"]] if "/api/v1/momentum" in errors else None)
+    momentum_candidates = momentum_contract["rows"]
+    candle_contract = market_candles_summary_view(get("/api/v1/market-data/candles/summary", default=[]), [errors["/api/v1/market-data/candles/summary"]] if "/api/v1/market-data/candles/summary" in errors else None)
+    candle_rows = [row for row in candle_contract["rows"] if isinstance(row, dict)]
     logs_payload = get("/api/v1/admin/logs/executor", {"lines": 160}, default={})
     log_lines = logs_payload.get("lines", []) if isinstance(logs_payload, dict) else []
     events = [{"timestamp": None, "candidate_id": "executor", "event_type": "log", "payload": {"message": line}} for line in reversed(log_lines)]
@@ -221,9 +224,11 @@ def snapshot():
         "events": events,
         "momentum": latest_momentum_row([r for r in momentum_candidates if isinstance(r, dict)]),
         "momentum_candidates": momentum_candidates,
+        "momentum_contract": momentum_contract,
         "candidates": candidates,
         "candidate_error": errors.get("/api/v1/trade-candidates"),
         "candle_feed": summarize_candle_feed_rows(candle_rows),
+        "candle_contract": candle_contract,
         "candle_error": errors.get("/api/v1/market-data/candles/summary"),
         "candidate_limit": limit,
         "refreshed_at": now.strftime("%d/%m %H:%M:%S"),

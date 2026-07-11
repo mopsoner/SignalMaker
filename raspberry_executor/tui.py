@@ -8,6 +8,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from raspberry_executor.tui_api import BASE_URL, api_get, api_request, as_rows
+from raspberry_executor.ui_contract import (
+    assets_view,
+    kraken_diagnostics_view,
+    logs_view,
+    market_candles_summary_view,
+    momentum_view,
+    orders_fills_view,
+    services_workers_view,
+)
 
 REFRESH_SECONDS = int(os.getenv("SIGNALMAKER_TUI_REFRESH", "10") or "10")
 SECRET_KEYS = {"kraken_api_key", "kraken_secret_key", "telegram_secret", "discord_url"}
@@ -66,19 +75,24 @@ def fetch_screen(kind: str) -> tuple[str, list[Any], list[str] | None, list[str]
     if kind == "status":
         return "Status / Health", [api_get("/healthz"), api_get("/api/v1/health")], None, [f"Base URL: {BASE_URL}"]
     if kind == "services":
-        rows = as_rows(api_get("/api/v1/services")) + as_rows(api_get("/api/v1/admin/workers"))
-        return "Services / Workers", rows, None, []
+        view = services_workers_view(api_get("/api/v1/services"), api_get("/api/v1/admin/workers"))
+        return view["title"], view["rows"], view["keys"], view["errors"]
     mapping = {
-        "assets": ("Assets", "/api/v1/assets", {"limit": 100, "sort_by": "updated_at"}),
-        "momentum": ("Momentum", "/api/v1/momentum", {"limit": 100}),
         "candidates": ("Trade Candidates", "/api/v1/trade-candidates", {"limit": 100}),
         "positions": ("Positions", "/api/v1/positions", {"limit": 100}),
         "market": ("Market Data", "/api/v1/market-data/candles", {"limit": 100, "latest": "true"}),
     }
+    if kind == "assets":
+        view = assets_view(api_get("/api/v1/assets", {"limit": 100, "sort_by": "updated_at"}))
+        return view["title"], view["rows"], view["keys"], view["errors"]
+    if kind == "momentum":
+        view = momentum_view(api_get("/api/v1/momentum", {"limit": 100}))
+        return view["title"], view["rows"], view["keys"], view["errors"]
     if kind in mapping:
         title, path, params = mapping[kind]; return title, as_rows(api_get(path, params)), None, []
     if kind == "orders":
-        return "Orders / Fills", as_rows(api_get("/api/v1/orders", {"limit": 50})) + as_rows(api_get("/api/v1/fills", {"limit": 50})), None, []
+        view = orders_fills_view(api_get("/api/v1/orders", {"limit": 50}), api_get("/api/v1/fills", {"limit": 50}))
+        return view["title"], view["rows"], view["keys"], view["errors"]
     if kind == "settings":
         payload = api_get("/api/v1/admin/settings"); rows=[]
         for sec in SECTIONS:
@@ -87,22 +101,21 @@ def fetch_screen(kind: str) -> tuple[str, list[Any], list[str] | None, list[str]
             rows += [{"section": "", "key": k, "value": mask(k, v)} for k, v in sorted(data.items())]
         return "Admin Settings (read-only, secrets masked)", rows, ["section", "key", "value"], []
     if kind == "logs":
-        lines=[]
-        for worker in ("executor", "pipeline", "scheduler"):
-            p=api_get(f"/api/v1/admin/logs/{worker}", {"lines": 30}); lines.append({"worker": worker, "line": "---"})
-            lines += [{"worker": worker, "line": line} for line in p.get("lines", [])[-30:]] if isinstance(p, dict) else []
-        return "Logs", lines, ["worker", "line"], []
+        payloads = {worker: api_get(f"/api/v1/admin/logs/{worker}", {"lines": 30}) for worker in ("executor", "pipeline", "scheduler")}
+        view = logs_view(payloads)
+        return view["title"], view["rows"], view["keys"], view["errors"]
     if kind == "kraken":
-        settings = api_get("/api/v1/admin/settings"); kr = settings.get("kraken", {}) if isinstance(settings, dict) else {}; ex = settings.get("executor", {}) if isinstance(settings, dict) else {}
-        rows = [{"key": "exchange", "value": ex.get("execution_exchange")}, {"key": "execution_mode", "value": ex.get("execution_mode", "cross")}, {"key": "quote_assets", "value": ex.get("quote_assets") or settings.get("market_data", {}).get("kraken_quote_assets", "-") if isinstance(settings, dict) else "-"}, {"key": "kraken_rest_base", "value": kr.get("kraken_rest_base") or kr.get("kraken_base_url")}, {"key": "kraken_api_key", "value": mask("kraken_api_key", kr.get("kraken_api_key"))}, {"key": "kraken_secret_key", "value": mask("kraken_secret_key", kr.get("kraken_secret_key"))}]
-        try: rows += [{"key": f"test_{k}", "value": v} for k, v in api_request("/api/v1/admin/test/kraken", method="POST").items()]
+        settings = api_get("/api/v1/admin/settings")
+        test_payload = {}
+        try: test_payload = api_request("/api/v1/admin/test/kraken", method="POST")
         except Exception as exc: notes.append(str(exc))
-        return "Kraken Diagnostics (dry-run/validate only)", rows, ["key", "value"], notes
+        view = kraken_diagnostics_view(settings, test_payload, notes)
+        return view["title"], view["rows"], view["keys"], view["errors"]
     if kind == "candle":
         settings = api_get("/api/v1/admin/settings"); md = settings.get("market_data", {}) if isinstance(settings, dict) else {}
-        summary = as_rows(api_get("/api/v1/market-data/candles/summary"))
-        notes = ["CANDLE_FEED_MAX_SYMBOLS=0 means all symbols", f"Current max symbols: {md.get('candle_feed_max_symbols', os.getenv('CANDLE_FEED_MAX_SYMBOLS', '-'))}", f"Resolved symbol count: {len(summary)}"]
-        return "Candle Feed Status", summary, None, notes
+        view = market_candles_summary_view(api_get("/api/v1/market-data/candles/summary"))
+        notes = ["CANDLE_FEED_MAX_SYMBOLS=0 means all symbols", f"Current max symbols: {md.get('candle_feed_max_symbols', os.getenv('CANDLE_FEED_MAX_SYMBOLS', '-'))}", f"Resolved symbol count: {view['summary'].get('symbols', 0)}"]
+        return view["title"], view["rows"], view["keys"], notes + view["errors"]
     return "Unknown", [], None, []
 
 
