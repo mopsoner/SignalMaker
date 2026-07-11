@@ -382,9 +382,9 @@ def _is_replay_blocked(position: dict) -> bool:
     return bool(position.get("tp_replay_blocked"))
 
 
-def _place_take_profit(use_margin: bool, spot_manager, margin_manager, *, symbol: str, quantity: float | str, target_price: float) -> dict:
+def _place_take_profit(use_margin: bool, spot_manager, margin_manager, *, symbol: str, quantity: float | str, target_price: float, leverage: float | str | None = None) -> dict:
     if use_margin:
-        return margin_manager.create_margin_take_profit_sell(symbol=symbol, quantity=quantity, target_price=target_price)
+        return margin_manager.create_margin_take_profit_sell(symbol=symbol, quantity=quantity, target_price=target_price, leverage=leverage)
     return spot_manager.create_exit_take_profit_for_open_long(symbol=symbol, quantity=quantity, target_price=target_price)
 
 
@@ -458,7 +458,15 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
     for fraction in tp_replay_fractions():
         requested_qty = base_qty * fraction
         try:
-            result = _place_take_profit(use_margin, spot_manager, margin_manager, symbol=symbol, quantity=requested_qty, target_price=target_price)
+            result = _place_take_profit(
+                use_margin,
+                spot_manager,
+                margin_manager,
+                symbol=symbol,
+                quantity=requested_qty,
+                target_price=target_price,
+                leverage=position.get("leverage") or position.get("requested_leverage") or position.get("margin_multiplier"),
+            )
         except Exception as exc:
             last_error = str(exc)
             attempts.append({"fraction": fraction, "quantity": requested_qty, "status": "failed", "error": last_error})
