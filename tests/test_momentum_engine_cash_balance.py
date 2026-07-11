@@ -326,3 +326,87 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
     assert decision["target_symbol"] == "BTCUSDC"
     assert decision["open_position"]["symbol"] == "BTCUSDC"
     assert trades == []
+
+
+def test_current_decision_reads_latest_persisted_payload_without_recomputing(monkeypatch: pytest.MonkeyPatch) -> None:
+    older_payload = {
+        "strategy": MomentumEngineService.STRATEGY,
+        "mode": "paper",
+        "cadence_hours": 4,
+        "starting_capital": 1000.0,
+        "cash": 1000.0,
+        "equity": 1000.0,
+        "total_pnl": 0.0,
+        "total_pnl_pct": 0.0,
+        "action": "wait",
+        "symbol": "BTCUSDC",
+        "target_symbol": "BTCUSDC",
+        "recommendation": "older",
+        "reason": "older persisted decision",
+        "due_now": False,
+    }
+    latest_payload = {
+        **older_payload,
+        "action": "buy",
+        "symbol": "ETHUSDC",
+        "target_symbol": "ETHUSDC",
+        "recommendation": "latest",
+        "reason": "latest persisted decision",
+        "due_now": True,
+    }
+
+    def fail_if_recomputed(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("current_decision must not recompute decisions")
+
+    monkeypatch.setattr(MomentumEngineService, "decision", fail_if_recomputed)
+    monkeypatch.setattr(MomentumEngineService, "_rankings", fail_if_recomputed)
+    monkeypatch.setattr(MomentumEngineService, "_build_status", fail_if_recomputed)
+    monkeypatch.setattr(MomentumEngineService, "_decision_from_status", fail_if_recomputed)
+
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumEngineTrade(
+                    trade_id="decision-older",
+                    strategy=MomentumEngineService.STRATEGY,
+                    action="DECISION",
+                    symbol="BTCUSDC",
+                    price=0.0,
+                    quantity=0.0,
+                    value=0.0,
+                    pnl=0.0,
+                    reason="persisted decision",
+                    meta={"decision_payload": older_payload},
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ),
+                MomentumEngineTrade(
+                    trade_id="non-decision-newer",
+                    strategy=MomentumEngineService.STRATEGY,
+                    action="HOLD_NO_NEXT_ENTRY",
+                    symbol="SOLUSDC",
+                    price=0.0,
+                    quantity=0.0,
+                    value=0.0,
+                    pnl=0.0,
+                    reason="newer non-decision trade",
+                    meta={},
+                    created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                ),
+                MomentumEngineTrade(
+                    trade_id="decision-latest",
+                    strategy=MomentumEngineService.STRATEGY,
+                    action="DECISION",
+                    symbol="ETHUSDC",
+                    price=0.0,
+                    quantity=0.0,
+                    value=0.0,
+                    pnl=0.0,
+                    reason="persisted decision",
+                    meta={"decision_payload": latest_payload},
+                    created_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        assert MomentumEngineService(db).current_decision() == latest_payload
