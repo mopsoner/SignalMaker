@@ -986,57 +986,99 @@ def _rotate_momentum_position(settings, kraken: KrakenClient, rules: KrakenSymbo
     return f"rotate:{sell_result}:{buy_result}"
 
 
+def _normalized_should_trade(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_execution_decision(decision: dict[str, Any], action: str) -> dict[str, Any]:
+    normalized = dict(decision)
+    target_symbol = str(
+        normalized.get("target_symbol")
+        or normalized.get("buy_symbol")
+        or normalized.get("symbol")
+        or _target_asset_symbol(normalized.get("target_asset"))
+        or ""
+    ).upper()
+    symbol = str(normalized.get("symbol") or target_symbol or normalized.get("sell_symbol") or "").upper()
+    buy_symbol = str(normalized.get("buy_symbol") or (target_symbol if action in {"BUY", "ROTATE"} else "") or "").upper()
+    sell_symbol = str(normalized.get("sell_symbol") or (symbol if action == "SELL" else "") or "").upper()
+
+    normalized["action"] = action
+    normalized["decision_action"] = action
+    normalized["should_trade"] = _normalized_should_trade(normalized.get("should_trade"), default=action in {"BUY", "SELL", "ROTATE"})
+    normalized["symbol"] = symbol
+    normalized["target_symbol"] = target_symbol
+    normalized["buy_symbol"] = buy_symbol
+    normalized["sell_symbol"] = sell_symbol
+    return normalized
+
+
+def _momentum_execution_clients(settings):
+    if hasattr(settings, "exchange"):
+        return create_spot_exchange(settings)
+    return (
+        KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run),
+        KrakenSymbolRules(settings.kraken_base_url),
+    )
+
+
 def execute_decision(decision: dict[str, Any]) -> str:
     action, action_conflict = _normalize_decision_action_fields(decision)
     if action_conflict:
         logger.error("momentum decision action conflict: %s", action_conflict)
         return action_conflict
-    if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
-        return "execution_disabled"
-    settings = load_settings()
-    if hasattr(settings, "exchange"):
-        kraken, rules = create_spot_exchange(settings)
-    else:
-        kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
-        rules = KrakenSymbolRules(settings.kraken_base_url)
-    state = StateStore()
-    should_trade = bool(decision.get("should_trade"))
-    sell = str(decision.get("sell_symbol") or "").upper()
-    held_position = current_momentum_position(state)
-    held_symbol = _position_symbol(held_position) or sell
-    expected_symbol = _decision_expected_symbol(decision)
+    decision = _normalize_execution_decision(decision, action)
 
-    if action == "WAIT" or (not should_trade and action != "HOLD"):
-        if held_symbol:
-            return f"wait_existing_momentum_position:{held_symbol}"
+    if action == "WAIT":
         reason = str(decision.get("reason") or "WAIT").strip() or "WAIT"
         return f"wait:{reason}"
+
+    state = StateStore()
+    held_position = current_momentum_position(state)
+    held_symbol = _position_symbol(held_position)
+    target_symbol = str(decision.get("target_symbol") or "").upper()
+    buy = str(decision.get("buy_symbol") or target_symbol or "").upper()
+    sell = str(decision.get("sell_symbol") or "").upper()
+
     if action == "HOLD":
-        if held_symbol and (not expected_symbol or expected_symbol == held_symbol):
+        if held_symbol and (not target_symbol or target_symbol == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
-        if held_symbol:
-            return f"hold_target_not_held:held={held_symbol}:target={expected_symbol or 'none'}"
-        return f"hold_no_existing_momentum_position:{expected_symbol or 'none'}"
+        if target_symbol:
+            return f"hold_without_position:{target_symbol}"
+        return "wait:HOLD"
+
+    if action not in {"BUY", "SELL", "ROTATE"}:
+        return f"unsupported_action:{action}"
+
+    if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
+        return "execution_disabled"
+
+    settings = load_settings()
+    kraken, rules = _momentum_execution_clients(settings)
+
     if action == "BUY":
-        buy = expected_symbol
-        if held_symbol and (not buy or buy == held_symbol):
+        if held_symbol and buy and buy == held_symbol:
             return f"hold_existing_momentum_position:{held_symbol}"
-        if held_symbol and buy != held_symbol:
-            return _rotate_momentum_position(settings, kraken, rules, state, held_symbol, buy, decision)
-        return _buy_with_momentum_cadence(settings, kraken, rules, state, decision, exclude={sell})
+        return _buy_with_momentum_cadence(settings, kraken, rules, state, decision, exclude={sell} if sell else None)
+
     if action == "SELL":
-        if not _decision_targets_held_symbol(decision, held_symbol):
+        if not held_symbol or not _decision_targets_held_symbol(decision, held_symbol):
             return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
         return sell_symbol(kraken, rules, state, held_symbol, decision, require_confirmed=True)
-    if action == "ROTATE":
-        if not _decision_targets_held_symbol(decision, held_symbol):
-            return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-        rotation_decision = dict(decision)
-        state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": rotation_decision.get("buy_symbol"), "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
-        sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
-        buy_result = buy_best_available(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
-        return f"rotate:{sell_result}:{buy_result}"
-    return f"unsupported_action:{action}"
+
+    if not held_symbol or not _decision_targets_held_symbol(decision, held_symbol):
+        return f"rotate_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
+    rotation_decision = {**decision, "sell_symbol": held_symbol, "buy_symbol": buy or target_symbol, "symbol": buy or target_symbol, "order_sequence": _rotation_order_sequence(held_symbol, buy or target_symbol)}
+    state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": rotation_decision.get("buy_symbol"), "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
+    sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
+    buy_result = _buy_with_momentum_cadence(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
+    return f"rotate:{sell_result}:{buy_result}"
 
 
 def record_decision(decision: dict[str, Any], execution_result: str | None = None) -> None:
