@@ -4,7 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
-import MomentumCandidatesPage from './pages/MomentumCandidatesPage'
+import MomentumDecisionsPage from './pages/MomentumDecisionsPage'
 import MomentumBacktestV2Page from './pages/MomentumBacktestV2Page'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
@@ -47,7 +47,7 @@ export default function App() {
 
           <div style={groupTitleStyle}>Momentum</div>
           <NavLink to="/momentum" onClick={closeMenu}>Dashboard</NavLink>
-          <NavLink to="/momentum-candidates" onClick={closeMenu}>Trade Candidates</NavLink>
+          <NavLink to="/momentum-decisions" onClick={closeMenu}>Momentum Decisions</NavLink>
           <NavLink to="/momentum-backtest" onClick={closeMenu}>Backtest</NavLink>
 
           <div style={groupTitleStyle}>ETF & Stocks</div>
@@ -70,7 +70,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
-          <Route path="/momentum-candidates" element={<MomentumCandidatesPage />} />
+          <Route path="/momentum-decisions" element={<MomentumDecisionsPage />} />
           <Route path="/momentum-backtest" element={<MomentumBacktestV2Page />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
