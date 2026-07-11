@@ -29,7 +29,7 @@ class MomentumEngineService:
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
     ENTRY_RSI_MIN = 45.0
-    ENTRY_RSI_MAX = 55.0
+    ENTRY_RSI_MAX = 65.0
     ENTRY_RSI_FIELD = "rsi_1h"
     ENTRY_RSI_TIMEFRAME = "1h"
     ENTRY_POOL_TOP_N = 10

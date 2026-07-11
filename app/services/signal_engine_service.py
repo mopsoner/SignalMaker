@@ -198,7 +198,7 @@ class SignalEngineService:
         raw_cfg = (cfg or {}).get('entry_rsi') if isinstance(cfg, dict) else None
         raw_cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
         min_value = float(raw_cfg.get('min', 45.0))
-        max_value = float(raw_cfg.get('max', 55.0))
+        max_value = float(raw_cfg.get('max', 65.0))
         if min_value > max_value:
             min_value, max_value = max_value, min_value
         timeframe = str(raw_cfg.get('timeframe', '1h') or '1h').lower()

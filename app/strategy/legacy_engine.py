@@ -20,7 +20,7 @@ from app.strategy.legacy_signals import (
 
 ALLOWED_CONFIRM_SESSIONS = {"london_open", "london", "new_york"}
 ENTRY_RSI_MIN = 45.0
-ENTRY_RSI_MAX = 55.0
+ENTRY_RSI_MAX = 65.0
 ENTRY_RSI_TIMEFRAME = "1h"
 
 

@@ -12,6 +12,28 @@ const DEFAULT_CADENCE_HOURS = 4
 const STARTING_CAPITAL = 1000
 const MIN_MOMENTUM_SCORE = 0
 
+const KNOWN_QUOTE_SUFFIXES = ['USDT', 'USDC', 'USD', 'EUR', 'GBP', 'BTC', 'ETH']
+
+function inferQuoteFromSymbol(symbol) {
+  const normalized = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (!normalized || normalized === 'NONE' || normalized === 'CASH') return null
+  return KNOWN_QUOTE_SUFFIXES.find((quote) => normalized.endsWith(quote)) || null
+}
+
+function resolveMomentumQuote(engine, rows = []) {
+  const configuredQuote = String(engine?.quote_currency || engine?.quote || '').trim().toUpperCase()
+  if (configuredQuote) return configuredQuote
+
+  const symbols = [
+    engine?.open_position?.symbol,
+    engine?.best_asset?.symbol,
+    engine?.top_watch_asset?.symbol,
+    ...(engine?.trades || []).map((trade) => trade.symbol),
+    ...rows.map((row) => row.symbol),
+  ]
+  return symbols.map(inferQuoteFromSymbol).find(Boolean) || 'USD'
+}
+
 function getOperatorKey() {
   try {
     return window.localStorage.getItem('signalmaker_operator_key') || ''
@@ -170,7 +192,7 @@ function buildMomentumTimeline(engine) {
   return points
 }
 
-function MomentumTradeChart({ points }) {
+function MomentumTradeChart({ points, quoteCurrency = 'USD' }) {
   if (!points.length) return <div className="panel">No momentum engine events yet.</div>
 
   const width = 720
@@ -188,15 +210,15 @@ function MomentumTradeChart({ points }) {
 
   return <div style={{ display: 'grid', gap: 12 }}>
     <div className="stats-grid">
-      <StatCard label="Chart equity" value={fmtNumber(last.equity, 2)} hint={`Range ${fmtNumber(minEquity, 2)} → ${fmtNumber(maxEquity, 2)} USDC`} />
+      <StatCard label="Chart equity" value={fmtNumber(last.equity, 2)} hint={`Range ${fmtNumber(minEquity, 2)} → ${fmtNumber(maxEquity, 2)} ${quoteCurrency}`} />
       <StatCard label="Logged events" value={Math.max(points.length - 1, 0)} hint="BUY / SELL / ROTATE / mark-to-market" />
-      <StatCard label="Latest chart PnL" value={`${fmtNumber(last.equity - startingEquity, 2)} USDC`} hint={last.symbol ? `${last.label} ${last.symbol}` : last.label} />
+      <StatCard label="Latest chart PnL" value={`${fmtNumber(last.equity - startingEquity, 2)} ${quoteCurrency}`} hint={last.symbol ? `${last.label} ${last.symbol}` : last.label} />
     </div>
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Momentum buy sell rotation profit chart" style={{ width: '100%', minHeight: 260, background: 'rgba(15, 23, 42, 0.35)', borderRadius: 16 }}>
       <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="rgba(148, 163, 184, 0.35)" />
       <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="rgba(148, 163, 184, 0.35)" />
-      <text x={pad} y={20} fill="var(--muted)" fontSize="12">{fmtNumber(maxEquity, 2)} USDC</text>
-      <text x={pad} y={height - 8} fill="var(--muted)" fontSize="12">{fmtNumber(minEquity, 2)} USDC</text>
+      <text x={pad} y={20} fill="var(--muted)" fontSize="12">{`${fmtNumber(maxEquity, 2)} ${quoteCurrency}`}</text>
+      <text x={pad} y={height - 8} fill="var(--muted)" fontSize="12">{`${fmtNumber(minEquity, 2)} ${quoteCurrency}`}</text>
       <path d={path} fill="none" stroke="#38bdf8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
       {points.map((point, index) => {
         const x = xFor(index)
@@ -221,6 +243,7 @@ export default function MomentumPage() {
   const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
   const engine = engineOverride || engineData
   const engineTimeline = useMemo(() => buildMomentumTimeline(engine), [engine])
+  const quoteCurrency = useMemo(() => resolveMomentumQuote(engine, rows), [engine, rows])
 
   const counts = useMemo(() => ({
     all: rows.length,
@@ -306,7 +329,7 @@ export default function MomentumPage() {
     <section className="panel" style={{ display: 'grid', gap: 12 }}>
       <h2 style={{ margin: 0 }}>Momentum profit evolution</h2>
       {engineLoading ? <div className="market-toolbar-hint">Loading momentum engine…</div> : null}
-      <MomentumTradeChart points={engineTimeline} />
+      <MomentumTradeChart points={engineTimeline} quoteCurrency={quoteCurrency} />
     </section>
 
     <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
@@ -317,8 +340,8 @@ export default function MomentumPage() {
       {engineError ? <div className="panel error">{engineError}</div> : null}
       {engineActionError ? <div className="panel error">{engineActionError}</div> : null}
       <div className="stats-grid">
-        <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} · PnL ${fmtNumber(engine?.total_pnl, 2)} USDC (${fmtNumber(engine?.total_pnl_pct, 2)}%)`} />
-        <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Open PnL ${fmtNumber(engine.open_position.unrealized_pnl, 2)} USDC · mark ${fmtNumber(engine.open_position.mark_price, 6)}` : `Cash ${fmtNumber(engine?.cash, 2)} USDC`} />
+        <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} · PnL ${fmtNumber(engine?.total_pnl, 2)} ${quoteCurrency} (${fmtNumber(engine?.total_pnl_pct, 2)}%)`} />
+        <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Open PnL ${fmtNumber(engine.open_position.unrealized_pnl, 2)} ${quoteCurrency} · mark ${fmtNumber(engine.open_position.mark_price, 6)}` : `Cash ${fmtNumber(engine?.cash, 2)} ${quoteCurrency}`} />
         <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
         <StatCard label="Next action" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={`${engine?.recommendation || '—'} · cadence ${cadenceHours}h${engine?.next_check_at ? ` · next ${fmtDate(engine.next_check_at)}` : ''}`} />
       </div>
