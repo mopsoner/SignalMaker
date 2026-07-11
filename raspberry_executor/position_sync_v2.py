@@ -738,11 +738,11 @@ def sync_open_positions():
                 })
                 continue
         if not tp_id:
-            missing_tp += 1
             try:
                 replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
             except Exception as exc:
                 replay_skipped += 1
+                missing_tp += 1
                 state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
                 logger.warning("tp replay failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
                 continue
@@ -752,8 +752,10 @@ def sync_open_positions():
                 attached_existing += 1
             elif replay_result == "blocked":
                 replay_blocked += 1
+                missing_tp += 1
             else:
                 replay_skipped += 1
+                missing_tp += 1
             continue
 
         tp = _order(kraken, margin, symbol, tp_id, use_margin=use_margin)
@@ -768,7 +770,6 @@ def sync_open_positions():
             continue
 
         if status in {"CANCELED", "REJECTED", "EXPIRED"} or _is_not_found_error(tp):
-            missing_tp += 1
             state.update_open_position(
                 candidate_id,
                 {
@@ -786,6 +787,7 @@ def sync_open_positions():
                 replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
             except Exception as exc:
                 replay_skipped += 1
+                missing_tp += 1
                 state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
                 logger.warning("tp replay failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
                 continue
@@ -795,8 +797,10 @@ def sync_open_positions():
                 attached_existing += 1
             elif replay_result == "blocked":
                 replay_blocked += 1
+                missing_tp += 1
             else:
                 replay_skipped += 1
+                missing_tp += 1
             continue
 
         if _has_sync_error(tp):

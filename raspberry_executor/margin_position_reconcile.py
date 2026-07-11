@@ -135,7 +135,6 @@ def reconcile_kraken_margin_positions() -> dict:
             continue
         symbol = _normalize_symbol(str(remote.get("pair") or ""), rules)
         entry_id = _entry_order_id(str(key), remote)
-        logger.info("kraken margin remote position detected symbol=%s entry=%s qty=%s", symbol, entry_id, qty)
         local_id, _local = _find_local(local_positions, entry_order_id=entry_id, symbol=symbol, quantity=qty)
         if local_id:
             updates = {"last_kraken_open_position_sync_ts": time.time(), "kraken_open_position_payload": remote, "imported_from_kraken_open_positions": bool(_local.get("imported_from_kraken_open_positions"))}
@@ -185,8 +184,12 @@ def reconcile_kraken_margin_positions() -> dict:
                     updates.update({"needs_tp_replay": True})
                     state.update_open_position(local_id, updates)
             summary["already_local"] += 1
-            logger.info("kraken margin position already local symbol=%s entry=%s", symbol, entry_id)
+            if updates.get("needs_tp_replay") or updates.get("needs_tp_confirmation") or confirmed_tp:
+                logger.info("kraken margin position already local symbol=%s entry=%s", symbol, entry_id)
+            else:
+                logger.debug("kraken margin position already local protected symbol=%s entry=%s", symbol, entry_id)
             continue
+        logger.info("kraken margin remote position detected symbol=%s entry=%s qty=%s", symbol, entry_id, qty)
         try:
             tp = _find_existing_tp(margin, symbol, qty)
             tp_id = _order_id(tp) if tp else None
