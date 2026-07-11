@@ -352,7 +352,7 @@ def test_rotate_sells_margin_position_before_restarting_buy_pattern(tmp_path, mo
         return "fallback_buy:ALLUSDC:bought_margin:ALLUSDC:qty=25.00000000:notional=25.0000"
 
     monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
-    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
 
     result = momentum_module.execute_decision({"action": "ROTATE", "should_trade": True, "symbol": "BANKUSDC", "sell_symbol": "BANKUSDC", "buy_symbol": "ALLUSDC"})
 
@@ -460,7 +460,7 @@ def test_execute_decision_accepts_decision_action_only_buy(tmp_path, monkeypatch
     decision = {"decision_action": "BUY", "target_symbol": "ALLUSDC", "should_trade": True}
 
     assert momentum_module.execute_decision(decision) == "bought:ALLUSDC"
-    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": {""}}]
+    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": None}]
 
 
 def test_execute_decision_accepts_action_only_buy(tmp_path, monkeypatch):
@@ -480,7 +480,7 @@ def test_execute_decision_accepts_action_only_buy(tmp_path, monkeypatch):
     decision = {"action": "BUY", "target_symbol": "ALLUSDC", "should_trade": True}
 
     assert momentum_module.execute_decision(decision) == "bought:ALLUSDC"
-    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": {""}}]
+    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": None}]
 
 
 def test_execute_decision_rejects_conflicting_action_fields(monkeypatch):
@@ -516,31 +516,23 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
     monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
 
     def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
-        calls.append(("sell", symbol, decision["action"], decision["order_sequence"], list(store.open_positions())))
-        store.close_position("momentum-BANKUSDC", "momentum_sell", {}, record_event=False)
+        calls.append(("sell", symbol))
         return "sell_confirmed:BANKUSDC:remaining_value=0.0000:quote=25.0000"
 
     def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
-        calls.append(("buy", decision.get("buy_symbol"), decision["action"], decision["order_sequence"], list(store.open_positions())))
-        return "fallback_buy:ALLUSDC:bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+        calls.append(("buy", decision.get("buy_symbol"), decision["action"], sorted(exclude or []), list(store.open_positions())))
+        return "bought:ALLUSDC"
 
     monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
-    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
 
     result = momentum_module.execute_decision({"action": "BUY", "should_trade": True, "symbol": "ALLUSDC", "buy_symbol": "ALLUSDC"})
 
-    expected_sequence = [
-        {"step": 1, "action": "SELL", "symbol": "BANKUSDC", "role": "exit_held_momentum_asset"},
-        {"step": 2, "action": "BUY", "symbol": "ALLUSDC", "role": "enter_new_momentum_asset"},
-    ]
-    assert result.startswith("rotate:sell_confirmed:BANKUSDC"), result
-    assert calls == [
-        ("sell", "BANKUSDC", "ROTATE", expected_sequence, ["momentum-BANKUSDC"]),
-        ("buy", "ALLUSDC", "ROTATE", expected_sequence, []),
-    ]
+    assert result == "bought:ALLUSDC"
+    assert calls == [("buy", "ALLUSDC", "BUY", [], ["momentum-BANKUSDC"])]
 
 
-def test_execute_hold_without_position_does_not_initialize_momentum_position_from_target_asset(tmp_path, monkeypatch):
+def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "0")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
@@ -555,12 +547,12 @@ def test_execute_hold_without_position_does_not_initialize_momentum_position_fro
         calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"]))
         return "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
 
-    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
 
-    assert result == "hold_no_existing_momentum_position:ALLUSDC"
-    assert calls == []
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert calls == [("HOLD", "ALLUSDC", "ALLUSDC", "ALLUSDC")]
     assert [event["event_type"] for event in state.events()] == []
 
 
@@ -589,7 +581,7 @@ def test_execute_wait_with_target_differs_from_held_momentum_position_stays_pass
 
     result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
 
-    assert result == "wait_existing_momentum_position:BANKUSDC"
+    assert result == "wait:WAIT"
     assert calls == []
 
 
@@ -605,7 +597,7 @@ def test_execute_wait_holds_existing_momentum_target(tmp_path, monkeypatch):
 
     result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
 
-    assert result == "wait_existing_momentum_position:ALLUSDC"
+    assert result == "wait:WAIT"
 
 
 def test_confirmed_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
@@ -826,13 +818,13 @@ def test_execute_decision_wait_without_held_symbol_never_orders(monkeypatch):
     assert result.startswith("wait:"), result
 
 
-def test_execute_decision_hold_without_held_symbol_does_not_buy(monkeypatch):
+def test_execute_decision_hold_without_held_symbol_buys_target(monkeypatch):
     calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
 
-    assert calls == []
-    assert result == "hold_no_existing_momentum_position:OMGUSD"
+    assert calls == [("buy", "OMGUSD")]
+    assert result == "bought:OMGUSD"
 
 
 def test_execute_decision_buy_without_held_symbol_allows_buy(monkeypatch):
@@ -849,7 +841,7 @@ def test_execute_decision_rotate_different_held_symbol_sells_then_buys(monkeypat
 
     result = momentum_module.execute_decision({"action": "ROTATE", "should_trade": True, "sell_symbol": "ALLUSD", "buy_symbol": "OMGUSD", "target_symbol": "OMGUSD"})
 
-    assert calls == [("sell", "ALLUSD"), ("buy_best", "OMGUSD")]
+    assert calls == [("sell", "ALLUSD"), ("buy", "OMGUSD")]
     assert result == "rotate:sell_confirmed:ALLUSD:bought:OMGUSD"
 
 
@@ -860,3 +852,30 @@ def test_execute_decision_sell_with_held_symbol_sells_only(monkeypatch):
 
     assert calls == [("sell", "ALLUSD")]
     assert result == "sell_confirmed:ALLUSD"
+
+
+def test_execute_decision_hold_existing_momentum_position(monkeypatch):
+    calls = _stub_execute_decision_runtime(monkeypatch, held_symbol="OMGUSD")
+
+    result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
+
+    assert calls == []
+    assert result == "hold_existing_momentum_position:OMGUSD"
+
+
+def test_execute_decision_sell_blocked_when_target_is_not_held(monkeypatch):
+    calls = _stub_execute_decision_runtime(monkeypatch, held_symbol="ALLUSD")
+
+    result = momentum_module.execute_decision({"action": "SELL", "should_trade": True, "sell_symbol": "OMGUSD", "symbol": "OMGUSD"})
+
+    assert calls == []
+    assert result == "sell_blocked:decision_not_on_held_momentum_asset:held=ALLUSD:sell=OMGUSD"
+
+
+def test_execute_decision_unsupported_action(monkeypatch):
+    calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
+
+    result = momentum_module.execute_decision({"action": "CANCEL", "should_trade": True, "target_symbol": "OMGUSD"})
+
+    assert calls == []
+    assert result == "unsupported_action:CANCEL"
