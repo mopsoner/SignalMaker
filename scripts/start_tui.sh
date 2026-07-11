@@ -9,11 +9,14 @@ if [ -d ".venv" ]; then
 fi
 
 export TERM="${TERM:-linux}"
+if [ -z "${EXECUTOR_API_PORT:-}" ] && [ -f ".env" ]; then
+  EXECUTOR_API_PORT="$(awk -F= '$1 == "EXECUTOR_API_PORT" {print $2; exit}' .env)"
+fi
 if [ -z "${APP_PORT:-}" ] && [ -f ".env" ]; then
   APP_PORT="$(awk -F= '$1 == "APP_PORT" {print $2; exit}' .env)"
 fi
-APP_PORT="${APP_PORT:-8080}"
-export SIGNALMAKER_BASE_URL="${SIGNALMAKER_BASE_URL:-http://127.0.0.1:${APP_PORT}}"
+TUI_API_PORT="${EXECUTOR_API_PORT:-${APP_PORT:-8080}}"
+export SIGNALMAKER_BASE_URL="${SIGNALMAKER_BASE_URL:-http://127.0.0.1:${TUI_API_PORT}}"
 
 wait_for_api() {
   local base_url="${SIGNALMAKER_BASE_URL%/}"
