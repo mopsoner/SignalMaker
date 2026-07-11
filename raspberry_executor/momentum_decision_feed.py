@@ -138,6 +138,29 @@ def fetch_decision() -> dict[str, Any]:
         raise RuntimeError(f"momentum_decision_http_error status={response.status_code} url={response.url} payload={data}")
     return apply_previous_buy_rotation(normalize_decision(data))
 
+def _normalize_decision_action_fields(payload: dict[str, Any]) -> tuple[str, str | None]:
+    decision_action_value = payload.get("decision_action")
+    action_value = payload.get("action")
+    decision_action = str(decision_action_value).upper() if decision_action_value is not None else None
+    action = str(action_value).upper() if action_value is not None else None
+
+    if decision_action is not None:
+        payload["decision_action"] = decision_action
+    if action is not None:
+        payload["action"] = action
+
+    if decision_action is not None and action is not None and decision_action != action:
+        conflict = f"unsupported_action_conflict:action={action}:decision_action={decision_action}"
+        payload["action_conflict"] = conflict
+        return action, conflict
+
+    normalized_action = decision_action or action or "WAIT"
+    payload["decision_action"] = normalized_action
+    payload["action"] = normalized_action
+    payload.pop("action_conflict", None)
+    return normalized_action, None
+
+
 def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     payload = dict(decision)
     nested_decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
@@ -165,14 +188,12 @@ def normalize_decision(decision: dict[str, Any]) -> dict[str, Any]:
                 payload[key] = source.get(key)
 
     payload.setdefault("mode", "momentum_rotation")
-    payload["decision_action"] = str(payload.get("decision_action") or payload.get("action") or "WAIT").upper()
-    payload.setdefault("action", payload["decision_action"])
-    payload["action"] = str(payload.get("action") or payload["decision_action"]).upper()
+    action, _ = _normalize_decision_action_fields(payload)
     payload.setdefault("target_symbol", payload.get("buy_symbol") or payload.get("symbol"))
     payload.setdefault("symbol", payload.get("target_symbol") or payload.get("buy_symbol") or payload.get("sell_symbol"))
-    payload.setdefault("buy_symbol", payload.get("target_symbol") if payload["action"] in {"BUY", "ROTATE"} else None)
-    payload.setdefault("sell_symbol", payload.get("symbol") if payload["action"] == "SELL" else None)
-    payload.setdefault("should_trade", payload["action"] in {"BUY", "SELL", "ROTATE"})
+    payload.setdefault("buy_symbol", payload.get("target_symbol") if action in {"BUY", "ROTATE"} else None)
+    payload.setdefault("sell_symbol", payload.get("symbol") if action == "SELL" else None)
+    payload.setdefault("should_trade", action in {"BUY", "SELL", "ROTATE"})
     payload.setdefault("status", payload.get("execution_status") or result.get("status") or "decision")
     payload.setdefault("reason", payload.get("recommendation") or payload.get("message") or "")
     payload.setdefault("order_ids", [])
@@ -966,6 +987,10 @@ def _rotate_momentum_position(settings, kraken: KrakenClient, rules: KrakenSymbo
 
 
 def execute_decision(decision: dict[str, Any]) -> str:
+    action, action_conflict = _normalize_decision_action_fields(decision)
+    if action_conflict:
+        logger.error("momentum decision action conflict: %s", action_conflict)
+        return action_conflict
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
     settings = load_settings()
@@ -975,7 +1000,6 @@ def execute_decision(decision: dict[str, Any]) -> str:
         kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run)
         rules = KrakenSymbolRules(settings.kraken_base_url)
     state = StateStore()
-    action = str(decision.get("action") or "WAIT").upper()
     should_trade = bool(decision.get("should_trade"))
     sell = str(decision.get("sell_symbol") or "").upper()
     held_position = current_momentum_position(state)

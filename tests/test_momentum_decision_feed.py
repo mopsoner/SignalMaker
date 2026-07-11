@@ -442,6 +442,68 @@ def test_fetch_decision_can_display_central_run_once_result(tmp_path, monkeypatc
     assert decision["reason"] == "already_positioned"
 
 
+
+def test_execute_decision_accepts_decision_action_only_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "StateStore", StateStore)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0]))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+    calls = []
+
+    def fake_buy(settings, kraken, rules, state, decision, *, exclude=None):
+        calls.append({"action": decision["action"], "decision_action": decision["decision_action"], "exclude": exclude})
+        return "bought:ALLUSDC"
+
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
+
+    decision = {"decision_action": "BUY", "target_symbol": "ALLUSDC", "should_trade": True}
+
+    assert momentum_module.execute_decision(decision) == "bought:ALLUSDC"
+    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": {""}}]
+
+
+def test_execute_decision_accepts_action_only_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "StateStore", StateStore)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0]))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+    calls = []
+
+    def fake_buy(settings, kraken, rules, state, decision, *, exclude=None):
+        calls.append({"action": decision["action"], "decision_action": decision["decision_action"], "exclude": exclude})
+        return "bought:ALLUSDC"
+
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
+
+    decision = {"action": "BUY", "target_symbol": "ALLUSDC", "should_trade": True}
+
+    assert momentum_module.execute_decision(decision) == "bought:ALLUSDC"
+    assert calls == [{"action": "BUY", "decision_action": "BUY", "exclude": {""}}]
+
+
+def test_execute_decision_rejects_conflicting_action_fields(monkeypatch):
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: (_ for _ in ()).throw(AssertionError("load_settings should not be called")))
+
+    decision = {"action": "WAIT", "decision_action": "BUY", "target_symbol": "ALLUSDC", "should_trade": True}
+
+    assert momentum_module.execute_decision(decision) == "unsupported_action_conflict:action=WAIT:decision_action=BUY"
+
+
+def test_execute_decision_accepts_matching_wait_action_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
+    monkeypatch.setattr(momentum_module, "StateStore", StateStore)
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0]))
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+
+    decision = {"action": "WAIT", "decision_action": "WAIT", "reason": "no_signal", "should_trade": False}
+
+    assert momentum_module.execute_decision(decision) == "wait:no_signal"
+    assert decision["action"] == "WAIT"
+    assert decision["decision_action"] == "WAIT"
+
 def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
