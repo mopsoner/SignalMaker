@@ -3,12 +3,10 @@ import json
 import os
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
-from raspberry_executor.kraken_client import KrakenClient
-from raspberry_executor.config import load_settings
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_multiplier, shorts_enabled
-from raspberry_executor.signalmaker_client import SignalMakerClient
-from raspberry_executor.state import StateStore
+from raspberry_executor.tui_api import BASE_URL, api_get, as_rows
 
 REFRESH_SECONDS = 5
 
@@ -58,7 +56,7 @@ def fr_datetime(value, *, with_date: bool = True) -> str:
 
 
 def candidate_received_at(candidate: dict) -> str:
-    return fr_datetime(candidate.get("updated_at") or candidate.get("created_at") or candidate.get("timestamp") or candidate.get("exported_at"))
+    return fr_datetime(candidate.get("received_at") or candidate.get("created_at") or candidate.get("updated_at") or candidate.get("timestamp") or candidate.get("exported_at"))
 
 
 def add(stdscr, y, x, text, attr=0):
@@ -119,95 +117,117 @@ def momentum_buyable_text(row: dict) -> str:
 
 
 
-def summarize_candle_feed(client: SignalMakerClient) -> tuple[dict, str | None]:
-    try:
-        rows = client.candle_summary()
-    except Exception as exc:
-        return {"ok": False, "count": 0, "latest": None, "symbols": []}, str(exc)
+def summarize_candle_feed_rows(rows: list[dict]) -> dict:
     latest = None
     for row in rows:
-        value = row.get("latest_open_time") or row.get("last_open_time") or row.get("open_time") or row.get("updated_at")
+        value = row.get("latest_open_time") or row.get("last_open_time") or row.get("open_time") or row.get("updated_at") or row.get("timestamp")
         dt = parse_dt(value)
         if dt and (latest is None or dt > latest):
             latest = dt
     symbols = [safe(row.get("symbol")) for row in rows[:5]]
-    return {"ok": True, "count": len(rows), "latest": latest.isoformat() if latest else None, "symbols": symbols}, None
+    return {"ok": True, "count": len(rows), "latest": latest.isoformat() if latest else None, "symbols": symbols}
 
-def fetch_candidates(limit: int | None = None):
-    try:
-        settings = load_settings()
-        client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-        return client.get_open_candidates(limit=limit or candidate_display_limit()), None
-    except Exception as exc:
-        return [], str(exc)
+
+def settings_namespace(payload: dict) -> SimpleNamespace:
+    executor = payload.get("executor", {}) if isinstance(payload, dict) else {}
+    live = payload.get("live", {}) if isinstance(payload, dict) else {}
+    market_data = payload.get("market_data", {}) if isinstance(payload, dict) else {}
+    strategy = payload.get("strategy", {}) if isinstance(payload, dict) else {}
+    quote_assets = executor.get("quote_assets") or market_data.get("kraken_quote_assets") or []
+    if isinstance(quote_assets, str):
+        quote_assets = [item.strip() for item in quote_assets.split(",") if item.strip()]
+    return SimpleNamespace(
+        raw=payload,
+        order_quote_amount=executor.get("order_quote_amount") or strategy.get("order_quote_amount") or live.get("order_quote_amount") or "-",
+        quote_assets=quote_assets,
+        dry_run=not bool(live.get("live_trading_enabled")),
+    )
 
 
 def position_strategy(candidate_id: str, row: dict) -> str:
-    if str(candidate_id).startswith("momentum-") or isinstance(row.get("momentum_decision"), dict) or str(row.get("strategy") or "").lower() == "momentum_rotation":
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    if str(candidate_id).startswith("momentum-") or str(row.get("stage") or meta.get("stage") or "").lower() == "momentum":
         return "mom"
-    mode = str(row.get("mode") or "").lower()
+    mode = str(row.get("mode") or meta.get("mode") or "").lower()
     if mode == "margin":
         return "mgn"
     return "sig"
 
 
-def enrich_positions_with_pnl(positions, settings):
-    kraken = KrakenClient(settings.kraken_base_url, settings.kraken_api_key, settings.kraken_secret_key, dry_run=settings.dry_run or margin_dry_run())
-    enriched = []
-    total_pnl = 0.0
-    total_ok = True
-    price_cache = {}
-    for candidate_id, row in positions:
-        pos = dict(row)
-        pos["strategy_label"] = position_strategy(candidate_id, pos)
-        symbol = str(pos.get("execution_symbol") or pos.get("signal_symbol") or "").upper()
-        side = str(pos.get("side") or "").lower()
-        qty = _float(pos.get("quantity"))
-        entry = _float(pos.get("entry_price"))
-        try:
-            if symbol not in price_cache:
-                price_cache[symbol] = kraken.current_price(symbol)
-            mark = price_cache[symbol]
-            pnl = (mark - entry) * qty if side == "long" else (entry - mark) * qty
-            pos["mark_price"] = mark
-            pos["pnl"] = pnl
-            total_pnl += pnl
-        except Exception as exc:
-            pos["mark_price"] = None
-            pos["pnl"] = None
-            pos["pnl_error"] = str(exc)
-            total_ok = False
-        enriched.append((candidate_id, pos))
-    return enriched, {"total_pnl": total_pnl, "total_ok": total_ok}
+def normalize_position(row: dict) -> tuple[str, dict]:
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    candidate_id = str(meta.get("candidate_id") or row.get("candidate_id") or row.get("position_id") or "-")
+    pos = dict(row)
+    pos.setdefault("candidate_id", candidate_id)
+    pos.setdefault("execution_symbol", row.get("symbol"))
+    pos.setdefault("signal_symbol", row.get("symbol"))
+    pos.setdefault("target_price", row.get("target_price") or row.get("stop_price"))
+    pos.setdefault("pnl", row.get("unrealized_pnl"))
+    pos.setdefault("strategy_label", position_strategy(candidate_id, pos))
+    return candidate_id, pos
+
+
+def latest_momentum_row(rows: list[dict]) -> dict | None:
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "decision_action": row.get("decision_action") or row.get("action") or row.get("status"),
+        "symbol": row.get("symbol"),
+        "target_symbol": row.get("target_symbol") or row.get("symbol"),
+        "status": row.get("status"),
+        "reason": row.get("notes") or row.get("reason"),
+        "order_ids": row.get("order_ids"),
+        "fill_ids": row.get("fill_ids"),
+        "best_asset.symbol": row.get("symbol"),
+        "best_asset.price": row.get("entry_price"),
+        "best_asset.momentum_score": row.get("score"),
+    }
 
 
 def snapshot():
-    state = StateStore()
     limit = candidate_display_limit()
-    candidates, candidate_error = fetch_candidates(limit=limit)
-    settings = load_settings()
-    client = SignalMakerClient(settings.signalmaker_base_url, settings.gateway_id)
-    candle_feed, candle_error = summarize_candle_feed(client)
-    positions, pnl_summary = enrich_positions_with_pnl(list(state.open_positions().items()), settings)
-    events = list(reversed(state.events()[-160:]))
     now = datetime.now().astimezone()
+    errors: dict[str, str] = {}
+
+    def get(path: str, params: dict | None = None, default=None):
+        try:
+            return api_get(path, params)
+        except Exception as exc:
+            errors[path] = str(exc)
+            return default
+
+    health = get("/healthz", default={})
+    settings_payload = get("/api/v1/admin/settings", default={})
+    candidates = as_rows(get("/api/v1/trade-candidates", {"limit": limit}, default=[]))
+    positions = [normalize_position(row) for row in as_rows(get("/api/v1/positions", {"limit": 100}, default=[])) if isinstance(row, dict)]
+    momentum_candidates = as_rows(get("/api/v1/momentum", {"limit": 100}, default=[]))
+    candle_rows = [row for row in as_rows(get("/api/v1/market-data/candles/summary", default=[])) if isinstance(row, dict)]
+    logs_payload = get("/api/v1/admin/logs/executor", {"lines": 160}, default={})
+    log_lines = logs_payload.get("lines", []) if isinstance(logs_payload, dict) else []
+    events = [{"timestamp": None, "candidate_id": "executor", "event_type": "log", "payload": {"message": line}} for line in reversed(log_lines)]
+    pnl_values = [row.get("pnl") for _, row in positions if row.get("pnl") is not None]
+    total_pnl = sum(_float(value) for value in pnl_values) if pnl_values else None
     return {
-        "settings": settings,
+        "base_url": BASE_URL,
+        "health": health,
+        "settings": settings_namespace(settings_payload if isinstance(settings_payload, dict) else {}),
         "execution_mode": execution_mode(),
         "margin_dry_run": margin_dry_run(),
         "margin_multiplier": margin_multiplier(),
         "shorts_enabled": shorts_enabled(),
         "positions": positions,
-        "pnl_summary": pnl_summary,
+        "pnl_summary": {"total_pnl": total_pnl, "total_ok": "/api/v1/positions" not in errors},
         "events": events,
-        "momentum": latest_momentum_decision(list(reversed(events))),
-        "momentum_candidates": momentum_candidate_rows(candidates),
+        "momentum": latest_momentum_row([r for r in momentum_candidates if isinstance(r, dict)]),
+        "momentum_candidates": momentum_candidates,
         "candidates": candidates,
-        "candidate_error": candidate_error,
-        "candle_feed": candle_feed,
-        "candle_error": candle_error,
+        "candidate_error": errors.get("/api/v1/trade-candidates"),
+        "candle_feed": summarize_candle_feed_rows(candle_rows),
+        "candle_error": errors.get("/api/v1/market-data/candles/summary"),
         "candidate_limit": limit,
         "refreshed_at": now.strftime("%d/%m %H:%M:%S"),
+        "errors": errors,
     }
 
 
@@ -285,8 +305,6 @@ def render_momentum(stdscr, y, x, h, w, data):
     if not m:
         add(stdscr, y + 1, x + 2, "No momentum trade candidate yet", curses.color_pair(4))
         return
-    decision = m.get("decision") if isinstance(m.get("decision"), dict) else {}
-    target = decision.get("target_asset") if isinstance(decision.get("target_asset"), dict) else {}
     rows = [
         ("Decision", m.get("decision_action") or m.get("action")),
         ("Symbol", m.get("symbol")),
@@ -295,8 +313,9 @@ def render_momentum(stdscr, y, x, h, w, data):
         ("Reason", m.get("reason")),
         ("Order IDs", m.get("order_ids")),
         ("Fill IDs", m.get("fill_ids")),
-        ("Result", m.get("execution_result")),
-        ("Next", m.get("next_check_at")),
+        ("Best asset", m.get("best_asset.symbol")),
+        ("Best price", m.get("best_asset.price")),
+        ("Best score", m.get("best_asset.momentum_score")),
     ]
     for i, (k, v) in enumerate(rows[: h - 2]):
         color = curses.color_pair(2) if k == "Decision" and str(v).upper() in {"BUY", "HOLD"} else curses.color_pair(5) if k == "Decision" and str(v).upper() in {"SELL", "ROTATE"} else curses.color_pair(4)
@@ -304,10 +323,11 @@ def render_momentum(stdscr, y, x, h, w, data):
         add(stdscr, y + 1 + i, x + 14, trunc(v, w - 16), color)
 
 def render_positions(stdscr, y, x, h, w, data):
-    total_pnl = data.get("pnl_summary", {}).get("total_pnl", 0.0)
-    box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl:+.4f}")
+    total_pnl = data.get("pnl_summary", {}).get("total_pnl")
+    total_pnl_text = f"{total_pnl:+.4f}" if total_pnl is not None else "-"
+    box(stdscr, y, x, h, w, f"Open Positions | PNL total {total_pnl_text}")
     rows = data["positions"][: max(0, h - 4)]
-    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PNL        Target     TP        Result", curses.A_BOLD)
+    add(stdscr, y + 1, x + 2, "Str Symbol     Side   Qty        Entry      Mark       PnL        TP/Target  Status    Ouvert", curses.A_BOLD)
     if not rows:
         add(stdscr, y + 2, x + 2, "No open positions", curses.color_pair(4))
         return
@@ -317,9 +337,9 @@ def render_positions(stdscr, y, x, h, w, data):
         mark = row.get("mark_price")
         pnl_text = f"{pnl:+.4f}" if pnl is not None else "PNL?"
         mark_text = f"{mark:.8g}" if mark is not None else "-"
-        result = position_result(row)
-        tp_text = safe(row.get('tp_order_id'), 'no-tp')
-        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price')):<10} {tp_text:<9} {result}"
+        result = safe(row.get("status") or position_result(row))
+        opened = fr_datetime(row.get("opened_at") or row.get("created_at"), with_date=False)
+        line = f"{safe(row.get('strategy_label')):<3} {safe(symbol):<10} {safe(row.get('side')):<6} {safe(row.get('quantity')):<10} {safe(row.get('entry_price')):<10} {mark_text:<10} {pnl_text:<10} {safe(row.get('target_price')):<10} {result:<9} {opened}"
         color = curses.color_pair(2) if target_reached(row) or (pnl is not None and pnl >= 0) else curses.color_pair(5) if pnl is not None else curses.color_pair(4)
         add(stdscr, y + 2 + idx, x + 2, trunc(line, w - 4), color)
 
@@ -335,9 +355,9 @@ def render_candidates(stdscr, y, x, h, w, data):
     if not candidates:
         add(stdscr, y + 2, x + 2, "No candidates returned", curses.color_pair(4))
         return
-    add(stdscr, y + 2, x + 2, "Received       Symbol     Stage      Side   Status   Target", curses.A_BOLD)
+    add(stdscr, y + 2, x + 2, "Reçu          ID           Symbol   Stage    Side  Entry    TP       SL       Score  Status", curses.A_BOLD)
     for idx, row in enumerate(candidates[: max(0, h - 4)]):
-        line = f"{candidate_received_at(row):<14} {safe(row.get('symbol')):<10} {safe(row.get('stage')):<10} {safe(row.get('side')):<6} {safe(row.get('status')):<8} {safe(row.get('target_price'))}"
+        line = f"{candidate_received_at(row):<13} {safe(row.get('candidate_id')):<12} {safe(row.get('symbol')):<8} {safe(row.get('stage')):<8} {safe(row.get('side')):<5} {safe(row.get('entry_price')):<8} {safe(row.get('target_price')):<8} {safe(row.get('stop_loss') or row.get('stop_price')):<8} {safe(row.get('score')):<6} {safe(row.get('status'))}"
         add(stdscr, y + 3 + idx, x + 2, trunc(line, w - 4))
 
 
