@@ -33,11 +33,8 @@ def momentum_engine_decision(
     min_momentum_score: float = 0.0,
     db: Session = Depends(get_db),
 ) -> MomentumEngineDecision:
-    return MomentumEngineService(db).decision(
-        cadence_hours=cadence_hours,
-        starting_capital=starting_capital,
-        min_momentum_score=min_momentum_score,
-    )
+    _ = (cadence_hours, starting_capital, min_momentum_score)
+    return MomentumEngineService(db).current_decision()
 
 
 @router.post("/run-once", response_model=MomentumEngineStatus)

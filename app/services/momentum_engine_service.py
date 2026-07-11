@@ -55,6 +55,26 @@ class MomentumEngineService:
         )
         return self._decision_from_status(status)
 
+    def current_decision(self) -> dict[str, Any]:
+        """Return the latest persisted momentum-engine decision payload."""
+        stmt = (
+            select(MomentumEngineTrade)
+            .where(MomentumEngineTrade.strategy == self.STRATEGY)
+            .order_by(MomentumEngineTrade.created_at.desc())
+        )
+        latest_payload: dict[str, Any] | None = None
+        for trade in self.db.scalars(stmt).all():
+            metadata = trade.meta or {}
+            payload = metadata.get("decision_payload") or metadata.get("decision") or metadata.get("payload")
+            if isinstance(payload, dict):
+                if trade.action == "DECISION":
+                    return payload
+                latest_payload = latest_payload or payload
+
+        if latest_payload is not None:
+            return latest_payload
+        raise LookupError("No persisted momentum-engine decision payload found.")
+
     def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         before = self._build_status(
