@@ -86,17 +86,13 @@ def dashboard():
 
 def nav_links():
     return " | ".join([
-        "<a href='/device-status'>Device Status</a>",
-        "<a href='/remote-signalmaker'>Remote SignalMaker</a>",
-        "<a href='/candle-feed'>Candle Feed</a>",
-        "<a href='/backfill'>Backfill</a>",
-        "<a href='/candidates'>Trade Candidates</a>",
-        "<a href='/momentum-decision'>Momentum Orders</a>",
-        "<a href='/positions'>Positions</a>",
-        "<a href='/orders'>Orders / Fills</a>",
-        "<a href='/kraken-diagnostics'>Kraken Diagnostics</a>",
-        "<a href='/admin'>Settings</a>",
-        "<a href='/logs'>Logs</a>",
+        "<a href='/index.html'>Status</a>",
+        "<a href='/ops.html'>Settings runtime</a>",
+        "<a href='/ops.html#logs'>Logs executor</a>",
+        "<a href='/positions.html'>Positions</a>",
+        "<a href='/candidates.html'>Candidates</a>",
+        "<a href='/momentum-candidates.html'>Momentum</a>",
+        "<a href='/ops.html#reset'>Reset local/runtime</a>",
     ])
 
 
@@ -272,7 +268,7 @@ def events_page(limit: int = 250):
 
 
 def page(body):
-    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='10'><title>SignalMaker Raspberry Executor</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/'>Device Status</a><a href='/remote-signalmaker'>Remote SignalMaker</a><a href='/candle-feed'>Candle Feed</a><a href='/backfill'>Backfill</a><a href='/candidates'>Trade Candidates</a><a href='/momentum-decision'>Momentum Orders</a><a href='/positions'>Positions</a><a href='/orders'>Orders / Fills</a><a href='/kraken-diagnostics'>Kraken Diagnostics</a><a href='/admin'>Settings</a><a href='/logs'>Logs</a></nav><main>"""
+    head = """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='10'><title>SignalMaker Raspberry Executor</title><style>body{font-family:Arial;margin:0;background:#0b0f14;color:#eee}nav{background:#111923;padding:10px;white-space:nowrap;overflow:auto}nav a{color:#dce8ff;margin-right:14px;text-decoration:none}main{padding:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.card,.box{background:#151c26;border:1px solid #263241;border-radius:12px;padding:12px;margin:10px 0}.card b{display:block;color:#aebbd0;font-size:12px}.card span{font-size:24px;font-weight:800}.pill{display:inline-block;background:#263241;border-radius:999px;padding:5px 9px;margin:3px}.pill.ok{background:#12351c;color:#72e37b}.pill.warn{background:#3b2f0d;color:#ffd166}.pill.bad{background:#3b1515;color:#ff7b72}a{color:#8ab4ff}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #2a3545;padding:7px;text-align:left;font-size:13px;vertical-align:top}code{color:#dce8ff;word-break:break-word}details summary{cursor:pointer;color:#8ab4ff}pre{white-space:pre-wrap;background:#05070a;padding:10px;border-radius:10px;overflow:auto;max-height:420px}.muted{color:#9aa7b8}</style></head><body><nav><a href='/index.html'>Status</a><a href='/ops.html'>Settings runtime</a><a href='/ops.html#logs'>Logs executor</a><a href='/positions.html'>Positions</a><a href='/candidates.html'>Candidates</a><a href='/momentum-candidates.html'>Momentum</a><a href='/ops.html#reset'>Reset local/runtime</a></nav><main>"""
     return (head + body + "</main></body></html>").encode()
 
 
@@ -281,30 +277,38 @@ class Handler(LocalHandler):
         if self.path.startswith("/api/events"):
             limit = _request_limit(self.path, default=250, maximum=1000)
             return self.send_json({"events": list(reversed(StateStore().events(limit=limit))), "limit": limit})
-        if self.path == "/" or self.path.startswith("/?"):
-            data = page(dashboard())
-        elif self.path.startswith("/candle-feed"):
-            data = page(candle_feed_page())
-        elif self.path.startswith("/backfill"):
-            data = page(backfill_page())
-        elif self.path.startswith("/device-status") or self.path.startswith("/remote-signalmaker") or self.path.startswith("/kraken-diagnostics"):
-            data = page(dashboard())
-        elif self.path.startswith("/momentum-decision"):
-            data = page(momentum_decision_page())
-        elif self.path.startswith("/events"):
+        if self.path.startswith("/events"):
             data = page(events_page(limit=_request_limit(self.path)))
-        else:
-            return super().do_GET()
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store, max-age=0")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
             return
+        redirect_map = {
+            "/": "/index.html",
+            "/device-status": "/index.html",
+            "/remote-signalmaker": "/index.html",
+            "/candle-feed": "/ops.html",
+            "/backfill": "/ops.html",
+            "/kraken-diagnostics": "/ops.html",
+            "/admin": "/ops.html",
+            "/logs": "/ops.html",
+            "/orders": "/orders.html",
+            "/positions": "/positions.html",
+            "/candidates": "/candidates.html",
+            "/momentum-decision": "/momentum-candidates.html",
+        }
+        path = urlparse(self.path).path
+        for legacy, target in redirect_map.items():
+            if path == legacy or path.startswith(f"{legacy}/"):
+                return self.redirect_official(target)
+        return super().do_GET()
 
 
 def run_web(host="0.0.0.0", port=8090):

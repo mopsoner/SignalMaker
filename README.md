@@ -104,13 +104,13 @@ After installation, the Raspberry starts through the single `bash run.sh` entry 
 bash run.sh
 ```
 
-Open SignalMaker Raspberry Executor from another device on the same network using port `8080` only:
+Open SignalMaker Raspberry Executor from another device on the same network using the single official web path served by FastAPI on port `8080`:
 
-- Status: `http://IP_DU_RASPBERRY:8080/index.html`
-- Admin / Settings / Logs: `http://IP_DU_RASPBERRY:8080/ops.html`
-- Dashboard: `http://IP_DU_RASPBERRY:8080/dashboard.html`
+- Official UI: `http://IP_DU_RASPBERRY:8080/index.html`
 
-Do not use or recommend port `3000` or a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
+Use the navigation inside that UI for settings runtime, logs executor, positions, candidates, momentum, orders, and reset local/runtime actions. The historical Python `http.server` dashboards (`raspberry_executor.web_local`, `raspberry_executor.web`, `raspberry_executor.web_dashboard`, `raspberry_executor.web_dashboard_v2`) are deprecated fallbacks only; they should not be documented or started for normal Raspberry operation and redirect supported legacy pages to the FastAPI static frontend (`/index.html`, `/ops.html`, `/orders.html`, `/positions.html`, `/candidates.html`, `/momentum-candidates.html`).
+
+Do not use or recommend port `3000`, port `8090`, or a separate frontend port for the normal Raspberry UI path. The frontend and API share the same origin on port `8080`, so calls such as `/api/v1/admin/settings` go to `http://IP_DU_RASPBERRY:8080/api/v1/admin/settings` without a CORS preflight path. The admin settings payload also includes the `kraken` section for `EXECUTION_EXCHANGE`, `KRAKEN_BASE_URL`, `KRAKEN_API_KEY`, and `KRAKEN_SECRET_KEY` when Kraken execution remains configured.
 
 
 ### Raspberry terminal TUI and kiosk
@@ -131,10 +131,10 @@ Manual full-screen web kiosk mode opens the same single-origin Raspberry website
 ```bash
 cd ~/Desktop/SignalMaker
 ./kiosk.sh
-SIGNALMAKER_KIOSK_URL=http://127.0.0.1:8080/ops.html ./kiosk.sh
+SIGNALMAKER_KIOSK_URL=http://127.0.0.1:8080/index.html ./kiosk.sh
 ```
 
-`tui.sh` and `kiosk.sh` wait for `http://127.0.0.1:8080/healthz` before starting. They use the same startup wait defaults as `run.sh`: at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`). After the API is ready, `kiosk.sh` opens Chromium/Chrome at `http://127.0.0.1:8080/index.html` by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
+`tui.sh` and `kiosk.sh` wait for `http://127.0.0.1:8080/healthz` before starting. They use the same startup wait defaults as `run.sh`: at least 5 minutes (`API_STARTUP_TIMEOUT=300` minimum) with checks every 30 seconds by default (`API_STARTUP_CHECK_INTERVAL=30`). After the API is ready, `kiosk.sh` opens Chromium/Chrome at the single official UI path, `http://127.0.0.1:8080/index.html`, by default. If Chromium is missing, install it with `sudo apt install -y chromium-browser` or `sudo apt install -y chromium`, depending on the Raspberry Pi OS release.
 
 A systemd kiosk service is provided but is optional and should only be enabled on Raspberry installations with a graphical display, not on headless servers:
 
@@ -181,8 +181,6 @@ crontab -l
 tail -f logs/startup.log
 curl http://localhost:8080/healthz
 curl -I http://localhost:8080/index.html
-curl -I http://localhost:8080/ops.html
-curl -I http://localhost:8080/dashboard.html
 ```
 
 ### Raspberry frontend/API validation
@@ -196,7 +194,7 @@ pkill -f 'run.sh' || true
 bash run.sh
 curl -i http://localhost:8080/healthz
 curl -i http://localhost:8080/api/v1/admin/settings
-curl -I http://localhost:8080/ops.html
+curl -I http://localhost:8080/index.html
 ```
 
 The expected HTTP status for the curl checks is:
@@ -208,7 +206,7 @@ HTTP/1.1 200 OK
 Then open:
 
 ```text
-http://IP_DU_RASPBERRY:8080/ops.html
+http://IP_DU_RASPBERRY:8080/index.html
 ```
 
 The static frontend remains plain HTML/CSS/JS: `bash scripts/build_frontend.sh` only copies files into `frontend/dist` and does not require npm, Vite or esbuild.

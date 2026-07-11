@@ -1,6 +1,7 @@
 import json
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from urllib.parse import parse_qs, urlparse
 
 from raspberry_executor.env_store import SECRET_KEYS, public_env, read_env, write_env
@@ -17,9 +18,18 @@ def header_status_html():
     return f"<div class='box'><b>Remote SignalMaker URL:</b> {remote} &nbsp; <b>Local exchange:</b> {exchange} &nbsp; <b>Mode:</b> device executor &nbsp; <b>Candle feed status:</b> {candle} &nbsp; <b>Executor status:</b> {executor}</div>"
 
 
+LEGACY_WARNING = "This Python http.server dashboard is deprecated. Use the FastAPI UI on port 8080: /index.html, /ops.html, /orders.html, or /momentum-candidates.html."
+
+
+def official_ui_url(path='/index.html'):
+    port = os.getenv('EXECUTOR_API_PORT', os.getenv('APP_PORT', '8080'))
+    return f"http://{os.getenv('WEB_PUBLIC_HOST', '127.0.0.1')}:{port}{path}"
+
+
 def page(title, body):
     header_status = header_status_html()
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none;cursor:pointer}}button.danger,.button.danger{{background:#b42318}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/'>Status</a><a href='/positions'>Positions</a><a href='/events'>Events</a><a href='/admin'>Admin</a><a href='/logs'>Logs</a></nav><h1>SignalMaker Raspberry Executor</h1>{header_status}<h2>{escape(title)}</h2>{body}</body></html>""".encode()
+    warning = f"<div class='box warn'><b>Deprecated dashboard:</b> {escape(LEGACY_WARNING)}</div>"
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='20'><title>{escape(title)}</title><style>body{{font-family:Arial;margin:20px;background:#111;color:#eee}}a{{color:#8ab4ff}}nav a{{margin-right:14px}}.box{{background:#1b1b1b;padding:14px;border-radius:8px;margin:12px 0}}table{{width:100%;border-collapse:collapse}}th,td{{border-bottom:1px solid #333;padding:8px;text-align:left;font-size:14px}}th{{color:#aaa}}input{{width:100%;padding:10px;margin:6px 0 14px;background:#222;color:#eee;border:1px solid #444;box-sizing:border-box}}button,.button{{display:inline-block;padding:10px 16px;background:#2d6cdf;color:white!important;border:0;border-radius:6px;text-decoration:none;cursor:pointer}}button.danger,.button.danger{{background:#b42318}}pre{{background:#000;padding:12px;white-space:pre-wrap;overflow:auto}}.muted{{color:#aaa}}.ok{{color:#72e37b}}.warn{{color:#ffd166}}.actions{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}}</style></head><body><nav><a href='/index.html'>Status</a><a href='/ops.html'>Settings runtime</a><a href='/ops.html#logs'>Logs executor</a><a href='/positions.html'>Positions</a><a href='/candidates.html'>Candidates</a><a href='/momentum-candidates.html'>Momentum</a><a href='/ops.html#reset'>Reset local/runtime</a></nav><h1>SignalMaker Raspberry Executor</h1>{warning}{header_status}<h2>{escape(title)}</h2>{body}</body></html>""".encode()
 
 
 def cell(v):
@@ -91,6 +101,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+
+    def redirect_official(self, path='/index.html'):
+        self.send_response(308)
+        self.send_header('Location', official_ui_url(path))
+        self.end_headers()
+
     def send_page(self, title, body, code=200):
         self._send_bytes(page(title, body), content_type='text/html; charset=utf-8', code=code)
 
@@ -127,36 +143,27 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/api/events'):
             limit = _event_limit(self.path, default=250, maximum=1000)
             return self.send_json({"events": list(reversed(StateStore().events(limit=limit))), "limit": limit})
-        if self.path.startswith('/positions'):
-            return self.send_page('Local Positions', positions_html())
         if self.path.startswith('/events'):
             return self.send_page('Local Events', events_html(limit=_event_limit(self.path)))
-        if self.path.startswith('/logs/download'):
-            return self.send_log_file()
-        if self.path.startswith('/logs'):
-            logs = '\n'.join(escape(x) for x in tail_logs(400))
-            return self.send_page('Logs', f"<div class='box'>{logs_actions_html()}<pre>{logs}</pre></div>")
-        if self.path.startswith('/admin'):
-            vals = read_env(); body = "<form method='post'>"
-            for key in vals:
-                t = 'password' if key in SECRET_KEYS else 'text'
-                body += f"<label>{escape(key)}</label><input type='{t}' name='{escape(key)}' value='{escape(vals.get(key,''))}'>"
-            body += "<button>Save</button></form><p class='warn'>Restart after changing trading settings.</p>"
-            return self.send_page('Admin', body)
-        rows = ''.join(f"<p><b>{escape(k)}</b>: {escape(v)}</p>" for k, v in public_env().items())
-        return self.send_page('SignalMaker Raspberry Executor', f"<div class='box'><p class='ok'>Local mode: only trade candidates are read from SignalMaker.</p>{rows}</div>")
+        redirect_map = {
+            '/positions': '/positions.html',
+            '/admin': '/ops.html',
+            '/logs': '/ops.html',
+            '/orders': '/orders.html',
+            '/candidates': '/candidates.html',
+            '/momentum': '/momentum-candidates.html',
+            '/': '/index.html',
+        }
+        path = urlparse(self.path).path
+        for legacy, target in redirect_map.items():
+            if path == legacy or path.startswith(f'{legacy}/'):
+                return self.redirect_official(target)
+        return self.redirect_official('/index.html')
 
     def do_POST(self):
-        if self.path.startswith('/logs/delete'):
-            return self.delete_log_file()
-        length = int(self.headers.get('Content-Length','0'))
-        posted = {k: v[-1] for k, v in parse_qs(self.rfile.read(length).decode()).items()}
-        current = read_env()
-        for k, v in posted.items():
-            if k in current and not (k in SECRET_KEYS and v == '********'):
-                current[k] = v.strip()
-        write_env(current)
-        self.send_response(303); self.send_header('Location','/admin'); self.end_headers()
+        self.send_response(308)
+        self.send_header('Location', official_ui_url('/ops.html'))
+        self.end_headers()
 
     def log_message(self, format, *args):
         return
