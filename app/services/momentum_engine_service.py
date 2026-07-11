@@ -4,11 +4,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
+from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
 from app.services.momentum_service import MomentumService
 
 
@@ -57,6 +59,10 @@ class MomentumEngineService:
 
     def current_decision(self) -> dict[str, Any]:
         """Return the latest persisted momentum-engine decision payload."""
+        current = self.db.get(MomentumEngineCurrentDecision, 1)
+        if current and isinstance(current.payload_json, dict):
+            return current.payload_json
+
         stmt = (
             select(MomentumEngineTrade)
             .where(MomentumEngineTrade.strategy == self.STRATEGY)
@@ -84,6 +90,9 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
         if not force and not before["due_now"]:
+            decision = self._decision_from_status(before)
+            self._save_current_decision(decision)
+            self.db.commit()
             return before
 
         open_position = self._open_position()
@@ -137,13 +146,17 @@ class MomentumEngineService:
                     reason=self._hold_reason(current_asset),
                     meta={"price_source": price_source, "pnl_basis": "mark_to_market"},
                 )
-            self.db.commit()
-            return self._build_status(
+            self.db.flush()
+            status = self._build_status(
                 rankings=rankings,
                 cadence_hours=cadence_hours,
                 starting_capital=starting_capital,
                 min_momentum_score=min_momentum_score,
             )
+            decision = self._decision_from_status(status)
+            self._save_current_decision(decision)
+            self.db.commit()
+            return status
 
         best_asset = self._best_entry_ready_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=set())
         if not best_asset:
@@ -156,13 +169,17 @@ class MomentumEngineService:
                 pnl=0.0,
                 reason=f"No top-pool momentum asset with valid 15m structure and RSI 1h between {self.ENTRY_RSI_MIN:g}-{self.ENTRY_RSI_MAX:g}",
             )
-            self.db.commit()
-            return self._build_status(
+            self.db.flush()
+            status = self._build_status(
                 rankings=rankings,
                 cadence_hours=cadence_hours,
                 starting_capital=starting_capital,
                 min_momentum_score=min_momentum_score,
             )
+            decision = self._decision_from_status(status)
+            self._save_current_decision(decision)
+            self.db.commit()
+            return status
 
         cash = self._cash_balance(starting_capital=starting_capital)
         if cash > 0 and float(best_asset.get("price") or 0) > 0:
@@ -170,13 +187,17 @@ class MomentumEngineService:
         else:
             self._record_trade(action="CHECK_NO_CASH", symbol=best_asset["symbol"], price=float(best_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for momentum entry")
 
-        self.db.commit()
-        return self._build_status(
+        self.db.flush()
+        status = self._build_status(
             rankings=rankings,
             cadence_hours=cadence_hours,
             starting_capital=starting_capital,
             min_momentum_score=min_momentum_score,
         )
+        decision = self._decision_from_status(status)
+        self._save_current_decision(decision)
+        self.db.commit()
+        return status
 
     def _rankings(self) -> list[dict[str, Any]]:
         return MomentumService(self.db).list_rankings(limit=300)
@@ -283,6 +304,57 @@ class MomentumEngineService:
             "reason": reason,
         }
 
+    def _save_current_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist the current executor-compatible decision snapshot and return it."""
+        now = datetime.now(timezone.utc)
+        decision = jsonable_encoder(dict(payload))
+        action = str(decision.get("action") or "").lower() or None
+        target_symbol = decision.get("target_symbol")
+        symbol = decision.get("symbol")
+        due_now = bool(decision.get("due_now"))
+
+        decision.setdefault("decision_action", action)
+        if "buy_symbol" not in decision:
+            decision["buy_symbol"] = target_symbol if action in {"buy", "rotate"} else None
+        if "sell_symbol" not in decision:
+            decision["sell_symbol"] = symbol if action in {"sell", "rotate"} else None
+        if "should_trade" not in decision:
+            decision["should_trade"] = bool(due_now and action in {"buy", "sell", "rotate"})
+        if "status" not in decision:
+            decision["status"] = "trade_ready" if decision["should_trade"] else "no_trade"
+        decision.setdefault("produced_at", now.isoformat())
+        decision.setdefault("source", "persisted_current_decision")
+
+        row = self.db.get(MomentumEngineCurrentDecision, 1)
+        if row is None:
+            row = MomentumEngineCurrentDecision(id=1)
+            self.db.add(row)
+
+        produced_at = decision.get("produced_at")
+        if isinstance(produced_at, str):
+            parsed_produced_at = datetime.fromisoformat(produced_at.replace("Z", "+00:00"))
+        elif isinstance(produced_at, datetime):
+            parsed_produced_at = produced_at
+        else:
+            parsed_produced_at = now
+
+        row.decision_id = str(decision.get("decision_id") or f"momentum-current-{uuid4().hex}")
+        row.strategy = decision.get("strategy")
+        row.action = action
+        row.decision_action = decision.get("decision_action")
+        row.symbol = symbol
+        row.target_symbol = target_symbol
+        row.buy_symbol = decision.get("buy_symbol")
+        row.sell_symbol = decision.get("sell_symbol")
+        row.should_trade = bool(decision.get("should_trade"))
+        row.status = decision.get("status")
+        row.reason = decision.get("reason")
+        row.due_now = due_now
+        row.payload_json = decision
+        row.produced_at = parsed_produced_at
+        row.updated_at = now
+        self.db.flush()
+        return decision
 
     def _as_utc(self, value: datetime | None) -> datetime | None:
         if value is None:
