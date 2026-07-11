@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_db
+from app.api.routes import momentum_engine as momentum_engine_routes
 from app.models.base import Base
 from app.models.market_candle import MarketCandle
 from app.models.momentum_current import MomentumCurrent
@@ -17,6 +21,58 @@ def _make_session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     return Session(engine)
+
+
+def test_decision_endpoint_serializes_executor_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    produced_at = datetime(2026, 7, 11, 12, 30, tzinfo=timezone.utc)
+
+    def fake_current_decision(self):  # type: ignore[no-untyped-def]
+        return {
+            "strategy": MomentumEngineService.STRATEGY,
+            "mode": "paper",
+            "cadence_hours": 4,
+            "starting_capital": 1000.0,
+            "cash": 1000.0,
+            "equity": 1000.0,
+            "total_pnl": 0.0,
+            "total_pnl_pct": 0.0,
+            "action": "buy",
+            "decision_action": "buy",
+            "symbol": "ETHUSDC",
+            "target_symbol": "ETHUSDC",
+            "buy_symbol": "ETHUSDC",
+            "sell_symbol": None,
+            "should_trade": True,
+            "status": "trade_ready",
+            "recommendation": "Buy ETHUSDC.",
+            "reason": "Momentum asset ETHUSDC is entry-ready.",
+            "due_now": True,
+            "open_position": None,
+            "best_asset": {"symbol": "ETHUSDC"},
+            "top_watch_asset": None,
+            "last_check_at": None,
+            "next_check_at": None,
+            "produced_at": produced_at,
+            "source": "persisted_current_decision",
+        }
+
+    monkeypatch.setattr(MomentumEngineService, "current_decision", fake_current_decision)
+
+    app = FastAPI()
+    app.include_router(momentum_engine_routes.router, prefix="/api/v1/momentum-engine")
+    app.dependency_overrides[get_db] = lambda: None
+
+    response = TestClient(app).get("/api/v1/momentum-engine/decision")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision_action"] == "buy"
+    assert body["buy_symbol"] == "ETHUSDC"
+    assert body["sell_symbol"] is None
+    assert body["should_trade"] is True
+    assert body["status"] == "trade_ready"
+    assert body["produced_at"] == "2026-07-11T12:30:00Z"
+    assert body["source"] == "persisted_current_decision"
 
 
 def test_cash_balance_simulates_paper_cash_from_realized_pnl_and_open_position() -> None:

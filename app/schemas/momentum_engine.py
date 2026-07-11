@@ -47,8 +47,13 @@ class MomentumEngineDecision(BaseModel):
     total_pnl: float
     total_pnl_pct: float
     action: str
+    decision_action: str | None = None
     symbol: str | None = None
     target_symbol: str | None = None
+    buy_symbol: str | None = None
+    sell_symbol: str | None = None
+    should_trade: bool | None = None
+    status: str | None = None
     recommendation: str
     reason: str
     due_now: bool
@@ -57,6 +62,8 @@ class MomentumEngineDecision(BaseModel):
     top_watch_asset: dict | None = None
     last_check_at: datetime | None = None
     next_check_at: datetime | None = None
+    produced_at: datetime | None = None
+    source: str | None = None
 
 
 class MomentumEngineStatus(BaseModel):
