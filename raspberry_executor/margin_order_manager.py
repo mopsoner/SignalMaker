@@ -272,7 +272,7 @@ class MarginOrderManager:
 
     open_leveraged_market_entry = place_margin_market_entry
 
-    def create_margin_take_profit_sell(self, *, symbol: str, quantity: float | str, target_price: float) -> dict:
+    def create_margin_take_profit_sell(self, *, symbol: str, quantity: float | str, target_price: float, leverage: float | str | None = None) -> dict:
         symbol = symbol.upper()
         current_price = self.kraken.current_price(symbol)
         if not (float(target_price) > current_price):
@@ -280,7 +280,7 @@ class MarginOrderManager:
         exit_qty = self.rules.normalize_exit_quantity(symbol, quantity)
         tp = self.rules.normalize_exit_price(symbol, target_price)
         self.rules.ensure_exit_notional(symbol, exit_qty, tp, label="margin_take_profit_limit")
-        order = self.margin.margin_order(symbol, "SELL", exit_qty, "LIMIT", price=tp, time_in_force="GTC")
+        order = self.margin.margin_order(symbol, "SELL", exit_qty, "LIMIT", price=tp, time_in_force="GTC", leverage=leverage)
         return {"symbol": symbol, "quantity": exit_qty, "tp_order_id": self._order_id(order), "tp_payload": order, "exit_strategy": "take_profit_only"}
 
     def open_long_with_margin_take_profit(self, *, symbol: str, quote_amount: float, target_price: float, leverage: float | str | None = None) -> dict:
@@ -288,7 +288,12 @@ class MarginOrderManager:
         result["exit_strategy"] = "take_profit_only"
         executed_qty = result["quantity"]
         try:
-            tp_result = self.create_margin_take_profit_sell(symbol=symbol, quantity=executed_qty, target_price=target_price)
+            tp_result = self.create_margin_take_profit_sell(
+                symbol=symbol,
+                quantity=executed_qty,
+                target_price=target_price,
+                leverage=result.get("leverage") or result.get("requested_leverage") or leverage,
+            )
             result.update({"quantity": tp_result["quantity"], "oco_order_list_id": None, "tp_order_id": tp_result.get("tp_order_id"), "sl_order_id": None, "tp_payload": tp_result.get("tp_payload") or {}})
         except Exception as exc:
             result.update({"oco_order_list_id": None, "tp_order_id": None, "sl_order_id": None, "tp_payload": {}, "tp_error": str(exc), "needs_tp_replay": True})
