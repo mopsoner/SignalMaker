@@ -112,6 +112,9 @@ class KrakenMarginClient:
     def get_margin_order(self, symbol: str, order_id: str | int) -> dict:
         return self.kraken.get_order(symbol, order_id)
 
+    def open_positions(self) -> dict:
+        return self.kraken.open_margin_positions()
+
     def open_margin_orders(self, symbol: str) -> list[dict]:
         return self.kraken.open_orders(symbol)
 
