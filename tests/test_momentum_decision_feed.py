@@ -532,7 +532,7 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
     assert calls == [("buy", "ALLUSDC", "BUY", [], ["momentum-BANKUSDC"])]
 
 
-def test_execute_hold_without_position_does_not_initialize_momentum_position_from_target_asset(tmp_path, monkeypatch):
+def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "0")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
@@ -547,7 +547,7 @@ def test_execute_hold_without_position_does_not_initialize_momentum_position_fro
         calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"]))
         return "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
 
-    monkeypatch.setattr(momentum_module, "buy_best_available", fake_buy)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
 
@@ -818,7 +818,7 @@ def test_execute_decision_wait_without_held_symbol_never_orders(monkeypatch):
     assert result.startswith("wait:"), result
 
 
-def test_execute_decision_hold_without_held_symbol_does_not_buy(monkeypatch):
+def test_execute_decision_hold_without_held_symbol_buys_target(monkeypatch):
     calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
