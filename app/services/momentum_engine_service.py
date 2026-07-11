@@ -60,26 +60,40 @@ class MomentumEngineService:
     def current_decision(self) -> dict[str, Any]:
         """Return the latest persisted momentum-engine decision payload."""
         current = self.db.get(MomentumEngineCurrentDecision, 1)
-        if current and isinstance(current.payload_json, dict):
+        if current and isinstance(current.payload_json, dict) and current.payload_json:
             return current.payload_json
+        return self._empty_current_decision()
 
-        stmt = (
-            select(MomentumEngineTrade)
-            .where(MomentumEngineTrade.strategy == self.STRATEGY)
-            .order_by(MomentumEngineTrade.created_at.desc())
-        )
-        latest_payload: dict[str, Any] | None = None
-        for trade in self.db.scalars(stmt).all():
-            metadata = trade.meta or {}
-            payload = metadata.get("decision_payload") or metadata.get("decision") or metadata.get("payload")
-            if isinstance(payload, dict):
-                if trade.action == "DECISION":
-                    return payload
-                latest_payload = latest_payload or payload
-
-        if latest_payload is not None:
-            return latest_payload
-        raise LookupError("No persisted momentum-engine decision payload found.")
+    def _empty_current_decision(self) -> dict[str, Any]:
+        """Return a stable executor-compatible fallback when no current snapshot exists."""
+        message = "No persisted momentum decision available yet."
+        return {
+            "strategy": self.STRATEGY,
+            "mode": self.MODE,
+            "cadence_hours": 4,
+            "starting_capital": 1000.0,
+            "cash": 0.0,
+            "equity": 0.0,
+            "total_pnl": 0.0,
+            "total_pnl_pct": 0.0,
+            "action": "WAIT",
+            "decision_action": "WAIT",
+            "symbol": None,
+            "target_symbol": None,
+            "buy_symbol": None,
+            "sell_symbol": None,
+            "should_trade": False,
+            "status": "no_persisted_decision",
+            "recommendation": message,
+            "reason": message,
+            "due_now": False,
+            "open_position": None,
+            "best_asset": None,
+            "top_watch_asset": None,
+            "last_check_at": None,
+            "next_check_at": None,
+            "source": "persisted_current_decision",
+        }
 
     def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()

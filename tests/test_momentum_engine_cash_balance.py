@@ -8,6 +8,7 @@ from app.models.base import Base
 from app.models.market_candle import MarketCandle
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
+from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
 from app.models.momentum_structure_current import MomentumStructureCurrent
 from app.services.momentum_engine_service import MomentumEngineService
 
@@ -328,8 +329,8 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
     assert trades == []
 
 
-def test_current_decision_reads_latest_persisted_payload_without_recomputing(monkeypatch: pytest.MonkeyPatch) -> None:
-    older_payload = {
+def test_current_decision_reads_persisted_current_snapshot_without_recomputing(monkeypatch: pytest.MonkeyPatch) -> None:
+    persisted_payload = {
         "strategy": MomentumEngineService.STRATEGY,
         "mode": "paper",
         "cadence_hours": 4,
@@ -338,15 +339,6 @@ def test_current_decision_reads_latest_persisted_payload_without_recomputing(mon
         "equity": 1000.0,
         "total_pnl": 0.0,
         "total_pnl_pct": 0.0,
-        "action": "wait",
-        "symbol": "BTCUSDC",
-        "target_symbol": "BTCUSDC",
-        "recommendation": "older",
-        "reason": "older persisted decision",
-        "due_now": False,
-    }
-    latest_payload = {
-        **older_payload,
         "action": "buy",
         "symbol": "ETHUSDC",
         "target_symbol": "ETHUSDC",
@@ -364,49 +356,73 @@ def test_current_decision_reads_latest_persisted_payload_without_recomputing(mon
     monkeypatch.setattr(MomentumEngineService, "_decision_from_status", fail_if_recomputed)
 
     with _make_session() as db:
-        db.add_all(
-            [
-                MomentumEngineTrade(
-                    trade_id="decision-older",
-                    strategy=MomentumEngineService.STRATEGY,
-                    action="DECISION",
-                    symbol="BTCUSDC",
-                    price=0.0,
-                    quantity=0.0,
-                    value=0.0,
-                    pnl=0.0,
-                    reason="persisted decision",
-                    meta={"decision_payload": older_payload},
-                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-                ),
-                MomentumEngineTrade(
-                    trade_id="non-decision-newer",
-                    strategy=MomentumEngineService.STRATEGY,
-                    action="HOLD_NO_NEXT_ENTRY",
-                    symbol="SOLUSDC",
-                    price=0.0,
-                    quantity=0.0,
-                    value=0.0,
-                    pnl=0.0,
-                    reason="newer non-decision trade",
-                    meta={},
-                    created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
-                ),
-                MomentumEngineTrade(
-                    trade_id="decision-latest",
-                    strategy=MomentumEngineService.STRATEGY,
-                    action="DECISION",
-                    symbol="ETHUSDC",
-                    price=0.0,
-                    quantity=0.0,
-                    value=0.0,
-                    pnl=0.0,
-                    reason="persisted decision",
-                    meta={"decision_payload": latest_payload},
-                    created_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
-                ),
-            ]
+        db.add(
+            MomentumEngineCurrentDecision(
+                id=1,
+                strategy=MomentumEngineService.STRATEGY,
+                payload_json=persisted_payload,
+                updated_at=datetime.now(timezone.utc),
+            )
         )
         db.commit()
 
-        assert MomentumEngineService(db).current_decision() == latest_payload
+        assert MomentumEngineService(db).current_decision() == persisted_payload
+
+
+def test_current_decision_returns_fallback_when_no_current_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_if_recomputed(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("current_decision must not recompute fallback decisions")
+
+    monkeypatch.setattr(MomentumEngineService, "_rankings", fail_if_recomputed)
+    monkeypatch.setattr(MomentumEngineService, "_build_status", fail_if_recomputed)
+    monkeypatch.setattr(MomentumEngineService, "_decision_from_status", fail_if_recomputed)
+
+    with _make_session() as db:
+        fallback = MomentumEngineService(db).current_decision()
+
+    assert fallback == {
+        "strategy": MomentumEngineService.STRATEGY,
+        "mode": "paper",
+        "cadence_hours": 4,
+        "starting_capital": 1000.0,
+        "cash": 0.0,
+        "equity": 0.0,
+        "total_pnl": 0.0,
+        "total_pnl_pct": 0.0,
+        "action": "WAIT",
+        "decision_action": "WAIT",
+        "symbol": None,
+        "target_symbol": None,
+        "buy_symbol": None,
+        "sell_symbol": None,
+        "should_trade": False,
+        "status": "no_persisted_decision",
+        "recommendation": "No persisted momentum decision available yet.",
+        "reason": "No persisted momentum decision available yet.",
+        "due_now": False,
+        "open_position": None,
+        "best_asset": None,
+        "top_watch_asset": None,
+        "last_check_at": None,
+        "next_check_at": None,
+        "source": "persisted_current_decision",
+    }
+
+
+def test_current_decision_returns_fallback_when_current_snapshot_payload_is_empty() -> None:
+    with _make_session() as db:
+        db.add(
+            MomentumEngineCurrentDecision(
+                id=1,
+                strategy=MomentumEngineService.STRATEGY,
+                payload_json={},
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        fallback = MomentumEngineService(db).current_decision()
+
+    assert fallback["status"] == "no_persisted_decision"
+    assert fallback["action"] == "WAIT"
+    assert fallback["source"] == "persisted_current_decision"
