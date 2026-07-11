@@ -982,23 +982,17 @@ def execute_decision(decision: dict[str, Any]) -> str:
     held_symbol = _position_symbol(held_position) or sell
     expected_symbol = _decision_expected_symbol(decision)
 
-    if not should_trade or action in {"WAIT", "HOLD"}:
+    if action == "WAIT" or (not should_trade and action != "HOLD"):
+        if held_symbol:
+            return f"wait_existing_momentum_position:{held_symbol}"
+        reason = str(decision.get("reason") or "WAIT").strip() or "WAIT"
+        return f"wait:{reason}"
+    if action == "HOLD":
         if held_symbol and (not expected_symbol or expected_symbol == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
-        if not held_symbol and expected_symbol:
-            buy_decision = {
-                **decision,
-                "action": "BUY",
-                "raw_action": decision.get("raw_action") or action,
-                "buy_symbol": expected_symbol,
-                "symbol": expected_symbol,
-                "target_symbol": decision.get("target_symbol") or expected_symbol,
-                "should_trade": True,
-            }
-            return _buy_with_momentum_cadence(settings, kraken, rules, state, buy_decision, exclude={sell})
-        if held_symbol and expected_symbol and expected_symbol != held_symbol:
-            return _rotate_momentum_position(settings, kraken, rules, state, held_symbol, expected_symbol, decision)
-        return f"wait:{action}"
+        if held_symbol:
+            return f"hold_target_not_held:held={held_symbol}:target={expected_symbol or 'none'}"
+        return f"hold_no_existing_momentum_position:{expected_symbol or 'none'}"
     if action == "BUY":
         buy = expected_symbol
         if held_symbol and (not buy or buy == held_symbol):
