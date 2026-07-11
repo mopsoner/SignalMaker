@@ -153,7 +153,7 @@ def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
         "session_confirm_filter_enabled": strategy["signal_session_confirm_filter_enabled"],
         "entry_rsi": {
             "min": strategy.get("signal_entry_rsi_min", 45.0),
-            "max": strategy.get("signal_entry_rsi_max", 55.0),
+            "max": strategy.get("signal_entry_rsi_max", 65.0),
             "timeframe": strategy.get("signal_entry_rsi_timeframe", "1h"),
         },
         "signals": {

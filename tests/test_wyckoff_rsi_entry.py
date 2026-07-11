@@ -3,7 +3,7 @@ from app.strategy import legacy_engine
 from app.strategy.legacy_engine import _rsi_entry_profile
 
 
-def test_entry_rsi_profile_prefers_45_55_band():
+def test_entry_rsi_profile_prefers_45_65_band():
     profile = _rsi_entry_profile(50.0)
 
     assert profile["preferred"] is True
@@ -11,8 +11,8 @@ def test_entry_rsi_profile_prefers_45_55_band():
     assert profile["timeframe"] == "1h"
     assert profile["source"] == "rsi_htf"
     assert profile["min"] == 45.0
-    assert profile["max"] == 55.0
-    assert profile["reason"] == "preferred_45_55_rsi_entry"
+    assert profile["max"] == 65.0
+    assert profile["reason"] == "preferred_45_65_rsi_entry"
 
 
 def test_entry_rsi_profile_flags_rsi_30_as_outside_preferred_entry_band():
@@ -20,7 +20,7 @@ def test_entry_rsi_profile_flags_rsi_30_as_outside_preferred_entry_band():
 
     assert profile["preferred"] is False
     assert profile["value"] == 30.0
-    assert profile["reason"] == "entry_rsi_outside_45_55_band"
+    assert profile["reason"] == "entry_rsi_outside_45_65_band"
 
 
 def test_final_score_rewards_preferred_entry_rsi_and_penalizes_extreme_rsi():

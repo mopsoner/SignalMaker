@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     signal_overbought: float = Field(default=70, alias="SIGNAL_OVERBOUGHT")
     signal_oversold: float = Field(default=30, alias="SIGNAL_OVERSOLD")
     signal_entry_rsi_min: float = Field(default=45.0, alias="SIGNAL_ENTRY_RSI_MIN")
-    signal_entry_rsi_max: float = Field(default=55.0, alias="SIGNAL_ENTRY_RSI_MAX")
+    signal_entry_rsi_max: float = Field(default=65.0, alias="SIGNAL_ENTRY_RSI_MAX")
     signal_entry_rsi_timeframe: str = Field(default="1h", alias="SIGNAL_ENTRY_RSI_TIMEFRAME")
     signal_price_near_extreme_pct: float = Field(default=0.0025, alias="SIGNAL_PRICE_NEAR_EXTREME_PCT")
     signal_session_confirm_filter_enabled: bool = Field(default=False, alias="SIGNAL_SESSION_CONFIRM_FILTER_ENABLED")
