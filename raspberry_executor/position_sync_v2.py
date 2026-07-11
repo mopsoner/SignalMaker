@@ -17,6 +17,17 @@ logger = setup_logging("raspberry-position-sync")
 TP_REPLAY_SKIP_EVENT_COOLDOWN_SECONDS = 300
 
 
+def tp_confirmation_max_age_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("TP_CONFIRMATION_MAX_AGE_SECONDS", "300") or "300"))
+    except Exception:
+        return 300.0
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def max_tp_replay_attempts() -> int:
     try:
         return max(1, int(os.getenv("MAX_TP_REPLAY_ATTEMPTS", os.getenv("MAX_OCO_REPAIR_ATTEMPTS", "8")) or "8"))
@@ -273,6 +284,97 @@ def _list_open_orders(kraken, margin, symbol: str, *, use_margin: bool) -> list[
         return []
 
 
+
+def _order_id(order: dict | None) -> str | None:
+    if not isinstance(order, dict):
+        return None
+    for key in ("orderId", "order_id", "txid", "id"):
+        value = order.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _order_reduce_only(order: dict) -> bool | None:
+    for key in ("reduce_only", "reduceOnly", "reduce-only"):
+        if key in order:
+            value = order.get(key)
+            if isinstance(value, bool):
+                return value
+            return str(value).lower() in {"1", "true", "yes", "on"}
+    return None
+
+
+def _order_limit_price(order: dict) -> float:
+    descr = order.get("descr") if isinstance(order.get("descr"), dict) else {}
+    return _float(order.get("price") or order.get("limitprice") or descr.get("price"))
+
+
+def _order_side_type(order: dict) -> tuple[str, str]:
+    descr = order.get("descr") if isinstance(order.get("descr"), dict) else {}
+    side = str(order.get("side") or descr.get("type") or "").upper()
+    order_type = str(order.get("type") or order.get("origType") or descr.get("ordertype") or "").upper().replace("-", "_")
+    return side, order_type
+
+
+def _matches_take_profit_order(order: dict, *, expected_qty: float, target_price: float, tp_order_id: str | None) -> bool:
+    order_id = _order_id(order)
+    if tp_order_id and order_id and str(order_id) == str(tp_order_id):
+        return True
+    side, order_type = _order_side_type(order)
+    if side != "SELL" or order_type not in {"LIMIT", "LIMIT_MAKER"}:
+        return False
+    price = _order_limit_price(order)
+    qty = _order_qty(order)
+    if price <= 0 or qty <= 0:
+        return False
+    price_ok = abs(price - target_price) <= max(target_price * 0.001, 0.00000001)
+    qty_ok = qty >= expected_qty * 0.95 or abs(qty - expected_qty) <= max(expected_qty * 0.05, 1e-8)
+    reduce_only = _order_reduce_only(order)
+    reduce_ok = reduce_only is not False
+    return price_ok and qty_ok and reduce_ok
+
+
+def _confirm_open_take_profit_order(
+    candidate_id: str,
+    symbol: str,
+    expected_qty: float,
+    target_price: float,
+    tp_order_id: str | None,
+    kraken,
+    margin,
+    state,
+    *,
+    use_margin: bool,
+    attempts: int = 5,
+    sleep_seconds: float = 1.0,
+) -> dict | None:
+    for attempt in range(max(1, attempts)):
+        open_orders = _list_open_orders(kraken, margin, symbol, use_margin=use_margin)
+        id_matches = [order for order in open_orders if tp_order_id and _order_id(order) == str(tp_order_id)]
+        for order in id_matches:
+            side, order_type = _order_side_type(order)
+            if side == "SELL" and order_type in {"LIMIT", "LIMIT_MAKER"}:
+                return order
+        for order in open_orders:
+            if _matches_take_profit_order(order, expected_qty=expected_qty, target_price=target_price, tp_order_id=tp_order_id):
+                return order
+        if attempt < max(1, attempts) - 1 and sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    return None
+
+
+def _tp_confirmation_age(position: dict) -> float | None:
+    ts = _parse_opened_at(position.get("tp_exchange_confirm_last_checked_at") or position.get("tp_replay_submitted_at"))
+    if ts is None:
+        return None
+    return max(0.0, time.time() - ts)
+
+
+def _tp_confirmation_timed_out(position: dict) -> bool:
+    age = _tp_confirmation_age(position)
+    return age is not None and age > tp_confirmation_max_age_seconds()
+
 def _ghost_check(candidate_id: str, position: dict, symbol: str, kraken, margin, rules, state, *, use_margin: bool) -> bool:
     if not auto_close_ghost_positions() or kraken.dry_run:
         return False
@@ -316,23 +418,28 @@ def _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin,
         tp = sorted(tp_candidates, key=lambda o: _float(o.get("price")), reverse=True)[0]
     protected_qty = _order_qty(tp)
     updates = {
-        "tp_order_id": tp.get("orderId"),
+        "tp_order_id": _order_id(tp),
         "sl_order_id": None,
         "oco_order_list_id": None,
-        "target_price": _float(tp.get("price"), target),
+        "target_price": _order_limit_price(tp) or target,
         "order_monitor_mode": "margin" if use_margin else "spot",
         "exit_strategy": "take_profit_only",
         "attached_existing_tp_order": tp,
         "tp_protected_quantity": protected_qty,
         "tp_unprotected_quantity": max(0.0, expected_qty - protected_qty),
         "needs_tp_replay": False,
+        "needs_tp_confirmation": False,
+        "tp_exchange_confirmed": True,
+        "tp_exchange_confirmed_at": _now_iso(),
+        "tp_payload": tp,
+        "kraken_tp_status": tp,
         "tp_replay_blocked": False,
         "tp_replay_attempts": 0,
         "last_tp_replay_skip_reason": None,
         "last_tp_replay_skip_ts": None,
     }
     state.update_open_position(candidate_id, updates, event_type="tp_existing_order_attached")
-    logger.info("attached existing take-profit order candidate=%s symbol=%s tp=%s qty=%s", candidate_id, symbol, tp.get("orderId"), protected_qty)
+    logger.info("attached existing take-profit order candidate=%s symbol=%s tp=%s qty=%s", candidate_id, symbol, _order_id(tp), protected_qty)
     return True
 
 
@@ -410,6 +517,9 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
         return "missing_quantity"
 
     use_margin = _is_margin_position(position)
+    if position.get("tp_order_id") and position.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(position):
+        logger.info("tp replay skipped pending confirmation candidate=%s tp=%s", candidate_id, position.get("tp_order_id"))
+        return "pending_confirmation"
     if kraken is not None:
         if _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin_manager.margin, state, use_margin=use_margin):
             return "attached_existing_tp"
@@ -459,15 +569,34 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
             last_error = str(exc)
             attempts.append({"fraction": fraction, "quantity": requested_qty, "status": "failed", "error": last_error})
             continue
-        protected_qty = _float(result.get("quantity"), requested_qty)
+        tp_order_id = result.get("tp_order_id")
+        logger.info("tp replay addorder submitted candidate=%s symbol=%s tp_order_id=%s qty=%s price=%s", candidate_id, symbol, tp_order_id, requested_qty, target_price)
+        confirmed_tp = None
+        confirm_attempts = 5
+        if kraken is not None:
+            confirmed_tp = _confirm_open_take_profit_order(
+                candidate_id,
+                symbol,
+                expected_qty=requested_qty,
+                target_price=target_price,
+                tp_order_id=tp_order_id,
+                kraken=kraken,
+                margin=margin_manager.margin,
+                state=state,
+                use_margin=use_margin,
+                attempts=confirm_attempts,
+            )
+        protected_qty = _order_qty(confirmed_tp) if confirmed_tp else _float(result.get("quantity"), requested_qty)
+        confirmed_id = _order_id(confirmed_tp) if confirmed_tp else tp_order_id
         remaining_qty = max(0.0, quantity - protected_qty)
+        now_iso = _now_iso()
         updates = {
             "target_price": target_price,
             "quantity": quantity,
-            "tp_order_id": result.get("tp_order_id"),
+            "tp_order_id": confirmed_id,
             "sl_order_id": None,
             "oco_order_list_id": None,
-            "tp_payload": result.get("tp_payload") or {},
+            "tp_payload": confirmed_tp or result.get("tp_payload") or {},
             "exit_strategy": "take_profit_only",
             "tp_replay_level_source": levels,
             "tp_replay_mode": "margin" if use_margin else "spot",
@@ -483,8 +612,17 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
             "tp_replay_blocked": False,
             "last_tp_replay_skip_reason": None,
             "last_tp_replay_skip_ts": None,
+            "tp_replay_submitted_at": now_iso,
         }
-        state.update_open_position(candidate_id, updates, event_type="tp_replayed")
+        if confirmed_tp:
+            updates.update({"tp_exchange_confirmed": True, "tp_exchange_confirmed_at": now_iso, "tp_open_order_confirm_payload": confirmed_tp, "kraken_tp_status": confirmed_tp, "needs_tp_confirmation": False})
+            event_type = "tp_replayed_exchange_confirmed"
+            logger.info("tp replay exchange confirmed candidate=%s symbol=%s tp_order_id=%s", candidate_id, symbol, confirmed_id)
+        else:
+            updates.update({"tp_exchange_confirmed": False, "tp_exchange_confirm_pending": True, "tp_exchange_confirm_attempts": confirm_attempts, "tp_exchange_confirm_last_checked_at": now_iso, "needs_tp_confirmation": bool(tp_order_id)})
+            event_type = "tp_replayed_pending_exchange_confirmation"
+            logger.info("tp replay pending exchange confirmation candidate=%s symbol=%s tp_order_id=%s", candidate_id, symbol, tp_order_id)
+        state.update_open_position(candidate_id, updates, event_type=event_type)
         logger.info("tp replayed candidate=%s symbol=%s mode=%s qty=%s fraction=%s source=%s", candidate_id, symbol, updates["tp_replay_mode"], protected_qty, fraction, levels.get("source"))
         return "replayed"
 
@@ -559,12 +697,52 @@ def sync_open_positions():
             continue
 
         tp_id = position.get("tp_order_id")
+        if tp_id and position.get("needs_tp_confirmation"):
+            target_price = _float(position.get("target_price"))
+            expected_qty = _float(position.get("tp_protected_quantity") or position.get("quantity"))
+            confirmed_tp = None
+            if target_price > 0 and expected_qty > 0:
+                confirmed_tp = _confirm_open_take_profit_order(candidate_id, symbol, expected_qty, target_price, tp_id, kraken, margin, state, use_margin=use_margin, attempts=1, sleep_seconds=0)
+            now_iso = _now_iso()
+            if confirmed_tp:
+                confirmed_id = _order_id(confirmed_tp) or tp_id
+                state.update_open_position(candidate_id, {
+                    "tp_order_id": confirmed_id,
+                    "tp_exchange_confirmed": True,
+                    "tp_exchange_confirmed_at": now_iso,
+                    "tp_exchange_confirm_pending": False,
+                    "needs_tp_confirmation": False,
+                    "needs_tp_replay": False,
+                    "tp_payload": confirmed_tp,
+                    "kraken_tp_status": confirmed_tp,
+                    "order_monitor_mode": "margin" if use_margin else "spot",
+                }, event_type="tp_exchange_confirmation_completed")
+                logger.info("tp exchange confirmation completed candidate=%s symbol=%s tp_order_id=%s", candidate_id, symbol, confirmed_id)
+                continue
+            if _tp_confirmation_timed_out(position):
+                state.update_open_position(candidate_id, {
+                    "tp_order_id": None,
+                    "tp_payload": {},
+                    "needs_tp_replay": True,
+                    "needs_tp_confirmation": False,
+                    "tp_exchange_confirmed": False,
+                    "last_tp_confirmation_miss_ts": now_iso,
+                }, event_type="tp_exchange_confirmation_timeout")
+                position = {**position, "tp_order_id": None, "tp_payload": {}, "needs_tp_replay": True, "needs_tp_confirmation": False}
+                tp_id = None
+            else:
+                state.update_open_position(candidate_id, {
+                    "tp_exchange_confirmed": False,
+                    "needs_tp_confirmation": True,
+                    "last_tp_confirmation_miss_ts": now_iso,
+                })
+                continue
         if not tp_id:
-            missing_tp += 1
             try:
                 replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
             except Exception as exc:
                 replay_skipped += 1
+                missing_tp += 1
                 state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
                 logger.warning("tp replay failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
                 continue
@@ -574,8 +752,10 @@ def sync_open_positions():
                 attached_existing += 1
             elif replay_result == "blocked":
                 replay_blocked += 1
+                missing_tp += 1
             else:
                 replay_skipped += 1
+                missing_tp += 1
             continue
 
         tp = _order(kraken, margin, symbol, tp_id, use_margin=use_margin)
@@ -590,7 +770,6 @@ def sync_open_positions():
             continue
 
         if status in {"CANCELED", "REJECTED", "EXPIRED"} or _is_not_found_error(tp):
-            missing_tp += 1
             state.update_open_position(
                 candidate_id,
                 {
@@ -608,6 +787,7 @@ def sync_open_positions():
                 replay_result = _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_manager, state, kraken=kraken, rules=rules)
             except Exception as exc:
                 replay_skipped += 1
+                missing_tp += 1
                 state.update_open_position(candidate_id, {"needs_tp_replay": True, "last_tp_replay_exception": str(exc)}, event_type="tp_replay_failed")
                 logger.warning("tp replay failed candidate=%s symbol=%s error=%s", candidate_id, symbol, str(exc))
                 continue
@@ -617,8 +797,10 @@ def sync_open_positions():
                 attached_existing += 1
             elif replay_result == "blocked":
                 replay_blocked += 1
+                missing_tp += 1
             else:
                 replay_skipped += 1
+                missing_tp += 1
             continue
 
         if _has_sync_error(tp):

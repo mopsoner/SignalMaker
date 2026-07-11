@@ -9,6 +9,12 @@ from raspberry_executor.exchange_factory import create_margin_exchange
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import margin_dry_run
 from raspberry_executor.position_order_helpers import is_tp_order, order_price, order_qty
+from raspberry_executor.position_sync_v2 import (
+    _confirm_open_take_profit_order,
+    _order_id,
+    _tp_confirmation_timed_out,
+    tp_confirmation_max_age_seconds,
+)
 from raspberry_executor.state import StateStore
 
 logger = setup_logging("raspberry-margin-position-reconcile")
@@ -129,16 +135,64 @@ def reconcile_kraken_margin_positions() -> dict:
             continue
         symbol = _normalize_symbol(str(remote.get("pair") or ""), rules)
         entry_id = _entry_order_id(str(key), remote)
-        logger.info("kraken margin remote position detected symbol=%s entry=%s qty=%s", symbol, entry_id, qty)
         local_id, _local = _find_local(local_positions, entry_order_id=entry_id, symbol=symbol, quantity=qty)
         if local_id:
-            state.update_open_position(local_id, {"last_kraken_open_position_sync_ts": time.time(), "kraken_open_position_payload": remote, "imported_from_kraken_open_positions": bool(_local.get("imported_from_kraken_open_positions"))})
+            updates = {"last_kraken_open_position_sync_ts": time.time(), "kraken_open_position_payload": remote, "imported_from_kraken_open_positions": bool(_local.get("imported_from_kraken_open_positions"))}
+            tp_id = _local.get("tp_order_id")
+            target_price = _float(_local.get("target_price"))
+            confirmed_tp = None
+            if tp_id and not _local.get("tp_exchange_confirmed") and target_price > 0:
+                confirmed_tp = _confirm_open_take_profit_order(local_id, symbol, qty, target_price, str(tp_id), None, margin, state, use_margin=True, attempts=1, sleep_seconds=0)
+            if confirmed_tp:
+                updates.update({
+                    "tp_order_id": _order_id(confirmed_tp) or tp_id,
+                    "tp_payload": confirmed_tp,
+                    "kraken_tp_status": confirmed_tp,
+                    "tp_exchange_confirmed": True,
+                    "tp_exchange_confirmed_at": _now_iso(),
+                    "needs_tp_confirmation": False,
+                    "needs_tp_replay": False,
+                    "order_monitor_mode": "margin",
+                })
+                state.update_open_position(local_id, updates, event_type="tp_exchange_confirmation_completed")
+                logger.info("tp exchange confirmation completed candidate=%s symbol=%s tp_order_id=%s", local_id, symbol, updates.get("tp_order_id"))
+            elif tp_id and _local.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(_local):
+                updates.update({"tp_exchange_confirmed": False, "needs_tp_confirmation": True, "last_tp_confirmation_miss_ts": _now_iso()})
+                state.update_open_position(local_id, updates)
+                logger.info("tp confirmation pending candidate=%s symbol=%s tp=%s timeout=%ss", local_id, symbol, tp_id, tp_confirmation_max_age_seconds())
+            else:
+                existing_tp = _find_existing_tp(margin, symbol, qty)
+                if existing_tp:
+                    updates.update({
+                        "tp_order_id": _order_id(existing_tp),
+                        "tp_payload": existing_tp,
+                        "kraken_tp_status": existing_tp,
+                        "tp_exchange_confirmed": True,
+                        "tp_exchange_confirmed_at": _now_iso(),
+                        "needs_tp_confirmation": False,
+                        "needs_tp_replay": False,
+                        "target_price": order_price(existing_tp) or _local.get("target_price"),
+                        "tp_protected_quantity": order_qty(existing_tp),
+                        "order_monitor_mode": "margin",
+                    })
+                    state.update_open_position(local_id, updates, event_type="tp_existing_order_attached")
+                    logger.info("kraken margin attached existing TP candidate=%s symbol=%s tp=%s", local_id, symbol, updates.get("tp_order_id"))
+                elif tp_id and _local.get("needs_tp_confirmation") and _tp_confirmation_timed_out(_local):
+                    updates.update({"tp_order_id": None, "tp_payload": {}, "needs_tp_replay": True, "needs_tp_confirmation": False, "tp_exchange_confirmed": False})
+                    state.update_open_position(local_id, updates, event_type="tp_exchange_confirmation_timeout")
+                else:
+                    updates.update({"needs_tp_replay": True})
+                    state.update_open_position(local_id, updates)
             summary["already_local"] += 1
-            logger.info("kraken margin position already local symbol=%s entry=%s", symbol, entry_id)
+            if updates.get("needs_tp_replay") or updates.get("needs_tp_confirmation") or confirmed_tp:
+                logger.info("kraken margin position already local symbol=%s entry=%s", symbol, entry_id)
+            else:
+                logger.debug("kraken margin position already local protected symbol=%s entry=%s", symbol, entry_id)
             continue
+        logger.info("kraken margin remote position detected symbol=%s entry=%s qty=%s", symbol, entry_id, qty)
         try:
             tp = _find_existing_tp(margin, symbol, qty)
-            tp_id = tp.get("orderId") if tp else None
+            tp_id = _order_id(tp) if tp else None
             if tp_id:
                 logger.info("kraken margin attached existing TP symbol=%s entry=%s tp=%s", symbol, entry_id, tp_id)
             else:
@@ -165,6 +219,9 @@ def reconcile_kraken_margin_positions() -> dict:
                 "tp_payload": tp or {},
                 "exit_strategy": "take_profit_only",
                 "needs_tp_replay": not bool(tp_id),
+                "needs_tp_confirmation": False,
+                "tp_exchange_confirmed": bool(tp_id),
+                "tp_exchange_confirmed_at": _now_iso() if tp_id else None,
                 "leverage": _leverage(remote),
                 "quote_asset": _quote_asset(symbol, rules),
             }

@@ -4,6 +4,7 @@ import time
 from raspberry_executor.local_candidate_store import mark_candidate_executed
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.state import StateStore
+from raspberry_executor.position_sync_v2 import _tp_confirmation_timed_out
 
 logger = setup_logging("raspberry-candidate-status-sync")
 
@@ -91,7 +92,10 @@ def sync_executed_candidates() -> dict:
         symbol = str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
         protection_state = _tp_protection_state(position)
         if not _protected(position):
-            if protection_state["local_tp_recorded"] and not protection_state["exchange_tp_confirmed"]:
+            pending_confirmation = bool(position.get("tp_order_id") and position.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(position))
+            if protection_state["local_tp_recorded"] and not protection_state["exchange_tp_confirmed"] and pending_confirmation:
+                logger.info("tp confirmation pending candidate=%s symbol=%s tp=%s", candidate_id, symbol, position.get("tp_order_id"))
+            elif protection_state["local_tp_recorded"] and not protection_state["exchange_tp_confirmed"]:
                 state.add_event(candidate_id, "candidate_tp_unconfirmed", {
                     "symbol": symbol,
                     "tp_order_id": position.get("tp_order_id"),
