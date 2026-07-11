@@ -9,6 +9,10 @@ from urllib.parse import urlencode
 
 import requests
 
+from raspberry_executor.logging_setup import setup_logging
+
+logger = setup_logging("raspberry-kraken-client")
+
 
 class KrakenClient:
     """Kraken Spot REST adapter with the KrakenClient surface used by SignalMaker."""
@@ -107,8 +111,21 @@ class KrakenClient:
     def account(self) -> dict:
         return self._signed("POST", "/0/private/Balance")
 
+    def open_margin_positions(self) -> dict:
+        if self.dry_run:
+            return {}
+        try:
+            result = self._signed("POST", "/0/private/OpenPositions", {"docalcs": "true"})
+        except Exception as exc:
+            logger.warning("kraken open margin positions failed error=%s", str(exc))
+            return {}
+        if isinstance(result, dict):
+            return result
+        logger.warning("kraken open margin positions unexpected payload type=%s", type(result).__name__)
+        return {}
+
     def open_positions(self) -> dict:
-        return self._signed("POST", "/0/private/OpenPositions", {"docalcs": True})
+        return self.open_margin_positions()
 
     def free_balance(self, asset: str) -> float:
         if self.dry_run:

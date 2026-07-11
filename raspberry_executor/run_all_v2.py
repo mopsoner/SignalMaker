@@ -43,6 +43,14 @@ def main() -> None:
     except Exception as exc:
         logger.error("wallet bootstrap startup error=%s", str(exc))
 
+    try:
+        from raspberry_executor.margin_position_reconcile import reconcile_kraken_margin_positions
+
+        summary = reconcile_kraken_margin_positions()
+        logger.info("kraken margin position reconcile startup=%s", summary)
+    except Exception as exc:
+        logger.error("kraken margin position reconcile startup error=%s", str(exc))
+
     logger.info("Raspberry Executor API/UI is served by FastAPI on http://%s:%s", host, app_port)
 
     threading.Thread(target=candle_feed_loop, daemon=True).start()

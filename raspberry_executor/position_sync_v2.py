@@ -8,6 +8,7 @@ from raspberry_executor.config import load_settings
 from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import margin_dry_run
+from raspberry_executor.position_order_helpers import order_qty as _order_qty, is_tp_order as _is_tp_order
 from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
 
@@ -260,19 +261,6 @@ def _repair_quantity(position: dict, available_base: float | None) -> tuple[bool
     if available_base <= 0:
         return False, expected_qty, f"base_balance_empty expected={expected_qty} available={available_base}"
     return True, min(expected_qty, available_base), "ok"
-
-
-def _order_type(order: dict) -> str:
-    return str(order.get("type") or order.get("origType") or "").upper()
-
-
-def _order_qty(order: dict) -> float:
-    return _float(order.get("origQty") or order.get("quantity") or order.get("executedQty"))
-
-
-def _is_tp_order(order: dict) -> bool:
-    order_type = _order_type(order)
-    return str(order.get("side") or "").upper() == "SELL" and order_type in {"LIMIT", "LIMIT_MAKER"}
 
 
 def _list_open_orders(kraken, margin, symbol: str, *, use_margin: bool) -> list[dict]:
@@ -535,6 +523,14 @@ def sync_open_positions():
     spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     checked = closed = missing_tp = replayed_tp = attached_existing = replay_skipped = replay_blocked = ghost_removed = momentum_tracked = partial_filled = 0
+
+    if os.getenv("KRAKEN_MARGIN_RECONCILE_BEFORE_SYNC", "true").lower() in {"1", "true", "yes", "on"}:
+        try:
+            from raspberry_executor.margin_position_reconcile import reconcile_kraken_margin_positions
+
+            reconcile_kraken_margin_positions()
+        except Exception as exc:
+            logger.warning("kraken margin reconcile before sync failed error=%s", str(exc))
 
     for candidate_id, position in list(state.open_positions().items()):
         normalized_position = normalize_position_execution_mode(position)
