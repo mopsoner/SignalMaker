@@ -544,16 +544,17 @@ def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
 
     def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
-        calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"]))
+        calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"], exclude))
         return "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
 
     monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
 
-    assert result == "hold_without_position:ALLUSDC"
-    assert calls == []
-    assert [event["event_type"] for event in state.events()] == []
+    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
+    assert calls == [("HOLD", "ALLUSDC", "ALLUSDC", "ALLUSDC", None)]
+    assert [event["event_type"] for event in state.events()] == ["momentum_hold_without_position_buy_started"]
+    assert state.events()[0]["payload"]["target_symbol"] == "ALLUSDC"
 
 
 def test_execute_wait_with_target_differs_from_held_momentum_position_stays_passive(tmp_path, monkeypatch):
@@ -823,8 +824,17 @@ def test_execute_decision_hold_without_held_symbol_buys_target(monkeypatch):
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
 
+    assert calls == [("buy", "OMGUSD")]
+    assert result == "bought:OMGUSD"
+
+
+def test_execute_decision_hold_without_target_waits(monkeypatch):
+    calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
+
+    result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False})
+
     assert calls == []
-    assert result == "hold_without_position:OMGUSD"
+    assert result == "wait:HOLD"
 
 
 def test_execute_decision_buy_without_held_symbol_allows_buy(monkeypatch):
