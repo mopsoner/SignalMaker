@@ -11,11 +11,11 @@ from typing import Any
 
 
 def default_base_url() -> str:
-    port = os.getenv("APP_PORT", "8080") or "8080"
-    return os.getenv("SIGNALMAKER_BASE_URL", f"http://127.0.0.1:{port}").rstrip("/")
+    port = os.getenv("EXECUTOR_API_PORT") or os.getenv("APP_PORT") or "8080"
+    return f"http://127.0.0.1:{port}"
 
 
-BASE_URL = default_base_url()
+BASE_URL = os.getenv("SIGNALMAKER_BASE_URL", default_base_url()).rstrip("/")
 TIMEOUT_SECONDS = int(os.getenv("SIGNALMAKER_TUI_TIMEOUT", "8") or "8")
 USER_AGENT = "SignalMaker-Raspberry-TUI"
 
