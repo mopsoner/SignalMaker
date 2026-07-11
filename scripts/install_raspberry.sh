@@ -175,6 +175,9 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://postgres:postgres@loca
 echo "Running database initialization..."
 python -m scripts.init_db
 
+echo "Initializing Raspberry executor SQLite database..."
+python -m raspberry_executor.install_sqlite
+
 install_run_sh_startup() {
   if ! command -v crontab >/dev/null 2>&1; then
     echo "crontab not found; skipping run.sh startup registration" >&2
@@ -208,6 +211,7 @@ echo "  pkill -f 'run.sh' || true"
 echo "  bash run.sh"
 echo "Startup is registered in the current user crontab with: @reboot cd ${APP_DIR} && /bin/bash run.sh"
 echo "Startup logs: ${APP_DIR}/logs/startup.log"
+echo "Raspberry executor local SQLite database initialized at: ${APP_DIR}/raspberry_executor.db"
 
 echo "SignalMaker Raspberry install complete"
 echo "Run SignalMaker with:"
