@@ -1049,14 +1049,9 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action == "HOLD":
         if held_symbol and (not target_symbol or target_symbol == held_symbol):
             return f"hold_existing_momentum_position:{held_symbol}"
-        if not target_symbol:
-            return "wait:HOLD"
-        if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
-            return "execution_disabled"
-        decision["buy_symbol"] = target_symbol
-        settings = load_settings()
-        kraken, rules = _momentum_execution_clients(settings)
-        return _buy_with_momentum_cadence(settings, kraken, rules, state, decision, exclude={held_symbol} if held_symbol else None)
+        if target_symbol:
+            return f"hold_without_position:{target_symbol}"
+        return "wait:HOLD"
 
     if action not in {"BUY", "SELL", "ROTATE"}:
         return f"unsupported_action:{action}"

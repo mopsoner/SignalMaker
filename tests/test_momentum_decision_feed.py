@@ -551,8 +551,8 @@ def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
 
-    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
-    assert calls == [("HOLD", "ALLUSDC", "ALLUSDC", "ALLUSDC")]
+    assert result == "hold_without_position:ALLUSDC"
+    assert calls == []
     assert [event["event_type"] for event in state.events()] == []
 
 
@@ -823,8 +823,8 @@ def test_execute_decision_hold_without_held_symbol_buys_target(monkeypatch):
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
 
-    assert calls == [("buy", "OMGUSD")]
-    assert result == "bought:OMGUSD"
+    assert calls == []
+    assert result == "hold_without_position:OMGUSD"
 
 
 def test_execute_decision_buy_without_held_symbol_allows_buy(monkeypatch):
