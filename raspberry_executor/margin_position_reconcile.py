@@ -10,6 +10,7 @@ from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_settings import margin_dry_run
 from raspberry_executor.position_order_helpers import is_tp_order, order_price, order_qty
 from raspberry_executor.position_sync_v2 import (
+    _assigned_tp_order_ids,
     _confirm_open_take_profit_order,
     _order_id,
     _tp_confirmation_timed_out,
@@ -102,8 +103,16 @@ def _list_open_orders(margin: Any, symbol: str) -> list[dict[str, Any]]:
         return []
 
 
-def _find_existing_tp(margin: Any, symbol: str, expected_qty: float) -> dict[str, Any] | None:
-    orders = [o for o in _list_open_orders(margin, symbol) if is_tp_order(o) and order_qty(o) >= expected_qty * 0.02]
+def _find_existing_tp(margin: Any, symbol: str, expected_qty: float, assigned_tp_order_ids: set[str] | None = None) -> dict[str, Any] | None:
+    assigned_tp_order_ids = assigned_tp_order_ids or set()
+    orders = []
+    for order in _list_open_orders(margin, symbol):
+        order_id = _order_id(order)
+        if order_id and order_id in assigned_tp_order_ids:
+            logger.info("skip tp already assigned symbol=%s tp=%s", symbol, order_id)
+            continue
+        if is_tp_order(order) and order_qty(order) >= expected_qty * 0.02:
+            orders.append(order)
     if not orders:
         return None
     return sorted(orders, key=lambda o: order_price(o), reverse=True)[0]
@@ -141,7 +150,7 @@ def reconcile_kraken_margin_positions() -> dict:
             tp_id = _local.get("tp_order_id")
             target_price = _float(_local.get("target_price"))
             confirmed_tp = None
-            if tp_id and not _local.get("tp_exchange_confirmed") and target_price > 0:
+            if tp_id and target_price > 0:
                 confirmed_tp = _confirm_open_take_profit_order(local_id, symbol, qty, target_price, str(tp_id), None, margin, state, use_margin=True, attempts=1, sleep_seconds=0)
             if confirmed_tp:
                 updates.update({
@@ -156,12 +165,19 @@ def reconcile_kraken_margin_positions() -> dict:
                 })
                 state.update_open_position(local_id, updates, event_type="tp_exchange_confirmation_completed")
                 logger.info("tp exchange confirmation completed candidate=%s symbol=%s tp_order_id=%s", local_id, symbol, updates.get("tp_order_id"))
-            elif tp_id and _local.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(_local):
-                updates.update({"tp_exchange_confirmed": False, "needs_tp_confirmation": True, "last_tp_confirmation_miss_ts": _now_iso()})
+            elif tp_id and not _tp_confirmation_timed_out(_local):
+                updates.update({
+                    "tp_exchange_confirmed": False,
+                    "needs_tp_confirmation": True,
+                    "needs_tp_replay": False,
+                    "last_tp_confirmation_miss_ts": _now_iso(),
+                    "tp_exchange_confirm_last_checked_at": _local.get("tp_exchange_confirm_last_checked_at") or _now_iso(),
+                })
                 state.update_open_position(local_id, updates)
                 logger.info("tp confirmation pending candidate=%s symbol=%s tp=%s timeout=%ss", local_id, symbol, tp_id, tp_confirmation_max_age_seconds())
             else:
-                existing_tp = _find_existing_tp(margin, symbol, qty)
+                assigned_tp_order_ids = _assigned_tp_order_ids(state, exclude_candidate_id=str(local_id))
+                existing_tp = _find_existing_tp(margin, symbol, qty, assigned_tp_order_ids)
                 if existing_tp:
                     updates.update({
                         "tp_order_id": _order_id(existing_tp),
@@ -191,7 +207,7 @@ def reconcile_kraken_margin_positions() -> dict:
             continue
         logger.info("kraken margin remote position detected symbol=%s entry=%s qty=%s", symbol, entry_id, qty)
         try:
-            tp = _find_existing_tp(margin, symbol, qty)
+            tp = _find_existing_tp(margin, symbol, qty, _assigned_tp_order_ids(state))
             tp_id = _order_id(tp) if tp else None
             if tp_id:
                 logger.info("kraken margin attached existing TP symbol=%s entry=%s tp=%s", symbol, entry_id, tp_id)

@@ -285,14 +285,45 @@ def _list_open_orders(kraken, margin, symbol: str, *, use_margin: bool) -> list[
 
 
 
-def _order_id(order: dict | None) -> str | None:
+def _order_identity(order: dict | None) -> str | None:
     if not isinstance(order, dict):
         return None
-    for key in ("orderId", "order_id", "txid", "id"):
-        value = order.get(key)
-        if value not in (None, ""):
-            return str(value)
-    return None
+    return order.get("orderId") or order.get("order_id") or order.get("txid") or order.get("id")
+
+
+def _order_id(order: dict | None) -> str | None:
+    value = _order_identity(order)
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _assigned_tp_order_ids(state: StateStore, exclude_candidate_id: str | None = None) -> set[str]:
+    assigned: set[str] = set()
+    for candidate_id, position in state.open_positions().items():
+        if exclude_candidate_id is not None and str(candidate_id) == str(exclude_candidate_id):
+            continue
+        tp_order_id = position.get("tp_order_id") if isinstance(position, dict) else None
+        if tp_order_id not in (None, ""):
+            assigned.add(str(tp_order_id))
+    return assigned
+
+
+def _log_duplicate_local_tp_ids(state: StateStore) -> None:
+    by_tp: dict[str, list[tuple[str, str]]] = {}
+    for candidate_id, position in state.open_positions().items():
+        if not isinstance(position, dict):
+            continue
+        symbol = str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
+        tp_order_id = position.get("tp_order_id")
+        if symbol and tp_order_id not in (None, ""):
+            by_tp.setdefault(str(tp_order_id), []).append((str(candidate_id), symbol))
+    for tp_order_id, rows in by_tp.items():
+        if len(rows) <= 1:
+            continue
+        symbols = sorted({symbol for _, symbol in rows})
+        for symbol in symbols:
+            logger.warning("duplicate_tp_detected symbol=%s tp_ids=%s", symbol, [tp_order_id])
 
 
 def _order_reduce_only(order: dict) -> bool | None:
@@ -395,15 +426,25 @@ def _ghost_check(candidate_id: str, position: dict, symbol: str, kraken, margin,
 
 
 def _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin, state, *, use_margin: bool) -> bool:
+    existing_tp_order_id = position.get("tp_order_id")
+    if existing_tp_order_id and position.get("needs_tp_confirmation") is not True:
+        logger.info("tp already confirmed candidate=%s symbol=%s tp=%s skip attach", candidate_id, symbol, existing_tp_order_id)
+        return bool(position.get("tp_exchange_confirmed"))
+
     expected_qty = _float(position.get("quantity"))
     if expected_qty <= 0:
         return False
+    assigned_tp_order_ids = _assigned_tp_order_ids(state, exclude_candidate_id=str(candidate_id))
     open_orders = _list_open_orders(kraken, margin, symbol, use_margin=use_margin)
     if not open_orders:
         return False
     min_required = expected_qty * 0.02
     tp_candidates = []
     for order in open_orders:
+        order_id = _order_id(order)
+        if order_id and order_id in assigned_tp_order_ids:
+            logger.info("skip tp already assigned candidate=%s symbol=%s tp=%s", candidate_id, symbol, order_id)
+            continue
         qty = _order_qty(order)
         if qty < min_required:
             continue
@@ -416,9 +457,12 @@ def _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin,
         tp = sorted(tp_candidates, key=lambda o: abs(_float(o.get("price")) - target))[0]
     else:
         tp = sorted(tp_candidates, key=lambda o: _float(o.get("price")), reverse=True)[0]
+    confirmed_id = _order_id(tp)
+    if not confirmed_id:
+        return False
     protected_qty = _order_qty(tp)
     updates = {
-        "tp_order_id": _order_id(tp),
+        "tp_order_id": confirmed_id,
         "sl_order_id": None,
         "oco_order_list_id": None,
         "target_price": _order_limit_price(tp) or target,
@@ -437,9 +481,10 @@ def _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin,
         "tp_replay_attempts": 0,
         "last_tp_replay_skip_reason": None,
         "last_tp_replay_skip_ts": None,
+        "last_tp_sync_error": None,
     }
     state.update_open_position(candidate_id, updates, event_type="tp_existing_order_attached")
-    logger.info("attached existing take-profit order candidate=%s symbol=%s tp=%s qty=%s", candidate_id, symbol, _order_id(tp), protected_qty)
+    logger.info("attached existing take-profit order candidate=%s symbol=%s tp=%s qty=%s", candidate_id, symbol, confirmed_id, protected_qty)
     return True
 
 
@@ -517,12 +562,21 @@ def _replay_take_profit(candidate_id, position, symbol, spot_manager, margin_man
         return "missing_quantity"
 
     use_margin = _is_margin_position(position)
+    if position.get("tp_order_id") and position.get("tp_exchange_confirmed") and not position.get("needs_tp_replay") and not position.get("needs_tp_confirmation"):
+        logger.info("tp already confirmed candidate=%s symbol=%s tp=%s skip attach", candidate_id, symbol, position.get("tp_order_id"))
+        return "attached_existing_tp"
     if position.get("tp_order_id") and position.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(position):
-        logger.info("tp replay skipped pending confirmation candidate=%s tp=%s", candidate_id, position.get("tp_order_id"))
+        logger.info("tp confirmation pending candidate=%s symbol=%s tp=%s", candidate_id, symbol, position.get("tp_order_id"))
         return "pending_confirmation"
     if kraken is not None:
         if _attach_existing_take_profit(candidate_id, position, symbol, kraken, margin_manager.margin, state, use_margin=use_margin):
             return "attached_existing_tp"
+        refreshed = state.open_positions().get(candidate_id, position)
+        if refreshed.get("tp_order_id") and refreshed.get("tp_exchange_confirmed") and not refreshed.get("needs_tp_replay") and not refreshed.get("needs_tp_confirmation"):
+            return "attached_existing_tp"
+        if refreshed.get("tp_order_id") and refreshed.get("needs_tp_confirmation") and not _tp_confirmation_timed_out(refreshed):
+            logger.info("tp confirmation pending candidate=%s symbol=%s tp=%s", candidate_id, symbol, refreshed.get("tp_order_id"))
+            return "pending_confirmation"
 
     entry_payload = position.get("entry_payload") if isinstance(position.get("entry_payload"), dict) else {}
     if kraken is not None and position.get("entry_order_id"):
@@ -670,7 +724,13 @@ def sync_open_positions():
         except Exception as exc:
             logger.warning("kraken margin reconcile before sync failed error=%s", str(exc))
 
-    for candidate_id, position in list(state.open_positions().items()):
+    local_positions = state.open_positions()
+    assigned_tp_order_ids = _assigned_tp_order_ids(state)
+    if assigned_tp_order_ids:
+        logger.debug("assigned tp ids before sync count=%s", len(assigned_tp_order_ids))
+    _log_duplicate_local_tp_ids(state)
+
+    for candidate_id, position in list(local_positions.items()):
         normalized_position = normalize_position_execution_mode(position)
         if normalized_position != position:
             updates = {k: normalized_position.get(k) for k in ("mode", "margin_account_mode", "margin_isolated") if normalized_position.get(k) != position.get(k)}
