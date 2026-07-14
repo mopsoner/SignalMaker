@@ -131,8 +131,15 @@ def discover_kraken_spot_symbols(base_url: str, quote_assets: list[str], limit: 
 
 
 def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit: int = 0) -> list[str]:
+    env = read_env()
+    require_margin_sell = _bool(
+        os.getenv("CANDLE_FEED_REQUIRE_MARGIN_SELL") or env.get("CANDLE_FEED_REQUIRE_MARGIN_SELL"),
+        default=False,
+    )
     quotes = {quote.upper() for quote in quote_assets if quote.strip()}
     symbols = []
+    long_only_symbols = []
+    leverage_diagnostics = []
     for key, row in _kraken_asset_pairs(base_url).items():
         status = str(row.get("status") or "online").lower()
         quote = _kraken_asset(row.get("quote"))
@@ -140,10 +147,32 @@ def discover_kraken_margin_symbols(base_url: str, quote_assets: list[str], limit
         leverage_sell = row.get("leverage_sell") or []
         if status not in {"online", ""} or quote not in quotes:
             continue
-        if not leverage_buy or not leverage_sell:
+        if not leverage_buy:
             continue
-        symbols.append(_kraken_symbol(row, key))
+        if require_margin_sell and not leverage_sell:
+            continue
+
+        symbol = _kraken_symbol(row, key)
+        symbols.append(symbol)
+        leverage_diagnostics.append(
+            {
+                "symbol": symbol,
+                "leverage_buy": leverage_buy,
+                "leverage_sell": leverage_sell,
+            }
+        )
+        if not leverage_sell:
+            long_only_symbols.append(symbol)
+
     symbols = sorted(set(symbols))
+    logger.info(
+        "Kraken margin symbols discovered count=%s quote_assets=%s require_margin_sell=%s margin_long_only_symbols_included=%s leverage_diagnostics=%s",
+        len(symbols),
+        sorted(quotes),
+        require_margin_sell,
+        sorted(set(long_only_symbols)),
+        leverage_diagnostics,
+    )
     return symbols[:limit] if limit and limit > 0 else symbols
 
 
