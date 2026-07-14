@@ -42,7 +42,7 @@ class MomentumEngineTrade(Base):
 
     trade_id: Mapped[str] = mapped_column(String(96), primary_key=True)
     strategy: Mapped[str] = mapped_column(String(64), default="momentum_rotation_v1", nullable=False)
-    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

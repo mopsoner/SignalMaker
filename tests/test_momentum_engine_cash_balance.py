@@ -863,6 +863,31 @@ def test_rotates_to_better_rank_only_if_better_asset_support_valid() -> None:
     assert status["best_asset"] is None
 
 
+def test_momentum_engine_trade_action_column_accepts_long_rotation_actions() -> None:
+    action = "BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK"
+
+    assert len(action) > 32
+    assert MomentumEngineTrade.__table__.c.action.type.length >= len(action)
+
+    with _make_session() as db:
+        db.add(
+            MomentumEngineTrade(
+                trade_id="trade-long-action",
+                strategy=MomentumEngineService.STRATEGY,
+                action=action,
+                symbol="ETHUSDC",
+                price=100.0,
+                quantity=1.0,
+                value=100.0,
+                pnl=0.0,
+            )
+        )
+        db.commit()
+
+        saved_action = db.scalar(select(MomentumEngineTrade.action))
+
+    assert saved_action == action
+
 def test_current_decision_reads_persisted_current_snapshot_without_recomputing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
