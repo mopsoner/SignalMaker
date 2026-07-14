@@ -15,6 +15,11 @@ class MomentumEnginePositionRead(BaseModel):
     mark_price: float | None = None
     mark_price_source: str | None = None
     unrealized_pnl: float | None = None
+    structure_15m_status: str | None = None
+    structure_15m_bias: str | None = None
+    structure_reason: str | None = None
+    structure_broken: bool | None = None
+    support_status: str | None = None
     opened_at: datetime
     closed_at: datetime | None = None
 

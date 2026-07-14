@@ -45,7 +45,7 @@ def test_decision_endpoint_serializes_executor_fields(monkeypatch: pytest.Monkey
             "should_trade": True,
             "status": "trade_ready",
             "recommendation": "Buy ETHUSDC.",
-            "reason": "Momentum asset ETHUSDC is entry-ready.",
+            "reason": "Momentum asset ETHUSDC has support 15m valide.",
             "due_now": True,
             "open_position": None,
             "best_asset": {"symbol": "ETHUSDC"},
@@ -138,7 +138,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
                 MomentumEngineTrade(
                     trade_id="orphan-buy",
                     strategy=MomentumEngineService.STRATEGY,
-                    action="BUY_MOMENTUM_ENTRY_READY",
+                    action="BUY_TOP_VALID_MOMENTUM",
                     symbol="BTCUSDC",
                     price=100.0,
                     quantity=10.0,
@@ -171,7 +171,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
         position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
 
     assert "CHECK_NO_CASH" not in actions
-    assert "BUY_MOMENTUM_ENTRY_READY" in actions
+    assert "BUY_TOP_VALID_MOMENTUM" in actions
     assert position.symbol == "ETHUSDC"
     assert status["open_position"]["symbol"] == "ETHUSDC"
 
@@ -292,12 +292,12 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
                 "structure_15m_status": "valid",
                 "structure_reason": "15m_structure_holding_above_last_swing_low",
                 "rsi_1h": 50.0,
-                "entry_status": "ready",
+                "support_status": "support_valid",
             },
             cash=240.0,
-            action="BUY_MOMENTUM_ENTRY_READY",
+            action="BUY_TOP_VALID_MOMENTUM",
         )
-        trade = db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action == "BUY_MOMENTUM_ENTRY_READY")).one()
+        trade = db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action == "BUY_TOP_VALID_MOMENTUM")).one()
 
     assert position.entry_price == 130.0
     assert position.quantity == pytest.approx(240.0 / 130.0)
@@ -336,7 +336,7 @@ def test_decision_buy_does_not_write_trade() -> None:
     assert decision["action"] == "buy"
     assert decision["symbol"] == "ETHUSDC"
     assert decision["target_symbol"] == "ETHUSDC"
-    assert decision["best_asset"]["entry_status"] == "ready"
+    assert decision["best_asset"]["support_status"] == "support_valid"
     assert trades == []
     assert positions == []
 
@@ -370,8 +370,8 @@ def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_o
 
     assert best_asset is not None
     assert best_asset["symbol"] == "BTCUSDC"
-    assert best_asset["entry_status"] == "ready"
-    assert best_asset["selection_method"] == "momentum_rank_with_valid_15m_structure"
+    assert best_asset["support_status"] == "support_valid"
+    assert best_asset["selection_method"] == "momentum_rank_with_valid_15m_support"
 
 
 def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusions() -> None:
@@ -759,7 +759,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
         open_position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
 
     assert "SELL_ROTATE_OR_STRUCTURE_BREAK" in actions
-    assert "BUY_NEXT_ENTRY_READY" in actions
+    assert "BUY_BETTER_VALID_MOMENTUM" in actions
     assert "CHECK_NO_CASH" not in actions
     assert open_position.symbol == "ETHUSDC"
     assert status["open_position"]["symbol"] == "ETHUSDC"
