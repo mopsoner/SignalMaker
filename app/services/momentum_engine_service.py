@@ -135,11 +135,18 @@ class MomentumEngineService:
                 else:
                     self._record_trade(action="STAY_CASH_AFTER_STRUCTURE_BREAK", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="15m support broken on current asset; no ranked momentum asset has valid 15m support")
             else:
-                replacement_asset = self._better_ranked_asset_with_valid_structure(
-                    current_asset=current_asset,
+                candidate = self._best_ranked_asset_with_valid_structure(
                     rankings=rankings,
                     min_momentum_score=min_momentum_score,
                     exclude_symbols={open_position.symbol},
+                )
+                current_rank = current_asset.get("rank") if current_asset else None
+                candidate_rank = candidate.get("rank") if candidate else None
+                replacement_asset = (
+                    candidate
+                    if candidate is not None
+                    and self._is_better_rank(candidate_rank=candidate_rank, current_rank=current_rank)
+                    else None
                 )
                 if replacement_asset:
                     self._close_position(
@@ -159,7 +166,7 @@ class MomentumEngineService:
                     open_position.mark_price = price
                     open_position.unrealized_pnl = pnl
                     self._record_trade(
-                        action="HOLD_NO_NEXT_ENTRY",
+                        action="HOLD_NO_BETTER_VALID_MOMENTUM",
                         symbol=open_position.symbol,
                         price=price,
                         quantity=open_position.quantity,
@@ -228,7 +235,16 @@ class MomentumEngineService:
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
         exclude_symbols = {open_position.symbol} if open_position else set()
-        best_asset = self._best_ranked_asset_with_valid_structure(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
+        current_broken = self._structure_broken(current_asset) if open_position else False
+        if open_position and not current_broken:
+            best_asset = self._better_ranked_asset_with_valid_structure(
+                current_asset=current_asset,
+                rankings=rankings,
+                min_momentum_score=min_momentum_score,
+                exclude_symbols=exclude_symbols,
+            )
+        else:
+            best_asset = self._best_ranked_asset_with_valid_structure(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
         top_watch_asset = self._top_watch_asset(rankings=rankings, min_momentum_score=min_momentum_score, exclude_symbols=exclude_symbols)
         open_position_payload = self._position_payload(open_position, rankings=rankings, current_asset=current_asset) if open_position else None
         last_trade = self._last_check_trade()
@@ -290,14 +306,14 @@ class MomentumEngineService:
                 action = "rotate" if due_now else "wait"
                 target_symbol = best_asset.get("symbol")
                 reason = (
-                    f"Replacement asset {target_symbol} is the best-ranked eligible momentum asset now."
+                    f"Replacement asset {target_symbol} is a better-ranked eligible momentum asset now."
                     if due_now
-                    else f"Replacement asset {target_symbol} is the best-ranked eligible momentum asset, but the next scheduled momentum check is not due yet."
+                    else f"Replacement asset {target_symbol} is a better-ranked eligible momentum asset, but the next scheduled momentum check is not due yet."
                 )
             else:
                 action = "hold"
                 target_symbol = symbol
-                reason = "Current position structure is holding and no alternate ranked momentum asset has valid 15m structure."
+                reason = "Current position structure is holding and no better-ranked momentum asset has valid 15m structure."
         elif best_asset:
             action = "buy" if due_now else "wait"
             symbol = best_asset.get("symbol")
@@ -451,6 +467,14 @@ class MomentumEngineService:
             return self._decorate_entry(row)
         return None
 
+    def _is_better_rank(self, *, candidate_rank: Any, current_rank: Any) -> bool:
+        if candidate_rank is None or current_rank is None:
+            return False
+        try:
+            return int(candidate_rank) < int(current_rank)
+        except (TypeError, ValueError):
+            return False
+
     def _better_ranked_asset_with_valid_structure(self, *, current_asset: dict[str, Any] | None, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str] | None = None) -> dict[str, Any] | None:
         if not current_asset:
             return self._best_ranked_asset_with_valid_structure(
@@ -458,15 +482,13 @@ class MomentumEngineService:
                 min_momentum_score=min_momentum_score,
                 exclude_symbols=exclude_symbols,
             )
-        current_rank = int(current_asset.get("rank") or 0)
-        if current_rank <= 0:
-            return None
+        current_rank = current_asset.get("rank")
         excluded = exclude_symbols or set()
         for row in rankings:
             if row.get("symbol") in excluded:
                 continue
-            row_rank = int(row.get("rank") or 0)
-            if row_rank <= 0 or row_rank >= current_rank:
+            row_rank = row.get("rank")
+            if not self._is_better_rank(candidate_rank=row_rank, current_rank=current_rank):
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
@@ -679,9 +701,9 @@ class MomentumEngineService:
             target = best_asset.get("symbol") if best_asset else "cash"
             return f"Sell {open_position.symbol}: 15m structure broken. Rotate to {target}."
         if open_position and best_asset:
-            return f"Rotate from {open_position.symbol} to {best_asset['symbol']} — best-ranked eligible momentum asset."
+            return f"Rotate from {open_position.symbol} to {best_asset['symbol']} — better-ranked eligible momentum asset."
         if open_position:
-            return f"Hold {open_position.symbol}: no alternate ranked momentum asset is eligible and 15m structure has not broken."
+            return f"Hold {open_position.symbol}: no better-ranked momentum asset is eligible and 15m structure has not broken."
         if best_asset:
             return f"Buy {best_asset['symbol']} — best-ranked eligible momentum asset." if due_now else "Wait until next scheduled momentum check."
         if top_watch_asset:
