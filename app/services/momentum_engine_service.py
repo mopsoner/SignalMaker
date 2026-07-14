@@ -108,56 +108,66 @@ class MomentumEngineService:
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
         current_broken = self._structure_broken(current_asset) if current_asset else False
-        exclude_symbols = {open_position.symbol} if open_position else set()
-        next_entry = self._best_ranked_asset_with_valid_structure(
-            rankings=rankings,
-            min_momentum_score=min_momentum_score,
-            exclude_symbols=exclude_symbols,
-        )
-
         if open_position:
             if current_broken:
                 self._close_position(
                     open_position,
                     rankings=rankings,
-                    reason=self._break_reason(current_asset) or "15m structure broken bearish",
+                    reason="15m support broken on current asset; rotating to next highest momentum asset with valid 15m support",
                 )
-                if next_entry:
+                replacement_asset = self._best_ranked_asset_with_valid_structure(
+                    rankings=rankings,
+                    min_momentum_score=min_momentum_score,
+                    exclude_symbols={open_position.symbol},
+                )
+                if replacement_asset:
                     self.db.flush()
                     cash = self._cash_balance(starting_capital=starting_capital)
-                    if cash > 0 and float(next_entry.get("price") or 0) > 0:
-                        self._open_new_position(next_entry, cash, action="BUY_AFTER_STRUCTURE_BREAK")
+                    if cash > 0 and float(replacement_asset.get("price") or 0) > 0:
+                        self._open_new_position(
+                            replacement_asset,
+                            cash,
+                            action="BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK",
+                            reason="15m support broken on current asset; rotating to next highest momentum asset with valid 15m support",
+                        )
                     else:
-                        self._record_trade(action="CHECK_NO_CASH", symbol=next_entry["symbol"], price=float(next_entry.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available after 15m structure break")
+                        self._record_trade(action="CHECK_NO_CASH", symbol=replacement_asset["symbol"], price=float(replacement_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available after 15m support break on current asset")
                 else:
-                    self._record_trade(action="STAY_CASH_AFTER_STRUCTURE_BREAK", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="15m structure broke and no ranked momentum asset has valid 15m structure")
-            elif next_entry:
-                self._close_position(
-                    open_position,
-                    rankings=rankings,
-                    reason=f"Rotate into best-ranked eligible momentum asset {next_entry['symbol']}",
-                )
-                self.db.flush()
-                cash = self._cash_balance(starting_capital=starting_capital)
-                if cash > 0 and float(next_entry.get("price") or 0) > 0:
-                    self._open_new_position(next_entry, cash, action="BUY_NEXT_ENTRY_READY")
-                else:
-                    self._record_trade(action="CHECK_NO_CASH", symbol=next_entry["symbol"], price=float(next_entry.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for ranked momentum rotation")
+                    self._record_trade(action="STAY_CASH_AFTER_STRUCTURE_BREAK", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="15m support broken on current asset; no ranked momentum asset has valid 15m support")
             else:
-                price, price_source = self._price_with_source(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
-                value, pnl = self._position_mark_to_market(position=open_position, mark_price=price)
-                open_position.mark_price = price
-                open_position.unrealized_pnl = pnl
-                self._record_trade(
-                    action="HOLD_NO_NEXT_ENTRY",
-                    symbol=open_position.symbol,
-                    price=price,
-                    quantity=open_position.quantity,
-                    value=value,
-                    pnl=pnl,
-                    reason=self._hold_reason(current_asset),
-                    meta={"price_source": price_source, "pnl_basis": "mark_to_market"},
+                replacement_asset = self._better_ranked_asset_with_valid_structure(
+                    current_asset=current_asset,
+                    rankings=rankings,
+                    min_momentum_score=min_momentum_score,
+                    exclude_symbols={open_position.symbol},
                 )
+                if replacement_asset:
+                    self._close_position(
+                        open_position,
+                        rankings=rankings,
+                        reason=f"Rotate into better-ranked eligible momentum asset {replacement_asset['symbol']}",
+                    )
+                    self.db.flush()
+                    cash = self._cash_balance(starting_capital=starting_capital)
+                    if cash > 0 and float(replacement_asset.get("price") or 0) > 0:
+                        self._open_new_position(replacement_asset, cash, action="BUY_NEXT_ENTRY_READY")
+                    else:
+                        self._record_trade(action="CHECK_NO_CASH", symbol=replacement_asset["symbol"], price=float(replacement_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for ranked momentum rotation")
+                else:
+                    price, price_source = self._price_with_source(open_position.symbol, rankings=rankings, fallback=open_position.entry_price)
+                    value, pnl = self._position_mark_to_market(position=open_position, mark_price=price)
+                    open_position.mark_price = price
+                    open_position.unrealized_pnl = pnl
+                    self._record_trade(
+                        action="HOLD_NO_NEXT_ENTRY",
+                        symbol=open_position.symbol,
+                        price=price,
+                        quantity=open_position.quantity,
+                        value=value,
+                        pnl=pnl,
+                        reason=self._hold_reason(current_asset),
+                        meta={"price_source": price_source, "pnl_basis": "mark_to_market"},
+                    )
             self.db.flush()
             status = self._build_status(
                 rankings=rankings,
@@ -195,7 +205,7 @@ class MomentumEngineService:
 
         cash = self._cash_balance(starting_capital=starting_capital)
         if cash > 0 and float(best_asset.get("price") or 0) > 0:
-            self._open_new_position(best_asset, cash, action="BUY_RSI_1H_ENTRY_READY")
+            self._open_new_position(best_asset, cash, action="BUY_MOMENTUM_ENTRY_READY")
         else:
             self._record_trade(action="CHECK_NO_CASH", symbol=best_asset["symbol"], price=float(best_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available for momentum entry")
 
@@ -441,6 +451,32 @@ class MomentumEngineService:
             return self._decorate_entry(row)
         return None
 
+    def _better_ranked_asset_with_valid_structure(self, *, current_asset: dict[str, Any] | None, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str] | None = None) -> dict[str, Any] | None:
+        if not current_asset:
+            return self._best_ranked_asset_with_valid_structure(
+                rankings=rankings,
+                min_momentum_score=min_momentum_score,
+                exclude_symbols=exclude_symbols,
+            )
+        current_rank = int(current_asset.get("rank") or 0)
+        if current_rank <= 0:
+            return None
+        excluded = exclude_symbols or set()
+        for row in rankings:
+            if row.get("symbol") in excluded:
+                continue
+            row_rank = int(row.get("rank") or 0)
+            if row_rank <= 0 or row_rank >= current_rank:
+                continue
+            if float(row.get("price") or 0) <= 0:
+                continue
+            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+                continue
+            if not self._structure_valid(row):
+                continue
+            return self._decorate_entry(row)
+        return None
+
     def _hold_reason(self, asset: dict[str, Any] | None) -> str:
         if not asset:
             return "Current asset not found in ranking, holding until explicit structure break or new ranked momentum asset."
@@ -563,7 +599,7 @@ class MomentumEngineService:
         price, _ = self._price_with_source(symbol, rankings=rankings, fallback=fallback)
         return price
 
-    def _open_new_position(self, asset: dict[str, Any], cash: float, *, action: str) -> MomentumEnginePosition:
+    def _open_new_position(self, asset: dict[str, Any], cash: float, *, action: str, reason: str | None = None) -> MomentumEnginePosition:
         price, price_source = self._price_with_source(asset["symbol"], rankings=[asset], fallback=float(asset["price"]))
         quantity = cash / price
         now = datetime.now(timezone.utc)
@@ -598,7 +634,7 @@ class MomentumEngineService:
             quantity=quantity,
             value=cash,
             pnl=0.0,
-            reason=f"Momentum rank #{asset.get('rank')} with positive price, sufficient momentum score, and valid 15m structure",
+            reason=reason or f"Momentum rank #{asset.get('rank')} with positive price, sufficient momentum score, and valid 15m structure",
             meta={"price_source": price_source, "pnl_basis": "entry"},
         )
         return position
