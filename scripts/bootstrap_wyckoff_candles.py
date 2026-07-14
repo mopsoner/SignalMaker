@@ -183,8 +183,14 @@ def load_kraken_pairs(
     margin_only: bool,
     max_symbols: int,
 ) -> list[KrakenPair]:
+    require_margin_sell = env_bool(
+        "BOOTSTRAP_REQUIRE_MARGIN_SELL",
+        env_bool("CANDLE_FEED_REQUIRE_MARGIN_SELL", False),
+    )
+
     log("[bootstrap] fetching Kraken AssetPairs...")
-    data = http_json(KRAKEN_ASSET_PAIRS_URL, timeout=30)
+    query = urllib.parse.urlencode({"assetVersion": 1})
+    data = http_json(f"{KRAKEN_ASSET_PAIRS_URL}?{query}", timeout=30)
     log("[bootstrap] Kraken AssetPairs received")
 
     errors = data.get("error") or []
@@ -215,7 +221,9 @@ def load_kraken_pairs(
 
         leverage_buy = pair.get("leverage_buy") or []
         leverage_sell = pair.get("leverage_sell") or []
-        has_margin = bool(leverage_buy or leverage_sell)
+        has_margin_buy = bool(leverage_buy)
+        has_margin_sell = bool(leverage_sell)
+        has_margin = has_margin_buy and (has_margin_sell or not require_margin_sell)
 
         if has_margin:
             margin_pairs_count += 1
@@ -249,6 +257,7 @@ def load_kraken_pairs(
     log(f"[bootstrap] kraken_pairs_count={kraken_pairs_count}")
     log(f"[bootstrap] quote_pairs_count={quote_pairs_count}")
     log(f"[bootstrap] margin_pairs_count={margin_pairs_count}")
+    log(f"[bootstrap] require_margin_sell={str(require_margin_sell).lower()}")
     log(f"[bootstrap] selected_pairs_count={len(pairs)}")
 
     return pairs
@@ -577,6 +586,11 @@ def main() -> int:
     log(f"[bootstrap] base_url={base_url}")
     log(f"[bootstrap] quote_assets={','.join(sorted(wanted_quotes))}")
     log(f"[bootstrap] bootstrap_margin_only={str(margin_only).lower()}")
+    require_margin_sell = env_bool(
+        "BOOTSTRAP_REQUIRE_MARGIN_SELL",
+        env_bool("CANDLE_FEED_REQUIRE_MARGIN_SELL", False),
+    )
+    log(f"[bootstrap] bootstrap_require_margin_sell={str(require_margin_sell).lower()}")
     log(f"[bootstrap] max_symbols={max_symbols}")
     log(f"[bootstrap] intervals={','.join(intervals)}")
     log(f"[bootstrap] kraken_rpm={rpm}")
