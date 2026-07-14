@@ -138,7 +138,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
                 MomentumEngineTrade(
                     trade_id="orphan-buy",
                     strategy=MomentumEngineService.STRATEGY,
-                    action="BUY_RSI_1H_ENTRY_READY",
+                    action="BUY_MOMENTUM_ENTRY_READY",
                     symbol="BTCUSDC",
                     price=100.0,
                     quantity=10.0,
@@ -171,7 +171,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
         position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
 
     assert "CHECK_NO_CASH" not in actions
-    assert "BUY_RSI_1H_ENTRY_READY" in actions
+    assert "BUY_MOMENTUM_ENTRY_READY" in actions
     assert position.symbol == "ETHUSDC"
     assert status["open_position"]["symbol"] == "ETHUSDC"
 
@@ -295,9 +295,9 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
                 "entry_status": "ready",
             },
             cash=240.0,
-            action="BUY_RSI_1H_ENTRY_READY",
+            action="BUY_MOMENTUM_ENTRY_READY",
         )
-        trade = db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action == "BUY_RSI_1H_ENTRY_READY")).one()
+        trade = db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action == "BUY_MOMENTUM_ENTRY_READY")).one()
 
     assert position.entry_price == 130.0
     assert position.quantity == pytest.approx(240.0 / 130.0)
@@ -461,6 +461,85 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
     assert decision["open_position"]["symbol"] == "BTCUSDC"
     assert trades == []
 
+
+def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
+    with _make_session() as db:
+        db.add_all(
+            [
+                MomentumCurrent(
+                    symbol="BTCUSDC",
+                    price=100.0,
+                    momentum_score=30.0,
+                    classification="strong_bull",
+                    rsi_1h=70.0,
+                    rank=1,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="BTCUSDC",
+                    structure_15m_status="broken_bearish",
+                    structure_15m_bias="bearish",
+                    structure_reason="15m_support_broken",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumCurrent(
+                    symbol="ETHUSDC",
+                    price=50.0,
+                    momentum_score=29.0,
+                    classification="strong_bull",
+                    rsi_1h=80.0,
+                    rank=2,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="ETHUSDC",
+                    structure_15m_status="broken_bearish",
+                    structure_15m_bias="bearish",
+                    structure_reason="15m_support_broken",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumCurrent(
+                    symbol="SOLUSDC",
+                    price=25.0,
+                    momentum_score=28.0,
+                    classification="strong_bull",
+                    rsi_1h=30.0,
+                    rank=3,
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumStructureCurrent(
+                    symbol="SOLUSDC",
+                    structure_15m_status="valid",
+                    structure_15m_bias="neutral_bullish",
+                    structure_reason="15m_structure_holding_above_last_swing_low",
+                    calculated_at=datetime.now(timezone.utc),
+                ),
+                MomentumEnginePosition(
+                    position_id="pos-btc",
+                    strategy=MomentumEngineService.STRATEGY,
+                    symbol="BTCUSDC",
+                    status="open",
+                    quantity=10.0,
+                    entry_price=100.0,
+                    entry_value=1000.0,
+                    opened_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+        db.autoflush = False
+
+        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        trades = list(db.scalars(select(MomentumEngineTrade).order_by(MomentumEngineTrade.created_at)).all())
+        open_position = db.scalars(select(MomentumEnginePosition).where(MomentumEnginePosition.status == "open")).one()
+
+    assert [trade.action for trade in trades] == ["SELL_ROTATE_OR_STRUCTURE_BREAK", "BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK"]
+    assert trades[0].symbol == "BTCUSDC"
+    assert trades[1].symbol == "SOLUSDC"
+    assert trades[0].reason == "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+    assert trades[1].reason == "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+    assert open_position.symbol == "SOLUSDC"
+    assert status["open_position"]["symbol"] == "SOLUSDC"
 
 def test_current_decision_reads_persisted_current_snapshot_without_recomputing(monkeypatch: pytest.MonkeyPatch) -> None:
     persisted_payload = {
