@@ -341,6 +341,83 @@ def test_decision_buy_does_not_write_trade() -> None:
     assert positions == []
 
 
+def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_order() -> None:
+    with _make_session() as db:
+        service = MomentumEngineService(db)
+        rankings = [
+            {
+                "symbol": "BTCUSDC",
+                "price": 100.0,
+                "momentum_score": 20.0,
+                "rank": 1,
+                "rsi_1h": 80.0,
+                "structure_15m_status": "valid",
+            },
+            {
+                "symbol": "ETHUSDC",
+                "price": 50.0,
+                "momentum_score": 19.0,
+                "rank": 2,
+                "rsi_1h": 50.0,
+                "structure_15m_status": "valid",
+            },
+        ]
+
+        best_asset = service._best_ranked_asset_with_valid_structure(
+            rankings=rankings,
+            min_momentum_score=0.0,
+        )
+
+    assert best_asset is not None
+    assert best_asset["symbol"] == "BTCUSDC"
+    assert best_asset["entry_status"] == "ready"
+    assert best_asset["selection_method"] == "momentum_rank_with_valid_15m_structure"
+
+
+def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusions() -> None:
+    with _make_session() as db:
+        service = MomentumEngineService(db)
+        rankings = [
+            {
+                "symbol": "BTCUSDC",
+                "price": 0.0,
+                "momentum_score": 30.0,
+                "rank": 1,
+                "structure_15m_status": "valid",
+            },
+            {
+                "symbol": "ETHUSDC",
+                "price": 100.0,
+                "momentum_score": 29.0,
+                "rank": 2,
+                "structure_15m_status": "broken_bearish",
+            },
+            {
+                "symbol": "SOLUSDC",
+                "price": 90.0,
+                "momentum_score": 28.0,
+                "rank": 3,
+                "structure_15m_status": "valid_bullish",
+            },
+            {
+                "symbol": "BNBUSDC",
+                "price": 80.0,
+                "momentum_score": 27.0,
+                "rank": 4,
+                "structure_15m_status": "valid",
+            },
+        ]
+
+        best_asset = service._best_ranked_asset_with_valid_structure(
+            rankings=rankings,
+            min_momentum_score=10.0,
+            exclude_symbols={"SOLUSDC"},
+        )
+
+    assert best_asset is not None
+    assert best_asset["symbol"] == "BNBUSDC"
+
+
 def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
     with _make_session() as db:
         db.add_all(
