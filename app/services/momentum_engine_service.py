@@ -577,6 +577,10 @@ class MomentumEngineService:
             "structure_broken": self._structure_broken(current_asset),
             "rsi_1h": current_asset.get("rsi_1h") if current_asset else None,
             "support_status": self._support_status(current_asset) if current_asset else "blocked_missing_asset",
+            "momentum_acceleration": current_asset.get("momentum_acceleration") if current_asset else None,
+            "momentum_acceleration_15m": current_asset.get("momentum_acceleration_15m") if current_asset else None,
+            "momentum_acceleration_1h": current_asset.get("momentum_acceleration_1h") if current_asset else None,
+            "momentum_acceleration_4h": current_asset.get("momentum_acceleration_4h") if current_asset else None,
         }
 
     def _open_position_value(self, position: MomentumEnginePosition | None, *, rankings: list[dict[str, Any]]) -> float:
@@ -645,6 +649,10 @@ class MomentumEngineService:
                 "rsi_1h": asset.get("rsi_1h"),
                 "support_status": asset.get("support_status"),
                 "selection_method": asset.get("selection_method"),
+                "momentum_acceleration": asset.get("momentum_acceleration"),
+                "momentum_acceleration_15m": asset.get("momentum_acceleration_15m"),
+                "momentum_acceleration_1h": asset.get("momentum_acceleration_1h"),
+                "momentum_acceleration_4h": asset.get("momentum_acceleration_4h"),
             },
             opened_at=now,
         )
@@ -657,7 +665,14 @@ class MomentumEngineService:
             value=cash,
             pnl=0.0,
             reason=reason or f"Momentum rank #{asset.get('rank')} with positive price, sufficient momentum score, and valid 15m support",
-            meta={"price_source": price_source, "pnl_basis": "entry"},
+            meta={
+                "price_source": price_source,
+                "pnl_basis": "entry",
+                "momentum_acceleration": asset.get("momentum_acceleration"),
+                "momentum_acceleration_15m": asset.get("momentum_acceleration_15m"),
+                "momentum_acceleration_1h": asset.get("momentum_acceleration_1h"),
+                "momentum_acceleration_4h": asset.get("momentum_acceleration_4h"),
+            },
         )
         return position
 

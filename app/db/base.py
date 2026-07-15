@@ -29,6 +29,14 @@ def _apply_compatible_schema_upgrades() -> None:
 
     statements = (
         "ALTER TABLE momentum_engine_trades ALTER COLUMN action TYPE VARCHAR(64)",
+        """ALTER TABLE momentum_current
+            ADD COLUMN IF NOT EXISTS momentum_delta_15m DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_delta_1h DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_delta_4h DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_acceleration_15m DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_acceleration_1h DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_acceleration_4h DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_acceleration DOUBLE PRECISION NOT NULL DEFAULT 0""",
     )
     with engine.begin() as connection:
         for statement in statements:
