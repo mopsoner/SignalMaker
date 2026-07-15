@@ -287,6 +287,34 @@ export default function MomentumPage() {
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={tradingViewUrl(row.symbol)} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 6), sortValue: (row) => Number(row.price ?? -1) },
     { key: 'score', title: 'Momentum score', render: (row) => <strong>{fmtNumber(row.momentum_score, 2)}</strong>, sortValue: (row) => Number(row.momentum_score ?? -999) },
+    {
+      key: 'momentumAcceleration',
+      title: 'Acceleration',
+      render: (row) => {
+        const value = Number(row.momentum_acceleration || 0)
+        const prefix = value > 0 ? '+' : ''
+
+        return (
+          <span
+            className={
+              value > 0
+                ? 'badge green'
+                : value < 0
+                  ? 'badge orange'
+                  : 'badge gray'
+            }
+            title={
+              `15m ${fmtNumber(row.momentum_acceleration_15m, 2)} · ` +
+              `1h ${fmtNumber(row.momentum_acceleration_1h, 2)} · ` +
+              `4h ${fmtNumber(row.momentum_acceleration_4h, 2)}`
+            }
+          >
+            {prefix}{fmtNumber(value, 2)}
+          </span>
+        )
+      },
+      sortValue: (row) => Number(row.momentum_acceleration ?? -999),
+    },
     { key: 'classification', title: 'Class', render: (row) => <span className={scoreBadgeClass(row.classification)}>{classLabel(row.classification)}</span>, sortValue: (row) => row.classification || '' },
     { key: 'm15', title: '15m', render: (row) => fmtNumber(row.momentum_15m, 2), sortValue: (row) => Number(row.momentum_15m ?? -999) },
     { key: 'm1h', title: '1h', render: (row) => fmtNumber(row.momentum_1h, 2), sortValue: (row) => Number(row.momentum_1h ?? -999) },
@@ -301,6 +329,21 @@ export default function MomentumPage() {
     { key: 'quality', title: 'Data', render: (row) => row.data_quality || '—', sortValue: (row) => row.data_quality || '' },
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.updated_at), sortValue: (row) => row.updated_at || '' },
   ]
+
+  const topMomentumColumnKeys = [
+    'rank',
+    'symbol',
+    'price',
+    'score',
+    'momentumAcceleration',
+    'classification',
+    'm15',
+    'm1h',
+    'm4h',
+  ]
+  const topMomentumColumns = topMomentumColumnKeys
+    .map((key) => columns.find((column) => column.key === key))
+    .filter(Boolean)
 
   const tradeColumns = [
     { key: 'created_at', title: 'Time', render: (row) => fmtDate(row.created_at), sortValue: (row) => row.created_at || '' },
@@ -332,7 +375,7 @@ export default function MomentumPage() {
       <MomentumTradeChart points={engineTimeline} quoteCurrency={quoteCurrency} />
     </section>
 
-    <FoldableTable title="Top 10 momentum fort" columns={columns.slice(0, 8)} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
+    <FoldableTable title="Top 10 momentum fort" columns={topMomentumColumns} rows={strongest} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" />
 
     <details className="panel collapsible-panel" open>
       <summary><h2>Positions momentum · backend paper engine</h2><span className="collapse-indicator">⌄</span></summary>

@@ -25,6 +25,8 @@ class MomentumService:
     EMA_PERIOD = 20
     RSI_PERIOD = 14
     STRUCTURE_SWING_WINDOW = 2
+    ACCELERATION_WEIGHT = 0.15
+    ACCELERATION_CAP = 20.0
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -41,7 +43,14 @@ class MomentumService:
         if limit is not None:
             target_symbols = target_symbols[:limit]
 
-        calculated_rows = [self._build_symbol_row(symbol) for symbol in target_symbols]
+        previous_rows = {
+            row.symbol: row
+            for row in self.db.scalars(
+                select(MomentumCurrent).where(MomentumCurrent.symbol.in_(target_symbols))
+            ).all()
+        } if target_symbols else {}
+
+        calculated_rows = [self._build_symbol_row(symbol, previous=previous_rows.get(symbol)) for symbol in target_symbols]
         calculated_rows.sort(key=lambda row: row["momentum_score"], reverse=True)
         now = datetime.now(timezone.utc)
         for index, payload in enumerate(calculated_rows, start=1):
@@ -66,6 +75,13 @@ class MomentumService:
             "momentum_1h": row.momentum_1h,
             "momentum_4h": row.momentum_4h,
             "momentum_score": row.momentum_score,
+            "momentum_delta_15m": row.momentum_delta_15m,
+            "momentum_delta_1h": row.momentum_delta_1h,
+            "momentum_delta_4h": row.momentum_delta_4h,
+            "momentum_acceleration_15m": row.momentum_acceleration_15m,
+            "momentum_acceleration_1h": row.momentum_acceleration_1h,
+            "momentum_acceleration_4h": row.momentum_acceleration_4h,
+            "momentum_acceleration": row.momentum_acceleration,
             "classification": row.classification,
             "rsi_15m": row.rsi_15m,
             "rsi_1h": row.rsi_1h,
@@ -114,7 +130,10 @@ class MomentumService:
             row = MomentumCurrent(symbol=payload["symbol"])
             self.db.add(row)
         for key in (
-            "price", "momentum_15m", "momentum_1h", "momentum_4h", "momentum_score", "classification",
+            "price", "momentum_15m", "momentum_1h", "momentum_4h", "momentum_score",
+            "momentum_delta_15m", "momentum_delta_1h", "momentum_delta_4h",
+            "momentum_acceleration_15m", "momentum_acceleration_1h", "momentum_acceleration_4h",
+            "momentum_acceleration", "classification",
             "rsi_15m", "rsi_1h", "rsi_4h", "change_15m", "change_1h", "change_4h",
             "ema_trend_15m", "ema_trend_1h", "ema_trend_4h", "data_quality", "rank", "updated_at",
         ):
@@ -137,7 +156,7 @@ class MomentumService:
         row.structure_reason = payload["structure_reason"]
         row.calculated_at = calculated_at
 
-    def _build_symbol_row(self, symbol: str) -> dict[str, Any]:
+    def _build_symbol_row(self, symbol: str, previous: MomentumCurrent | None = None) -> dict[str, Any]:
         bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
         interval_payloads = {interval: self._interval_momentum(bundle.get(interval) or []) for interval in self.INTERVALS}
         structure_15m = self._structure_15m(bundle.get("15m") or [])
@@ -151,7 +170,31 @@ class MomentumService:
             weight = self.WEIGHTS[interval]
             weighted_score += value * weight
             available_weight += weight
-        momentum_score = weighted_score / available_weight if available_weight else 0.0
+        raw_momentum_score = weighted_score / available_weight if available_weight else 0.0
+
+        momentum_deltas: dict[str, float] = {}
+        momentum_accelerations: dict[str, float] = {}
+        for interval in self.INTERVALS:
+            current_value = interval_payloads[interval]["momentum"]
+            previous_value = getattr(previous, f"momentum_{interval}") if previous and current_value is not None else None
+            current_delta = self._safe_delta(current_value, previous_value)
+            previous_delta = getattr(previous, f"momentum_delta_{interval}") if previous and current_value is not None else None
+            momentum_deltas[interval] = current_delta
+            momentum_accelerations[interval] = self._safe_acceleration(current_delta, previous_delta)
+
+        acceleration_weighted_sum = 0.0
+        acceleration_available_weight = 0.0
+        for interval, weight in self.WEIGHTS.items():
+            if interval_payloads[interval]["momentum"] is None:
+                continue
+            acceleration_weighted_sum += momentum_accelerations[interval] * weight
+            acceleration_available_weight += weight
+        momentum_acceleration = round(
+            acceleration_weighted_sum / acceleration_available_weight if acceleration_available_weight else 0.0,
+            4,
+        )
+        capped_acceleration = max(-self.ACCELERATION_CAP, min(self.ACCELERATION_CAP, momentum_acceleration))
+        momentum_score = round(raw_momentum_score + capped_acceleration * self.ACCELERATION_WEIGHT, 4)
 
         latest_times = [payload["updated_at"] for payload in interval_payloads.values() if payload["updated_at"]]
         latest_price = self._latest_price(interval_payloads)
@@ -164,7 +207,14 @@ class MomentumService:
             "momentum_15m": interval_payloads["15m"]["momentum"],
             "momentum_1h": interval_payloads["1h"]["momentum"],
             "momentum_4h": interval_payloads["4h"]["momentum"],
-            "momentum_score": round(momentum_score, 4),
+            "momentum_score": momentum_score,
+            "momentum_delta_15m": momentum_deltas["15m"],
+            "momentum_delta_1h": momentum_deltas["1h"],
+            "momentum_delta_4h": momentum_deltas["4h"],
+            "momentum_acceleration_15m": momentum_accelerations["15m"],
+            "momentum_acceleration_1h": momentum_accelerations["1h"],
+            "momentum_acceleration_4h": momentum_accelerations["4h"],
+            "momentum_acceleration": momentum_acceleration,
             "classification": self._classification(momentum_score),
             "rsi_15m": interval_payloads["15m"]["rsi"],
             "rsi_1h": interval_payloads["1h"]["rsi"],
@@ -179,6 +229,17 @@ class MomentumService:
             "data_quality": "complete" if available_count == len(self.INTERVALS) else f"partial:{available_count}/{len(self.INTERVALS)}",
             "structure_15m": structure_15m,
         }
+
+
+    def _safe_delta(self, current_value: float | None, previous_value: float | None) -> float:
+        if current_value is None or previous_value is None:
+            return 0.0
+        return round(float(current_value) - float(previous_value), 4)
+
+    def _safe_acceleration(self, current_delta: float, previous_delta: float | None) -> float:
+        if previous_delta is None:
+            return 0.0
+        return round(float(current_delta) - float(previous_delta), 4)
 
     def _structure_15m(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
         if len(candles) < 8:
