@@ -18,6 +18,9 @@ class MomentumRead(BaseModel):
     momentum_acceleration_1h: float = 0.0
     momentum_acceleration_4h: float = 0.0
     momentum_acceleration: float = 0.0
+    momentum_candle_time_15m: datetime | None = None
+    momentum_candle_time_1h: datetime | None = None
+    momentum_candle_time_4h: datetime | None = None
     classification: str
     rsi_15m: float | None = None
     rsi_1h: float | None = None

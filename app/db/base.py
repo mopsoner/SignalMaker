@@ -36,7 +36,10 @@ def _apply_compatible_schema_upgrades() -> None:
             ADD COLUMN IF NOT EXISTS momentum_acceleration_15m DOUBLE PRECISION NOT NULL DEFAULT 0,
             ADD COLUMN IF NOT EXISTS momentum_acceleration_1h DOUBLE PRECISION NOT NULL DEFAULT 0,
             ADD COLUMN IF NOT EXISTS momentum_acceleration_4h DOUBLE PRECISION NOT NULL DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS momentum_acceleration DOUBLE PRECISION NOT NULL DEFAULT 0""",
+            ADD COLUMN IF NOT EXISTS momentum_acceleration DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS momentum_candle_time_15m TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS momentum_candle_time_1h TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS momentum_candle_time_4h TIMESTAMPTZ""",
     )
     with engine.begin() as connection:
         for statement in statements:
