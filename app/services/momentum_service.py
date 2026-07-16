@@ -25,8 +25,9 @@ class MomentumService:
     EMA_PERIOD = 20
     RSI_PERIOD = 14
     STRUCTURE_SWING_WINDOW = 2
-    ACCELERATION_WEIGHT = 0.15
-    ACCELERATION_CAP = 20.0
+    ACCELERATION_WEIGHT = 0.30
+    ACCELERATION_CAP = 30.0
+    ACCELERATION_WEIGHTS = {"15m": 0.20, "1h": 0.45, "4h": 0.35}
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -58,7 +59,21 @@ class MomentumService:
             self._upsert_current(payload, calculated_at=now)
             self._upsert_structure(payload["symbol"], payload["structure_15m"], calculated_at=now)
         self.db.commit()
-        return {"symbols": len(target_symbols), "momentum_rows_upserted": len(calculated_rows), "calculated_at": now.isoformat()}
+        updated = [
+            {
+                "symbol": row["symbol"],
+                "updated_timeframes": row["updated_timeframes"],
+                "momentum_acceleration": row["momentum_acceleration"],
+            }
+            for row in calculated_rows
+            if row["updated_timeframes"]
+        ]
+        return {
+            "symbols": len(target_symbols),
+            "momentum_rows_upserted": len(calculated_rows),
+            "calculated_at": now.isoformat(),
+            "updated": updated,
+        }
 
     def _structure_map(self, symbols: list[str]) -> dict[str, MomentumStructureCurrent]:
         if not symbols:
@@ -82,6 +97,9 @@ class MomentumService:
             "momentum_acceleration_1h": row.momentum_acceleration_1h,
             "momentum_acceleration_4h": row.momentum_acceleration_4h,
             "momentum_acceleration": row.momentum_acceleration,
+            "momentum_candle_time_15m": row.momentum_candle_time_15m,
+            "momentum_candle_time_1h": row.momentum_candle_time_1h,
+            "momentum_candle_time_4h": row.momentum_candle_time_4h,
             "classification": row.classification,
             "rsi_15m": row.rsi_15m,
             "rsi_1h": row.rsi_1h,
@@ -133,7 +151,8 @@ class MomentumService:
             "price", "momentum_15m", "momentum_1h", "momentum_4h", "momentum_score",
             "momentum_delta_15m", "momentum_delta_1h", "momentum_delta_4h",
             "momentum_acceleration_15m", "momentum_acceleration_1h", "momentum_acceleration_4h",
-            "momentum_acceleration", "classification",
+            "momentum_acceleration", "momentum_candle_time_15m", "momentum_candle_time_1h",
+            "momentum_candle_time_4h", "classification",
             "rsi_15m", "rsi_1h", "rsi_4h", "change_15m", "change_1h", "change_4h",
             "ema_trend_15m", "ema_trend_1h", "ema_trend_4h", "data_quality", "rank", "updated_at",
         ):
@@ -174,17 +193,42 @@ class MomentumService:
 
         momentum_deltas: dict[str, float] = {}
         momentum_accelerations: dict[str, float] = {}
+        momentum_candle_times: dict[str, datetime | None] = {}
+        updated_timeframes: list[str] = []
         for interval in self.INTERVALS:
             current_value = interval_payloads[interval]["momentum"]
-            previous_value = getattr(previous, f"momentum_{interval}") if previous and current_value is not None else None
-            current_delta = self._safe_delta(current_value, previous_value)
-            previous_delta = getattr(previous, f"momentum_delta_{interval}") if previous and current_value is not None else None
+            current_candle_time = interval_payloads[interval]["candle_time"]
+            previous_candle_time = getattr(previous, f"momentum_candle_time_{interval}") if previous else None
+            has_new_candle = (
+                current_candle_time is not None
+                and (previous_candle_time is None or current_candle_time > previous_candle_time)
+            )
+
+            if previous is None:
+                current_delta = 0.0
+                current_acceleration = 0.0
+                candle_time = current_candle_time
+                if current_candle_time is not None:
+                    updated_timeframes.append(interval)
+            elif not has_new_candle:
+                current_delta = float(getattr(previous, f"momentum_delta_{interval}") or 0.0)
+                current_acceleration = float(getattr(previous, f"momentum_acceleration_{interval}") or 0.0)
+                candle_time = previous_candle_time
+            else:
+                previous_momentum = getattr(previous, f"momentum_{interval}")
+                previous_delta = getattr(previous, f"momentum_delta_{interval}")
+                current_delta = self._safe_delta(current_value, previous_momentum)
+                current_acceleration = self._safe_acceleration(current_delta, previous_delta)
+                candle_time = current_candle_time
+                updated_timeframes.append(interval)
+
             momentum_deltas[interval] = current_delta
-            momentum_accelerations[interval] = self._safe_acceleration(current_delta, previous_delta)
+            momentum_accelerations[interval] = current_acceleration
+            momentum_candle_times[interval] = candle_time
 
         acceleration_weighted_sum = 0.0
         acceleration_available_weight = 0.0
-        for interval, weight in self.WEIGHTS.items():
+        for interval, weight in self.ACCELERATION_WEIGHTS.items():
             if interval_payloads[interval]["momentum"] is None:
                 continue
             acceleration_weighted_sum += momentum_accelerations[interval] * weight
@@ -215,6 +259,10 @@ class MomentumService:
             "momentum_acceleration_1h": momentum_accelerations["1h"],
             "momentum_acceleration_4h": momentum_accelerations["4h"],
             "momentum_acceleration": momentum_acceleration,
+            "momentum_candle_time_15m": momentum_candle_times["15m"],
+            "momentum_candle_time_1h": momentum_candle_times["1h"],
+            "momentum_candle_time_4h": momentum_candle_times["4h"],
+            "updated_timeframes": updated_timeframes,
             "classification": self._classification(momentum_score),
             "rsi_15m": interval_payloads["15m"]["rsi"],
             "rsi_1h": interval_payloads["1h"]["rsi"],
@@ -319,15 +367,18 @@ class MomentumService:
         }
 
     def _interval_momentum(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
-        if len(candles) < 2:
+        closed_candles = self._closed_candles(candles)
+        if len(closed_candles) < 2:
             return self._empty_interval_payload()
 
-        closes = [float(candle["close"]) for candle in candles if candle.get("close") is not None]
+        candles_with_close = [candle for candle in closed_candles if candle.get("close") is not None]
+        closes = [float(candle["close"]) for candle in candles_with_close]
         if len(closes) < 2 or closes[0] == 0:
             return self._empty_interval_payload()
 
         first_close = closes[0]
         latest_close = closes[-1]
+        latest_candle = candles_with_close[-1]
         price_change = ((latest_close - first_close) / first_close) * 100
         rsi = self._rsi(closes)
         ema = self._ema(closes, min(self.EMA_PERIOD, len(closes)))
@@ -345,7 +396,8 @@ class MomentumService:
 
         rsi_component = ((rsi - 50.0) / 2.0) if rsi is not None else 0.0
         momentum = price_change + rsi_component + ema_bonus
-        latest_ingested = candles[-1].get("ingested_at")
+        latest_ingested = latest_candle.get("ingested_at")
+        candle_time = self._candle_time(latest_candle)
 
         return {
             "momentum": round(momentum, 4),
@@ -353,11 +405,46 @@ class MomentumService:
             "rsi": round(rsi, 4) if rsi is not None else None,
             "ema_trend": ema_trend,
             "updated_at": latest_ingested if isinstance(latest_ingested, datetime) else None,
+            "candle_time": candle_time,
             "price": latest_close,
         }
 
     def _empty_interval_payload(self) -> dict[str, Any]:
-        return {"momentum": None, "change": None, "rsi": None, "ema_trend": "insufficient_data", "updated_at": None, "price": None}
+        return {
+            "momentum": None,
+            "change": None,
+            "rsi": None,
+            "ema_trend": "insufficient_data",
+            "updated_at": None,
+            "candle_time": None,
+            "price": None,
+        }
+
+    def _closed_candles(self, candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        closed: list[dict[str, Any]] = []
+        for candle in candles:
+            close_time = candle.get("close_time")
+            if close_time is None:
+                continue
+            if isinstance(close_time, datetime):
+                if close_time <= datetime.now(timezone.utc):
+                    closed.append(candle)
+                continue
+            if float(close_time) <= now_ms:
+                closed.append(candle)
+        return closed
+
+    def _candle_time(self, candle: dict[str, Any]) -> datetime | None:
+        value = candle.get("open_time") or candle.get("close_time")
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
     def _latest_price(self, interval_payloads: dict[str, dict[str, Any]]) -> float | None:
         for interval in ("15m", "1h", "4h"):
