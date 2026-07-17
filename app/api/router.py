@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin_market_data, admin_settings, assets, executor, fills, health, live_runs, market_data, momentum, momentum_backtest, momentum_engine, orders, pipeline, positions, services, trade_candidates
+from app.api.routes import admin_market_data, admin_settings, admin_tickets, assets, executor, fills, health, live_runs, market_data, momentum, momentum_backtest, momentum_engine, orders, pipeline, positions, services, trade_candidates
 
 api_router = APIRouter()
 api_router.include_router(health.router, prefix='/api/v1', tags=['health'])
@@ -9,6 +9,7 @@ api_router.include_router(pipeline.router, prefix='/api/v1', tags=['pipeline'])
 api_router.include_router(executor.router, prefix='/api/v1', tags=['executor'])
 api_router.include_router(admin_settings.router, prefix='/api/v1', tags=['admin-settings'])
 api_router.include_router(admin_market_data.router, prefix='', tags=['admin-market-data'])
+api_router.include_router(admin_tickets.router, prefix='', tags=['admin-tickets'])
 api_router.include_router(assets.router, prefix='/api/v1/assets', tags=['assets'])
 api_router.include_router(live_runs.router, prefix='/api/v1/live-runs', tags=['live-runs'])
 api_router.include_router(trade_candidates.router, prefix='/api/v1/trade-candidates', tags=['trade-candidates'])

@@ -10,12 +10,13 @@ function getOperatorKey() {
 
 async function request(path, options = {}) {
   const operatorKey = getOperatorKey()
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  const isFormData = options.body instanceof FormData
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) }
   if (operatorKey) headers['x-operator-key'] = operatorKey
 
   const res = await fetch(`${API_BASE}${path}`, {
-    headers,
     ...options,
+    headers,
   })
   if (!res.ok) {
     const text = await res.text()
@@ -76,6 +77,20 @@ export const api = {
   stockEtfConfluence: (params = '') => request(`/api/v1/stocks-etfs/confluence${params}`),
   stockEtfExportUrl: (params = '') => `${API_BASE}/api/v1/stocks-etfs/export.csv${params}`,
   clearStockEtfGeneratedData: () => request('/api/v1/stocks-etfs/cleanup', { method: 'DELETE' }),
+
+  tickets: (params = '') => request(`/admin/tickets${params}`),
+  uploadTickets: (files) => {
+    const form = new FormData()
+    Array.from(files || []).forEach((file) => form.append('files', file))
+    return request('/admin/tickets/upload', { method: 'POST', body: form })
+  },
+  updateTicket: (id, payload = {}) => request(`/admin/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  previewTicketEmail: (payload = {}) => request('/admin/tickets/preview-email', { method: 'POST', body: JSON.stringify(payload) }),
+  sendTicket: (id, payload = {}) => request(`/admin/tickets/${encodeURIComponent(id)}/send`, { method: 'POST', body: JSON.stringify(payload) }),
+  resendTicket: (id, payload = {}) => request(`/admin/tickets/${encodeURIComponent(id)}/resend`, { method: 'POST', body: JSON.stringify(payload) }),
+  ticketLogs: (id) => request(`/admin/tickets/${encodeURIComponent(id)}/logs`),
+  logTicketWhatsapp: (id) => request(`/admin/tickets/${encodeURIComponent(id)}/whatsapp-log`, { method: 'POST' }),
+  ticketDownloadUrl: (id) => `${API_BASE}/admin/tickets/${encodeURIComponent(id)}/download`,
   marketDataSettings: () => request('/admin/market-data'),
   envSettings: () => request('/admin/env'),
   testEodhd: () => request('/admin/market-data/test-eodhd', { method: 'POST' }),

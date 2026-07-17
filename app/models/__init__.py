@@ -6,6 +6,7 @@ from app.models.position import Position
 from app.models.market_candle import MarketCandle
 from app.models.order import Order
 from app.models.fill import Fill
+from app.models.ticket_sender import TicketBatch, TicketFile, TicketSendLog
 
 __all__ = [
     "AssetStateCurrent",
@@ -16,4 +17,7 @@ __all__ = [
     "MarketCandle",
     "Order",
     "Fill",
+    "TicketBatch",
+    "TicketFile",
+    "TicketSendLog",
 ]

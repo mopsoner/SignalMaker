@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
     discord_webhook_url: str = Field(default="", alias="DISCORD_WEBHOOK_URL")
 
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_username: str = Field(default="", alias="SMTP_USERNAME")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_from: str = Field(default="tickets@example.com", alias="SMTP_FROM")
+    smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+
     session_timezone_offset_hours: int = Field(default=-4, alias="SESSION_TIMEZONE_OFFSET_HOURS")
     signal_execution_interval: str = Field(default="15m", alias="SIGNAL_EXECUTION_INTERVAL")
     signal_rsi_period: int = Field(default=14, alias="SIGNAL_RSI_PERIOD")

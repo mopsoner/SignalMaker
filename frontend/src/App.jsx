@@ -11,6 +11,7 @@ import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import AssetDetailPage from './pages/AssetDetailPage'
 import MarketDataAdminPage from './pages/MarketDataAdminPage'
+import TicketsSenderPage from './pages/TicketsSenderPage'
 import { StockEtfConfluencePage, StockEtfDataQualityPage, StockEtfMomentumDashboardPage, StockEtfPositionsPage, StockEtfTradeCandidatesPage, StockEtfWyckoffDashboardPage } from './pages/StockEtfPages'
 
 const groupTitleStyle = {
@@ -62,6 +63,7 @@ export default function App() {
           <NavLink to="/ops" onClick={closeMenu}>Ops</NavLink>
           <NavLink to="/logs" onClick={closeMenu}>Logs</NavLink>
           <NavLink to="/market-data-settings" onClick={closeMenu}>ETF/Stock Settings</NavLink>
+          <NavLink to="/tickets-sender" onClick={closeMenu}>Tickets Sender</NavLink>
           <NavLink to="/settings" onClick={closeMenu}>Admin Settings</NavLink>
         </nav>
       </aside>
@@ -83,6 +85,7 @@ export default function App() {
           <Route path="/stocks-etfs/confluence" element={<StockEtfConfluencePage />} />
           <Route path="/stocks-etfs/data-quality" element={<StockEtfDataQualityPage />} />
           <Route path="/market-data-settings" element={<MarketDataAdminPage />} />
+          <Route path="/tickets-sender" element={<TicketsSenderPage />} />
           <Route path="/settings" element={<AdminSettingsPage />} />
         </Routes>
       </main>
