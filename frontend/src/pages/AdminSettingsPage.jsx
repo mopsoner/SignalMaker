@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 
 const EMPTY_SETTINGS = {
   general: { app_name: '', app_env: '', cors_origins: '', create_tables_on_boot: true },
-  strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_entry_rsi_min: 45, signal_entry_rsi_max: 65, signal_entry_rsi_timeframe: '1h', signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 4, planner_min_rr: 0.8 },
+  strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_entry_rsi_min: 45, signal_entry_rsi_max: 65, signal_entry_rsi_timeframe: '1h', signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 25, planner_min_rr: 1.75 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   live: { live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: false },

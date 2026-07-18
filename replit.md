@@ -46,7 +46,7 @@ FastAPI trading app (Binance public REST, paper trading) with React Vite dashboa
 
 1. **Collector** fetches top-N symbols from Binance + 1m candles (180 bars)
 2. **Signal Engine** applies `legacy_wyckoff_v231` strategy
-3. **Planner** filters by min_score ≥ 4.0 and min_rr ≥ 0.8
+3. **Planner** filters by min_score ≥ 25.0 and min_rr ≥ 1.75
 4. Results stored in PostgreSQL; live-runs logged with stats
 
 ## Production Deployment
