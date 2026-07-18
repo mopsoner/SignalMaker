@@ -18,7 +18,7 @@ from app.services.momentum_engine_service import MomentumEngineService
 from app.services.runtime_settings import load_runtime_settings
 
 DEFAULT_INTERVAL = 300
-DEFAULT_CADENCE_HOURS = 4
+DEFAULT_CADENCE_HOURS = 1
 DEFAULT_STARTING_CAPITAL = 1000.0
 DEFAULT_MIN_SCORE = 0.0
 

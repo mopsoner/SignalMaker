@@ -71,7 +71,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "momentum": {
         "momentum_engine_enabled": True,
         "momentum_engine_interval_sec": 300,
-        "momentum_engine_cadence_hours": 4,
+        "momentum_engine_cadence_hours": 1,
         "momentum_engine_starting_capital": 1000.0,
         "momentum_engine_min_score": 0.0,
     },

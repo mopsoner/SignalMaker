@@ -8,7 +8,7 @@ import { fmtDate, fmtNumber } from '../lib/format'
 import { tradingViewUrl } from '../lib/tradingview'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
-const DEFAULT_CADENCE_HOURS = 4
+const DEFAULT_CADENCE_HOURS = 1
 const STARTING_CAPITAL = 1000
 const MIN_MOMENTUM_SCORE = 0
 
@@ -359,7 +359,7 @@ export default function MomentumPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Momentum Ranking" subtitle="Read-only ranking + dedicated backend paper engine for 4H momentum rotation. No real exchange order is sent." />
+    <PageHeader title="Momentum Ranking" subtitle="Read-only ranking + dedicated backend paper engine for fast momentum rotation. No real exchange order is sent." />
     <div className="stats-grid">
       <StatCard label="Tracked assets" value={counts.all} hint={`${counts.complete} complete data sets`} />
       <StatCard label="Strong Bull" value={counts.strong_bull} />
@@ -394,13 +394,14 @@ export default function MomentumPage() {
           <button className="filter-chip" type="button" onClick={() => onRunEngine(false)}>Run only if due</button>
           <label className="market-toolbar-hint">Cadence{' '}
             <select value={cadenceHours} onChange={(event) => { setCadenceHours(Number(event.target.value)); setEngineOverride(null) }}>
-              <option value={4}>4h · default</option>
+              <option value={1}>1h · default</option>
+              <option value={4}>4h · macro rotation</option>
               <option value={8}>8h · calmer rotation</option>
               <option value={24}>24h · swing mode</option>
             </select>
           </label>
         </div>
-        <div className="market-toolbar-hint">Default 4h is aligned with the macro 4H momentum and avoids noisy 15m over-rotation.</div>
+        <div className="market-toolbar-hint">Default 1h runs faster, while 4h remains available for macro 4H momentum rotation.</div>
       </div>
       <FoldableTable title="Backend momentum trade log" columns={tradeColumns} rows={engine?.trades || []} empty="No backend paper trades yet" defaultSortKey="created_at" defaultSortDir="desc" paginated initialPageSize={10} />
     </details>
