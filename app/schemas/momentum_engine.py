@@ -92,6 +92,6 @@ class MomentumEngineStatus(BaseModel):
 
 class MomentumEngineRunRequest(BaseModel):
     force: bool = False
-    cadence_hours: int = Field(default=4, ge=1, le=168)
+    cadence_hours: int = Field(default=1, ge=1, le=168)
     starting_capital: float = Field(default=1000.0, gt=0)
     min_momentum_score: float = 0.0

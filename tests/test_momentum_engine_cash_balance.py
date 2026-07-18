@@ -91,7 +91,7 @@ def test_decision_endpoint_serializes_executor_fields(
         return {
             "strategy": MomentumEngineService.STRATEGY,
             "mode": "paper",
-            "cadence_hours": 4,
+            "cadence_hours": 1,
             "starting_capital": 1000.0,
             "cash": 1000.0,
             "equity": 1000.0,
@@ -894,7 +894,7 @@ def test_current_decision_reads_persisted_current_snapshot_without_recomputing(
     persisted_payload = {
         "strategy": MomentumEngineService.STRATEGY,
         "mode": "paper",
-        "cadence_hours": 4,
+        "cadence_hours": 1,
         "starting_capital": 1000.0,
         "cash": 1000.0,
         "equity": 1000.0,
@@ -950,7 +950,7 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
     assert fallback == {
         "strategy": MomentumEngineService.STRATEGY,
         "mode": "paper",
-        "cadence_hours": 4,
+        "cadence_hours": 1,
         "starting_capital": 1000.0,
         "cash": 0.0,
         "equity": 0.0,

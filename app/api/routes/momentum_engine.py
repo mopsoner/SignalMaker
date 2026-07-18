@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/status", response_model=MomentumEngineStatus)
 def momentum_engine_status(
-    cadence_hours: int = 4,
+    cadence_hours: int = 1,
     starting_capital: float = 1000.0,
     min_momentum_score: float = 0.0,
     db: Session = Depends(get_db),
@@ -28,7 +28,7 @@ def momentum_engine_status(
 
 @router.get("/decision", response_model=MomentumEngineDecision)
 def momentum_engine_decision(
-    cadence_hours: int = 4,
+    cadence_hours: int = 1,
     starting_capital: float = 1000.0,
     min_momentum_score: float = 0.0,
     db: Session = Depends(get_db),

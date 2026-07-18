@@ -34,7 +34,7 @@ class MomentumEngineService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def status(self, *, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+    def status(self, *, cadence_hours: int = 1, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         return self._build_status(
             rankings=rankings,
@@ -43,7 +43,7 @@ class MomentumEngineService:
             min_momentum_score=min_momentum_score,
         )
 
-    def decision(self, *, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+    def decision(self, *, cadence_hours: int = 1, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         status = self._build_status(
             rankings=rankings,
@@ -66,7 +66,7 @@ class MomentumEngineService:
         return {
             "strategy": self.STRATEGY,
             "mode": self.MODE,
-            "cadence_hours": 4,
+            "cadence_hours": 1,
             "starting_capital": 1000.0,
             "cash": 0.0,
             "equity": 0.0,
@@ -91,7 +91,7 @@ class MomentumEngineService:
             "source": "persisted_current_decision",
         }
 
-    def run_once(self, *, force: bool = False, cadence_hours: int = 4, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+    def run_once(self, *, force: bool = False, cadence_hours: int = 1, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
         before = self._build_status(
             rankings=rankings,
