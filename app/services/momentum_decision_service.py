@@ -75,7 +75,7 @@ class MomentumDecisionService:
         action = str(result.get("decision_action") or "HOLD").upper()
         if action not in ALLOWED_MOMENTUM_DECISION_ACTIONS:
             action = "HOLD"
-        status = result.get("status") if result.get("status") in {"ready", "idle", "waiting", "skipped", "executed", "error"} else "error"
+        status = result.get("status") if result.get("status") in {"ready", "idle", "waiting", "no_trade", "skipped", "executed", "error"} else "error"
         return self._contract(
             decision_action=action,
             symbol=result.get("symbol"),

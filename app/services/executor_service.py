@@ -318,6 +318,13 @@ class ExecutorService:
                 return position
         return None
 
+    def _open_momentum_position(self):
+        for position in self.positions.list_positions(limit=500, status='open'):
+            meta = position.meta or {}
+            if str(meta.get('candidate_id') or '').startswith('momentum-') or str(meta.get('strategy') or '').lower() == 'momentum_rotation':
+                return position
+        return None
+
     def _close_momentum_position(self, position, *, reason: str, mode: str) -> dict:
         mark_price = position.mark_price if position.mark_price is not None else position.entry_price
         if mode == 'live':
@@ -418,8 +425,18 @@ class ExecutorService:
         requested_mode = (mode or 'paper').lower()
         decision = MomentumDecisionService(self.db).decision()
         action = str(decision.get('decision_action') or 'HOLD').upper()
-        symbol = str(decision.get('symbol') or '').upper() or None
-        target_symbol = str(decision.get('target_symbol') or symbol or '').upper() or None
+        if action == 'BUY':
+            symbol = str(decision.get('buy_symbol') or decision.get('target_symbol') or decision.get('symbol') or '').upper() or None
+            target_symbol = symbol
+        elif action == 'ROTATE':
+            symbol = str(decision.get('sell_symbol') or decision.get('symbol') or '').upper() or None
+            target_symbol = str(decision.get('buy_symbol') or decision.get('target_symbol') or '').upper() or None
+        elif action == 'SELL':
+            symbol = str(decision.get('sell_symbol') or decision.get('symbol') or '').upper() or None
+            target_symbol = str(decision.get('target_symbol') or '').upper() or None
+        else:
+            symbol = str(decision.get('symbol') or '').upper() or None
+            target_symbol = str(decision.get('target_symbol') or '').upper() or None
         decision = {**decision, 'decision_action': action, 'symbol': symbol, 'target_symbol': target_symbol}
         base = self._momentum_response_base(decision, action=action)
 
@@ -427,15 +444,26 @@ class ExecutorService:
         # position before deciding whether readiness should gate execution.
         open_position = self._open_position_for_symbol(symbol, target_symbol)
         target_position = self._open_position_for_symbol(target_symbol)
+        held_momentum_position = self._open_momentum_position()
 
         if action not in SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS:
             return {**base, 'status': 'skipped', 'reason': f'unsupported_momentum_decision_action:{action}'}
-        if action in {'WAIT', 'HOLD'}:
+        if action in {'WAIT', 'HOLD', 'NO_ENTRY'}:
             if target_position is not None:
-                return {**base, 'symbol': target_position.symbol, 'target_symbol': target_position.symbol, 'status': 'skipped', 'reason': 'already_held', 'position_id': target_position.position_id}
+                return {**base, 'symbol': target_position.symbol, 'target_symbol': target_position.symbol, 'status': 'no_trade', 'reason': 'already_held', 'position_id': target_position.position_id}
             if target_symbol is None:
                 return {**base, 'status': 'skipped', 'reason': 'missing_target_symbol'}
-            return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_noop'}
+            try:
+                if self._candidate_for_momentum_decision(decision, symbol=target_symbol) is None:
+                    return {**base, 'status': 'skipped', 'reason': 'missing_open_momentum_candidate'}
+                if held_momentum_position is not None:
+                    close_result = self._close_momentum_position(held_momentum_position, reason='momentum_reconcile_exit', mode=requested_mode)
+                    buy_result = self._execute_momentum_buy(decision, symbol=target_symbol, quantity=quantity, requested_mode=requested_mode)
+                    status = 'executed' if buy_result.get('status') == 'executed' else 'skipped'
+                    return {**base, 'status': status, 'reason': 'momentum_reconciled' if status == 'executed' else f"position_closed_entry_{buy_result.get('status', 'unknown')}", 'order_ids': [close_result['order_id'], *(buy_result.get('order_ids') or [])], 'fill_ids': [close_result['fill_id'], *(buy_result.get('fill_ids') or [])], 'exit_result': close_result, 'entry_result': buy_result}
+                return self._execute_momentum_buy(decision, symbol=target_symbol, quantity=quantity, requested_mode=requested_mode)
+            except Exception as exc:
+                return {**base, 'status': 'error', 'reason': str(exc)}
 
         if target_symbol is None and action in {'BUY', 'ROTATE'}:
             return {**base, 'status': 'skipped', 'reason': 'missing_target_symbol'}

@@ -133,6 +133,80 @@ def test_public_momentum_run_once_returns_decision_and_execution_result(client):
     assert payload["decision"]["fill_ids"]
 
 
+def test_latest_momentum_endpoint_returns_worker_event_without_running_executor(client, monkeypatch):
+    test_client, _ = client
+    expected = {
+        "decision_action": "HOLD",
+        "action": "HOLD",
+        "symbol": "KAITOUSD",
+        "target_symbol": "KAITOUSD",
+        "should_trade": False,
+        "status": "no_trade",
+        "reason": "momentum_below_threshold",
+        "execution_result": "no_trade:momentum_below_threshold",
+    }
+
+    class FakeStateStore:
+        def events(self, limit=1000):
+            assert limit == 1000
+            return [{"event_type": "momentum_decision", "timestamp": "2026-07-20T00:00:00Z", "payload": expected}]
+
+    monkeypatch.setattr("raspberry_executor.state.StateStore", FakeStateStore)
+    response = test_client.get("/api/v1/executor/momentum/latest")
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == expected
+
+
+def test_hold_no_trade_field_does_not_prevent_acquiring_target(client, monkeypatch):
+    _, session_factory = client
+    seed_named_momentum_candidate(session_factory, symbol="KAITOUSD")
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "HOLD",
+            "symbol": "KAITOUSD",
+            "target_symbol": "KAITOUSD",
+            "should_trade": False,
+            "status": "no_trade",
+            "reason": "momentum_below_threshold",
+        },
+    )
+
+    assert result["symbol"] == "KAITOUSD"
+    assert result["target_symbol"] == "KAITOUSD"
+    assert result["status"] == "executed"
+
+
+def test_hold_no_trade_field_rotates_from_previous_momentum_asset(client, monkeypatch):
+    _, session_factory = client
+    previous_position_id = seed_open_position(session_factory, symbol="BTCUSD")
+    seed_named_momentum_candidate(session_factory, symbol="KAITOUSD")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "HOLD",
+            "symbol": "KAITOUSD",
+            "target_symbol": "KAITOUSD",
+            "should_trade": False,
+            "status": "no_trade",
+            "reason": "keep_best_asset",
+        },
+    )
+
+    assert result["status"] == "executed"
+    assert result["reason"] == "momentum_reconciled"
+    db = session_factory()
+    try:
+        assert db.get(Position, previous_position_id).status == "closed"
+        assert any(position.symbol == "KAITOUSD" and position.status == "open" for position in db.query(Position).all())
+    finally:
+        db.close()
+
+
 def test_momentum_decision_returns_idle_contract_without_candidate(client):
     test_client, _ = client
 
@@ -271,9 +345,10 @@ def test_momentum_executor_rotate_closes_source_before_buying_target(client, mon
         db.close()
 
 
-@pytest.mark.parametrize("action", ["WAIT", "HOLD"])
-def test_momentum_executor_wait_and_hold_are_explicit_noops(client, monkeypatch, action):
+@pytest.mark.parametrize("action", ["WAIT", "HOLD", "NO_ENTRY"])
+def test_momentum_executor_passive_action_acquires_missing_target(client, monkeypatch, action):
     _, session_factory = client
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
 
     result = execute_with_stubbed_decision(
         session_factory,
@@ -291,12 +366,11 @@ def test_momentum_executor_wait_and_hold_are_explicit_noops(client, monkeypatch,
 
     assert_decision_contract(result)
     assert result["decision_action"] == action
-    assert result["symbol"] == "ALLUSDC"
+    assert result["symbol"] == "BTCUSDC"
     assert result["target_symbol"] == "BTCUSDC"
-    assert result["status"] == "skipped"
-    assert result["reason"] == f"test_{action.lower()}"
-    assert result["order_ids"] == []
-    assert result["fill_ids"] == []
+    assert result["status"] == "executed"
+    assert result["order_ids"]
+    assert result["fill_ids"]
 
 
 def test_momentum_decision_schema_defines_expected_actions_and_statuses():
@@ -306,8 +380,8 @@ def test_momentum_decision_schema_defines_expected_actions_and_statuses():
         MomentumDecision,
     )
 
-    assert ALLOWED_MOMENTUM_DECISION_ACTIONS == {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
-    assert EXPECTED_MOMENTUM_DECISION_STATUSES == {"ready", "idle", "waiting", "skipped", "executed", "error"}
+    assert ALLOWED_MOMENTUM_DECISION_ACTIONS == {"BUY", "SELL", "ROTATE", "WAIT", "HOLD", "NO_ENTRY"}
+    assert EXPECTED_MOMENTUM_DECISION_STATUSES == {"ready", "idle", "waiting", "no_trade", "skipped", "executed", "error"}
 
     for action in ALLOWED_MOMENTUM_DECISION_ACTIONS:
         payload = MomentumDecision(
@@ -340,7 +414,7 @@ def test_momentum_executor_rejects_unsupported_action_before_execution(client, m
 
     assert_decision_contract(result)
     assert result["decision_action"] == "CANCEL"
-    assert result["status"] == "skipped"
+    assert result["status"] == "no_trade"
     assert result["reason"] == "unsupported_momentum_decision_action:CANCEL"
     assert result["order_ids"] == []
     assert result["fill_ids"] == []
