@@ -82,8 +82,16 @@ if ! command -v pg_lsclusters >/dev/null 2>&1; then
 fi
 
 echo "Enabling and starting PostgreSQL..."
-sudo systemctl enable postgresql
-sudo systemctl start postgresql
+sudo systemctl enable --now postgresql
+if ! sudo systemctl is-active --quiet postgresql; then
+  echo "PostgreSQL systemd service did not become active; database initialization cannot continue." >&2
+  sudo systemctl status postgresql --no-pager >&2 || true
+  exit 1
+fi
+if ! pg_isready -h localhost -p 5432; then
+  echo "PostgreSQL is active but is not accepting connections on localhost:5432; database initialization cannot continue." >&2
+  exit 1
+fi
 
 echo "Configuring PostgreSQL role and database..."
 sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -178,28 +186,27 @@ python -m scripts.init_db
 echo "Initializing Raspberry executor SQLite database..."
 python -m raspberry_executor.install_sqlite
 
-install_run_sh_startup() {
-  if ! command -v crontab >/dev/null 2>&1; then
-    echo "crontab not found; skipping run.sh startup registration" >&2
-    return 0
+install_run_sh_service() {
+  echo "Installing raspberry-executor.service as the official startup mechanism..."
+
+  # Remove legacy @reboot entries so cron and systemd can never launch in parallel.
+  local tmp_cron
+  if command -v crontab >/dev/null 2>&1; then
+    tmp_cron="$(mktemp)"
+    crontab -l 2>/dev/null \
+      | grep -vF "cd $APP_DIR && /bin/bash run.sh" \
+      | grep -vF "cd $APP_DIR && bash run.sh" \
+      > "$tmp_cron" || true
+    crontab "$tmp_cron"
+    rm -f "$tmp_cron"
   fi
 
-  echo "Registering run.sh to start SignalMaker at Raspberry boot..."
-  local startup_line
-  startup_line="@reboot cd $APP_DIR && /bin/bash run.sh >> $APP_DIR/logs/startup.log 2>&1"
-  local tmp_cron
-  tmp_cron="$(mktemp)"
-
-  crontab -l 2>/dev/null \
-    | grep -vF "cd $APP_DIR && /bin/bash run.sh" \
-    | grep -vF "cd $APP_DIR && bash run.sh" \
-    > "$tmp_cron" || true
-  printf '%s\n' "$startup_line" >> "$tmp_cron"
-  crontab "$tmp_cron"
-  rm -f "$tmp_cron"
+  sudo install -m 0644 "$APP_DIR/systemd/raspberry-executor.service" /etc/systemd/system/raspberry-executor.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now raspberry-executor.service
 }
 
-install_run_sh_startup
+install_run_sh_service
 
 echo "Running final Raspberry install checks..."
 pg_isready -h localhost -p 5432
@@ -209,8 +216,8 @@ echo "After future frontend updates, rebuild and restart the single run.sh launc
 echo "  bash scripts/build_frontend.sh"
 echo "  pkill -f 'run.sh' || true"
 echo "  bash run.sh"
-echo "Startup is registered in the current user crontab with: @reboot cd ${APP_DIR} && /bin/bash run.sh"
-echo "Startup logs: ${APP_DIR}/logs/startup.log"
+echo "Startup is managed by systemd: raspberry-executor.service"
+echo "Startup logs: sudo journalctl -u raspberry-executor.service"
 echo "Raspberry executor local SQLite database initialized at: ${APP_DIR}/raspberry_executor.db"
 
 echo "SignalMaker Raspberry install complete"
