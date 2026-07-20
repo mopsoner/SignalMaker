@@ -67,6 +67,79 @@ python_cmd() {
   fi
 }
 
+load_database_url() {
+  if [ -n "${DATABASE_URL+x}" ] || [ ! -f ".env" ]; then
+    return 0
+  fi
+
+  local configured_url
+  configured_url="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?DATABASE_URL[[:space:]]*=[[:space:]]*(.*)$/\2/p' .env | head -n 1)"
+  configured_url="${configured_url%$'\r'}"
+  if [[ "$configured_url" == \"*\" && "$configured_url" == *\" ]] || \
+     [[ "$configured_url" == \'*\' && "$configured_url" == *\' ]]; then
+    configured_url="${configured_url:1:${#configured_url}-2}"
+  fi
+  if [ -n "$configured_url" ]; then
+    export DATABASE_URL="$configured_url"
+  fi
+}
+
+wait_for_database() {
+  load_database_url
+
+  case "${DATABASE_URL:-}" in
+    postgres://*|postgresql://*|postgresql+*://*) ;;
+    *) return 0 ;;
+  esac
+
+  if ! command -v pg_isready >/dev/null 2>&1; then
+    echo "DATABASE_URL uses PostgreSQL, but pg_isready is not installed or not in PATH." >&2
+    return 1
+  fi
+
+  local timeout_seconds="${POSTGRES_STARTUP_TIMEOUT:-60}"
+  local check_interval_seconds="${POSTGRES_STARTUP_CHECK_INTERVAL:-2}"
+  if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || ! [[ "$check_interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "POSTGRES_STARTUP_TIMEOUT and POSTGRES_STARTUP_CHECK_INTERVAL must be positive integers." >&2
+    return 1
+  fi
+  local host_port
+  host_port="$("$(python_cmd)" - <<'PY'
+import os
+from urllib.parse import urlsplit
+
+url = os.environ["DATABASE_URL"]
+# libpq does not understand SQLAlchemy's postgresql+driver scheme.
+url = "postgresql" + url[url.find(":"):] if url.startswith("postgresql+") else url
+parsed = urlsplit(url)
+print(parsed.hostname or "localhost", parsed.port or 5432)
+PY
+)"
+  local database_host="${host_port% *}"
+  local database_port="${host_port##* }"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  echo "Waiting up to ${timeout_seconds}s for PostgreSQL at ${database_host}:${database_port}..."
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if pg_isready -h "$database_host" -p "$database_port" >/dev/null 2>&1; then
+      echo "PostgreSQL is ready at ${database_host}:${database_port}."
+      return 0
+    fi
+    local remaining=$((deadline - SECONDS))
+    if [ "$remaining" -le 0 ]; then
+      break
+    fi
+    if [ "$remaining" -lt "$check_interval_seconds" ]; then
+      sleep "$remaining"
+    else
+      sleep "$check_interval_seconds"
+    fi
+  done
+
+  echo "PostgreSQL configured by DATABASE_URL is still unavailable at ${database_host}:${database_port} after ${timeout_seconds}s; SignalMaker will not start." >&2
+  return 1
+}
+
 start_api_and_device() {
   local pids=()
   local started_api=false
@@ -79,6 +152,7 @@ start_api_and_device() {
 
   trap cleanup EXIT INT TERM
 
+  wait_for_database
   bash scripts/start_api.sh "$@" &
   pids+=("$!")
   started_api=true
