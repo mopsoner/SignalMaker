@@ -3,15 +3,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-MomentumDecisionAction = Literal["BUY", "SELL", "ROTATE", "WAIT", "HOLD"]
-MomentumDecisionStatus = Literal["ready", "idle", "waiting", "skipped", "executed", "error"]
+MomentumDecisionAction = Literal["BUY", "SELL", "ROTATE", "WAIT", "HOLD", "NO_ENTRY"]
+MomentumDecisionStatus = Literal["ready", "idle", "waiting", "no_trade", "skipped", "executed", "error"]
 
-ALLOWED_MOMENTUM_DECISION_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
-SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD"}
+ALLOWED_MOMENTUM_DECISION_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD", "NO_ENTRY"}
+SUPPORTED_MOMENTUM_EXECUTOR_ACTIONS: set[str] = {"BUY", "SELL", "ROTATE", "WAIT", "HOLD", "NO_ENTRY"}
 EXPECTED_MOMENTUM_DECISION_STATUSES: set[str] = {
     "ready",
     "idle",
     "waiting",
+    "no_trade",
     "skipped",
     "executed",
     "error",

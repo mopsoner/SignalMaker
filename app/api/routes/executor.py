@@ -36,6 +36,22 @@ def execute_momentum_once(
     return MomentumDecisionService(db).run_once(quantity=quantity, mode=mode)
 
 
+@router.get("/executor/momentum/latest")
+def latest_momentum_decision() -> dict:
+    """Return the last decision recorded by the Raspberry momentum worker.
+
+    Unlike ``run-once``, this read-only endpoint never builds or executes a new
+    decision merely because a dashboard was refreshed.
+    """
+    from raspberry_executor.state import StateStore
+
+    for event in reversed(StateStore().events(limit=1000)):
+        if event.get("event_type") == "momentum_decision":
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            return {"decision": payload, "timestamp": event.get("timestamp")}
+    return {"decision": None}
+
+
 @router.post('/executor/reconcile')
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
     from app.services.executor_service import ExecutorService
