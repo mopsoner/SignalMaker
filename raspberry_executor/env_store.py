@@ -26,7 +26,7 @@ DEFAULTS = {
     "MARGIN_MODE_ENABLED": "true",
     "MARGIN_ACCOUNT_MODE": "cross",
     "MARGIN_ISOLATED": "false",
-    "MARGIN_MAX_MULTIPLIER": "5",
+    "MARGIN_MAX_MULTIPLIER": "10",
     "MARGIN_TRANSFER_SPOT_BALANCE": "true",
     "SHORTS_ENABLED": "false",
     "KRAKEN_BASE_URL": "https://api.kraken.com",

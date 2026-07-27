@@ -42,7 +42,7 @@ class KrakenMarginClient:
 
     @staticmethod
     def _format_leverage(leverage: float | str) -> str:
-        value = max(2.0, min(5.0, float(leverage)))
+        value = max(2.0, min(10.0, float(leverage)))
         if value.is_integer():
             return str(int(value))
         return f"{value:.2f}".rstrip("0").rstrip(".")
