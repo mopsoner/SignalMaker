@@ -8,7 +8,7 @@ DEFAULT_MARGIN_SETTINGS = {
     "MARGIN_MODE_ENABLED": "false",
     "MARGIN_ACCOUNT_MODE": "cross",
     "MARGIN_ISOLATED": "false",
-    "MARGIN_MAX_MULTIPLIER": "5",
+    "MARGIN_MAX_MULTIPLIER": "10",
     "MARGIN_TRANSFER_SPOT_BALANCE": "true",
     "SHORTS_ENABLED": "false",
 }
@@ -129,9 +129,9 @@ def margin_isolated() -> bool:
 
 def margin_multiplier() -> float:
     try:
-        return max(1.0, float(read_margin_settings().get("MARGIN_MAX_MULTIPLIER", "5") or "5"))
+        return max(1.0, min(10.0, float(read_margin_settings().get("MARGIN_MAX_MULTIPLIER", "10") or "10")))
     except Exception:
-        return 5.0
+        return 10.0
 
 
 def margin_leverage_attempts() -> tuple[int, ...]:
@@ -141,7 +141,7 @@ def margin_leverage_attempts() -> tuple[int, ...]:
     levels in order. Spot fallback is handled by each workflow after all
     returned leverage attempts fail.
     """
-    return (5,4, 3,2)
+    return tuple(range(10, 1, -1))
 
 
 def margin_transfer_spot_balance() -> bool:

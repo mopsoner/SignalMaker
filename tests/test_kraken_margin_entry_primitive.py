@@ -91,14 +91,14 @@ def test_kraken_margin_order_add_order_payload_contains_leverage():
 
 def test_kraken_margin_order_accepts_per_call_leverage_override():
     kraken = FakeKraken()
-    margin = KrakenMarginClient(kraken, dry_run=False, leverage=5)
+    margin = KrakenMarginClient(kraken, dry_run=False, leverage=10)
 
     observed = []
-    for attempt in (5, 4, 3, 2):
+    for attempt in range(10, 1, -1):
         order = margin.margin_order("BTCUSDC", "BUY", "0.1", "MARKET", leverage=attempt)
         observed.append((order["leverage"], kraken.signed_calls[-1]["params"]["leverage"]))
 
-    assert observed == [("5", "5"), ("4", "4"), ("3", "3"), ("2", "2")]
+    assert observed == [(str(attempt), str(attempt)) for attempt in range(10, 1, -1)]
 
 
 def test_kraken_take_profit_sell_does_not_receive_entry_attempt_override():

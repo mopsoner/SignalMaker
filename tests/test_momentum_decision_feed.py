@@ -728,7 +728,7 @@ def test_execute_decision_waits_for_cadence_after_quote_balance_skip(tmp_path, m
     ]
 
 
-def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_enabled(tmp_path, monkeypatch):
+def test_momentum_buy_attempts_margin_10_through_2_before_spot_fallback_when_margin_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "true")
     monkeypatch.setenv("MOMENTUM_DECISION_QUOTE_RESERVE", "0")
@@ -767,7 +767,7 @@ def test_momentum_buy_attempts_margin_5_then_3_before_spot_fallback_when_margin_
 
     result = buy_symbol(cfg, kraken, FakeRules(), state, "ALLUSDC", {"action": "BUY"})
 
-    assert attempts == [5, 4, 3, 2]
+    assert attempts == list(range(10, 1, -1))
     assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
     assert kraken.orders[0]["executedQty"] == "10.00000000"
     assert [event["event_type"] for event in state.events()] == [
