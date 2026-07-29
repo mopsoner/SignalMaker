@@ -4,7 +4,6 @@ set -euo pipefail
 EXECUTOR_SERVICE="raspberry-executor.service"
 LEGACY_BOT_SERVICE="signalmaker-bot.service"
 TUI_SERVICE="signalmaker-tui.service"
-TTY_NAME="${TTY_NAME:-tty1}"
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd not found; nothing to uninstall"
@@ -13,7 +12,7 @@ fi
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Uninstalling services with sudo..."
-  exec sudo TTY_NAME="$TTY_NAME" bash "$0"
+  exec sudo bash "$0"
 fi
 
 for service in "$TUI_SERVICE" "$EXECUTOR_SERVICE" "$LEGACY_BOT_SERVICE"; do
@@ -22,13 +21,8 @@ for service in "$TUI_SERVICE" "$EXECUTOR_SERVICE" "$LEGACY_BOT_SERVICE"; do
   rm -f "/etc/systemd/system/$service"
 done
 
-# Restore the normal login prompt on tty1.
-systemctl enable "getty@${TTY_NAME}.service" >/dev/null 2>&1 || true
-systemctl start "getty@${TTY_NAME}.service" >/dev/null 2>&1 || true
-
 systemctl daemon-reload
 systemctl reset-failed >/dev/null 2>&1 || true
 
 echo "Removed: $EXECUTOR_SERVICE, $TUI_SERVICE (and legacy $LEGACY_BOT_SERVICE if present)"
-echo "Restored: getty@${TTY_NAME}.service"
 echo "Project files, .env and SQLite database were not deleted."
