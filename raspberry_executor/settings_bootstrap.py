@@ -1,4 +1,4 @@
-from raspberry_executor.env_store import read_env, write_env
+from raspberry_executor.env_store import SECRET_KEYS, is_explicit_secret, read_env, write_env
 from raspberry_executor.settings_store import read_settings, write_settings
 from raspberry_executor.sqlite_db import connect, init_db, now_iso
 
@@ -46,7 +46,14 @@ def bootstrap_settings() -> dict:
     env_values = read_env()
     stored_values = read_settings()
     if stored_values:
-        merged = {**env_values, **stored_values}
+        # Legacy/admin stores may contain omitted, blank, or display-masked
+        # credentials. Such values must never overwrite the local .env secrets.
+        safe_stored_values = {
+            key: value
+            for key, value in stored_values.items()
+            if key not in SECRET_KEYS or is_explicit_secret(value)
+        }
+        merged = {**env_values, **safe_stored_values}
         merged, dry_run_migrated = _apply_dry_run_default_false_once(merged)
         write_settings(merged)
         write_env(merged)
