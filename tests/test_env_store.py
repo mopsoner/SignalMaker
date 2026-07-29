@@ -15,6 +15,47 @@ def test_default_order_quote_amount_is_20(tmp_path, monkeypatch):
     assert env_store.read_env()["ORDER_QUOTE_AMOUNT"] == "20"
 
 
+def test_write_env_partial_updates_preserve_existing_credentials(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(env_store, "ENV_PATH", env_path)
+    monkeypatch.setattr(env_store, "EXAMPLE_PATH", tmp_path / ".env.example")
+    env_path.write_text("KRAKEN_API_KEY=original-key\nKRAKEN_SECRET_KEY=original-secret\nPOLL_SECONDS=30\n")
+
+    env_store.write_env({"POLL_SECONDS": "45"})
+
+    values = env_store.read_env()
+    assert values["KRAKEN_API_KEY"] == "original-key"
+    assert values["KRAKEN_SECRET_KEY"] == "original-secret"
+    assert values["POLL_SECONDS"] == "45"
+
+
+def test_write_env_ignores_blank_and_masked_credentials(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(env_store, "ENV_PATH", env_path)
+    monkeypatch.setattr(env_store, "EXAMPLE_PATH", tmp_path / ".env.example")
+    env_path.write_text("KRAKEN_API_KEY=original-key\nKRAKEN_SECRET_KEY=original-secret\n")
+
+    for api_key, secret_key in ((None, ""), ("   ", "********"), ("••••••••", "  ••••  ")):
+        env_store.write_env({"KRAKEN_API_KEY": api_key, "KRAKEN_SECRET_KEY": secret_key})
+
+    values = env_store.read_env()
+    assert values["KRAKEN_API_KEY"] == "original-key"
+    assert values["KRAKEN_SECRET_KEY"] == "original-secret"
+
+
+def test_write_env_replaces_credentials_when_explicit_values_are_supplied(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(env_store, "ENV_PATH", env_path)
+    monkeypatch.setattr(env_store, "EXAMPLE_PATH", tmp_path / ".env.example")
+    env_path.write_text("KRAKEN_API_KEY=original-key\nKRAKEN_SECRET_KEY=original-secret\n")
+
+    env_store.write_env({"KRAKEN_API_KEY": "replacement-key", "KRAKEN_SECRET_KEY": "replacement-secret"})
+
+    values = env_store.read_env()
+    assert values["KRAKEN_API_KEY"] == "replacement-key"
+    assert values["KRAKEN_SECRET_KEY"] == "replacement-secret"
+
+
 def test_config_fallback_order_quote_amount_is_50(monkeypatch):
     monkeypatch.setattr(config, "read_env", lambda: {})
     monkeypatch.setattr(config, "_runtime_overrides", lambda: {})

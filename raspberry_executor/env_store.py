@@ -69,6 +69,7 @@ LEGACY_KEYS = {
 }
 
 SECRET_KEYS = {KRAKEN_API_ENV_KEY, KRAKEN_SECRET_ENV_KEY}
+MASK_CHARACTERS = {"*", "•"}
 
 
 def _normalize_quotes(value: str | None) -> str:
@@ -84,6 +85,14 @@ def _parse_env_text(text: str) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+def is_explicit_secret(value: object) -> bool:
+    """Return whether a value is suitable for replacing a stored credential."""
+    if value is None:
+        return False
+    normalized = str(value).strip()
+    return bool(normalized) and not set(normalized) <= MASK_CHARACTERS
 
 
 def ensure_env() -> None:
@@ -141,7 +150,15 @@ def migrate_env_to_minimal() -> bool:
 
 def write_env(values: dict[str, str]) -> None:
     merged = DEFAULTS.copy()
-    merged.update({key: str(value) for key, value in values.items() if key in DEFAULTS})
+    existing = _parse_env_text(ENV_PATH.read_text()) if ENV_PATH.exists() else {}
+    merged.update({key: value for key, value in existing.items() if key in DEFAULTS})
+    merged.update(
+        {
+            key: str(value)
+            for key, value in values.items()
+            if key in DEFAULTS and (key not in SECRET_KEYS or is_explicit_secret(value))
+        }
+    )
     merged["QUOTE_ASSETS"] = _normalize_quotes(merged.get("QUOTE_ASSETS")) or DEFAULTS["QUOTE_ASSETS"]
     lines = [
         f"SIGNALMAKER_BASE_URL={merged['SIGNALMAKER_BASE_URL']}",
