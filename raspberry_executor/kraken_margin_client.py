@@ -118,5 +118,8 @@ class KrakenMarginClient:
     def open_margin_orders(self, symbol: str) -> list[dict]:
         return self.kraken.open_orders(symbol)
 
+    def cancel_margin_order(self, symbol: str, order_id: str | int) -> dict:
+        return self.kraken.cancel_order(symbol, order_id)
+
     def margin_oco_sell(self, symbol: str, quantity: str, target_price: str, stop_price: str, stop_limit_price: str) -> dict:
         raise RuntimeError("kraken_margin_oco_not_supported: use take_profit_only")

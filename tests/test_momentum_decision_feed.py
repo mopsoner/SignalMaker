@@ -331,6 +331,80 @@ def test_sell_symbol_uses_margin_for_margin_position(tmp_path, monkeypatch):
     assert sold_event["payload"]["mode"] == "margin"
 
 
+def test_spot_sell_cancels_tp_reserving_entire_balance(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", settings)
+    monkeypatch.setattr(momentum_module.time, "sleep", lambda _: None)
+
+    class ReservedKraken(FakeKraken):
+        def __init__(self):
+            super().__init__(base_balance=0.0)
+            self.tp_open = True
+            self.canceled = []
+
+        def open_orders(self, symbol):
+            return [{"orderId": "tp-1", "side": "SELL", "type": "LIMIT", "quantity": "10"}] if self.tp_open else []
+
+        def cancel_order(self, symbol, order_id):
+            self.canceled.append(order_id)
+            self.tp_open = False
+            self.base_balance = 10.0
+            return {"orderId": order_id, "status": "CANCELED"}
+
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"execution_symbol": "BANKUSDC", "strategy": "momentum_rotation", "mode": "spot", "quantity": "10", "tp_order_id": "tp-1", "tp_payload": {"orderId": "tp-1"}, "tp_exchange_confirmed": True, "needs_tp_confirmation": True, "needs_tp_replay": True})
+    kraken = ReservedKraken()
+
+    result = sell_symbol(kraken, FakeRules(), state, "BANKUSDC", {"action": "SELL"})
+
+    assert result.startswith("sell_confirmed:BANKUSDC")
+    assert kraken.canceled == ["tp-1"]
+    canceled = next(event for event in state.events() if event["event_type"] == "momentum_exit_order_canceled")
+    assert canceled["payload"] == {"tp_order_id": None, "tp_payload": {}, "tp_exchange_confirmed": False, "needs_tp_confirmation": False, "needs_tp_replay": False}
+
+
+def test_margin_sell_cancels_tp_reserving_entire_balance(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setattr(momentum_module, "load_settings", settings)
+    monkeypatch.setattr(momentum_module, "margin_dry_run", lambda: False)
+    monkeypatch.setattr(momentum_module.time, "sleep", lambda _: None)
+
+    class ReservedMargin:
+        dry_run = False
+
+        def __init__(self, kraken, **kwargs):
+            self.base = 0.0
+            self.quote = 0.0
+            self.tp_open = True
+            self.orders = []
+
+        def ensure_margin_account(self, symbol): return {}
+        def margin_free_balance(self, symbol, asset): return self.quote if asset == "USDC" else self.base
+        def open_margin_orders(self, symbol): return [{"orderId": "mtp-1", "side": "SELL", "type": "LIMIT", "quantity": "10"}] if self.tp_open else []
+        def cancel_margin_order(self, symbol, order_id):
+            self.tp_open = False
+            self.base = 10.0
+            return {"orderId": order_id, "status": "CANCELED"}
+        def margin_order(self, symbol, side, quantity, order_type):
+            self.orders.append((side, quantity, order_type))
+            self.base = 0.0
+            self.quote = 25.0
+            return {"orderId": "sell-1", "status": "FILLED"}
+
+    instances = []
+    monkeypatch.setattr(momentum_module, "MarginClient", lambda *a, **kw: instances.append(ReservedMargin(*a, **kw)) or instances[-1])
+    state = StateStore()
+    state.add_open_position("momentum-BANKUSDC", {"execution_symbol": "BANKUSDC", "strategy": "momentum_rotation", "mode": "margin", "quantity": "10", "tp_order_id": "mtp-1", "tp_payload": {"orderId": "mtp-1"}, "tp_exchange_confirmed": True, "needs_tp_confirmation": True, "needs_tp_replay": True})
+
+    result = sell_symbol(FakeKraken(), FakeRules(), state, "BANKUSDC", {"action": "SELL"})
+
+    assert result.startswith("sell_confirmed_margin:BANKUSDC")
+    assert instances[0].orders[0][0] == "SELL"
+    canceled = next(event for event in state.events() if event["event_type"] == "momentum_exit_order_canceled")
+    assert canceled["payload"]["tp_order_id"] is None
+    assert canceled["payload"]["needs_tp_replay"] is False
+
+
 def test_rotate_sells_margin_position_before_restarting_buy_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))

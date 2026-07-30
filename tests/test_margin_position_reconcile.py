@@ -79,6 +79,21 @@ def test_already_local_by_entry_order_id_no_duplicate(monkeypatch):
     assert state.updated
 
 
+def test_local_momentum_position_only_reconciles_kraken_state(monkeypatch):
+    local = {"entry_order_id": "ENTRY1", "execution_symbol": "BTCUSD", "mode": "margin", "side": "long", "quantity": "1", "strategy": "momentum_rotation"}
+    state = FakeState({"local": local})
+    order = {"orderId": "TP1", "side": "SELL", "type": "LIMIT", "quantity": "1", "price": "60000"}
+    patch_common(monkeypatch, state, FakeMargin({"K": remote_pos()}, [order]))
+
+    r.reconcile_kraken_margin_positions()
+
+    _, updates, event_type = state.updated[-1]
+    assert event_type is None
+    assert "tp_order_id" not in updates
+    assert "needs_tp_replay" not in updates
+    assert updates["kraken_open_position_payload"]["ordertxid"] == "ENTRY1"
+
+
 def test_existing_sell_limit_tp_attached(monkeypatch):
     order = {"orderId": "TP1", "side": "SELL", "type": "LIMIT", "quantity": "1", "price": "60000"}
     state = FakeState()
