@@ -1,5 +1,7 @@
 import os
 import time
+import fcntl
+from pathlib import Path
 from datetime import datetime, timezone
 
 from raspberry_executor.exchange_factory import create_margin_exchange
@@ -15,6 +17,37 @@ from raspberry_executor.state import StateStore
 logger = setup_logging("raspberry-position-sync")
 
 TP_REPLAY_SKIP_EVENT_COOLDOWN_SECONDS = 300
+
+
+def position_sync_min_interval_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("POSITION_SYNC_MIN_INTERVAL_SECONDS", "15") or "15"))
+    except Exception:
+        return 15.0
+
+
+def _position_sync_runtime_path(suffix: str) -> Path:
+    # Keep coordination next to the SQLite state so tests and installations with
+    # a custom database do not share an unrelated global lock.
+    from raspberry_executor import sqlite_db
+
+    db_path = Path(sqlite_db.DB_PATH)
+    return db_path.parent / f".{db_path.name}.position-sync.{suffix}"
+
+
+def _last_sync_completed_at() -> float:
+    try:
+        return float(_position_sync_runtime_path("completed").read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _record_sync_completed_at(timestamp: float) -> None:
+    path = _position_sync_runtime_path("completed")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    temporary.write_text(str(timestamp))
+    os.replace(temporary, path)
 
 
 def tp_confirmation_max_age_seconds() -> float:
@@ -709,20 +742,12 @@ def _handle_filled_take_profit(candidate_id: str, position: dict, tp: dict, stat
     return "partial"
 
 
-def sync_open_positions():
+def _sync_open_positions():
     settings = load_settings()
     kraken, default_margin, rules = create_margin_exchange(settings, dry_run=margin_dry_run())
     spot_manager = SpotOrderManager(kraken, rules)
     state = StateStore()
     checked = closed = missing_tp = replayed_tp = attached_existing = replay_skipped = replay_blocked = ghost_removed = momentum_tracked = partial_filled = 0
-
-    if os.getenv("KRAKEN_MARGIN_RECONCILE_BEFORE_SYNC", "true").lower() in {"1", "true", "yes", "on"}:
-        try:
-            from raspberry_executor.margin_position_reconcile import reconcile_kraken_margin_positions
-
-            reconcile_kraken_margin_positions()
-        except Exception as exc:
-            logger.warning("kraken margin reconcile before sync failed error=%s", str(exc))
 
     local_positions = state.open_positions()
     assigned_tp_order_ids = _assigned_tp_order_ids(state)
@@ -879,6 +904,34 @@ def sync_open_positions():
     if any(summary.values()):
         logger.info("position sync summary=%s", summary)
     return summary
+
+
+def sync_open_positions(*, force: bool = False):
+    """Run at most one cross-process position sync within the configured cadence."""
+    lock_path = _position_sync_runtime_path("lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("position sync skipped reason=sync_already_running")
+            return {"status": "skipped", "reason": "sync_already_running"}
+
+        try:
+            now = time.time()
+            minimum = position_sync_min_interval_seconds()
+            elapsed = now - _last_sync_completed_at()
+            if not force and minimum > 0 and elapsed < minimum:
+                return {
+                    "status": "skipped",
+                    "reason": "sync_min_interval",
+                    "retry_after_seconds": max(0.0, minimum - elapsed),
+                }
+            result = _sync_open_positions()
+            _record_sync_completed_at(time.time())
+            return result
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 if __name__ == "__main__":
     print(sync_open_positions())

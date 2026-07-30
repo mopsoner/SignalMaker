@@ -98,7 +98,7 @@ def test_raspberry_executor_final_report_checks_take_profit_only(tmp_path, monke
     assert closed[-1]["close_reason"] == "take_profit_filled"
 
 
-def test_run_once_invokes_position_sync_for_position_without_take_profit(monkeypatch):
+def test_run_once_leaves_position_sync_to_dedicated_monitor(monkeypatch):
     import raspberry_executor.run_once as run_once_module
 
     calls = []
@@ -135,15 +135,14 @@ def test_run_once_invokes_position_sync_for_position_without_take_profit(monkeyp
     monkeypatch.setattr(run_once_module, "create_spot_exchange", lambda _settings: (exchange, None))
     monkeypatch.setattr(run_once_module, "StateStore", FakeState)
     monkeypatch.setattr(run_once_module, "execute_candidate", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(run_once_module.position_sync_v2, "sync_open_positions", lambda: calls.append(("sync",)) or {"missing_tp": 1})
 
     summary = run_once_module.run_once(limit=3)
 
-    assert calls == [("fetch", 3), ("sync",)]
+    assert calls == [("fetch", 3)]
     assert summary["open_positions"] == 1
 
 
-def test_main_loop_invokes_position_sync_for_position_without_take_profit(monkeypatch):
+def test_legacy_main_loop_leaves_position_sync_to_dedicated_monitor(monkeypatch):
     import raspberry_executor.main as main_module
 
     calls = []
@@ -184,7 +183,6 @@ def test_main_loop_invokes_position_sync_for_position_without_take_profit(monkey
     monkeypatch.setattr(main_module, "SpotOrderManager", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(main_module, "StateStore", FakeState)
     monkeypatch.setattr(main_module, "execute_candidate", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(main_module.position_sync_v2, "sync_open_positions", lambda: calls.append(("sync",)) or {"missing_tp": 1})
     monkeypatch.setattr(main_module.time, "sleep", lambda _seconds: (_ for _ in ()).throw(RuntimeError("stop loop")))
 
     try:
@@ -194,4 +192,4 @@ def test_main_loop_invokes_position_sync_for_position_without_take_profit(monkey
     else:
         raise AssertionError("main loop did not stop")
 
-    assert calls == [("fetch", 10), ("sync",)]
+    assert calls == [("fetch", 10)]
