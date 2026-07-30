@@ -15,6 +15,7 @@ from raspberry_executor.position_sync_v2 import (
     _order_id,
     _tp_confirmation_timed_out,
     tp_confirmation_max_age_seconds,
+    _is_momentum_position,
 )
 from raspberry_executor.state import StateStore
 
@@ -147,6 +148,11 @@ def reconcile_kraken_margin_positions() -> dict:
         local_id, _local = _find_local(local_positions, entry_order_id=entry_id, symbol=symbol, quantity=qty)
         if local_id:
             updates = {"last_kraken_open_position_sync_ts": time.time(), "kraken_open_position_payload": remote, "imported_from_kraken_open_positions": bool(_local.get("imported_from_kraken_open_positions"))}
+            if _is_momentum_position(str(local_id), _local):
+                state.update_open_position(local_id, updates)
+                summary["already_local"] += 1
+                logger.info("kraken margin momentum position state reconciled candidate=%s symbol=%s", local_id, symbol)
+                continue
             tp_id = _local.get("tp_order_id")
             target_price = _float(_local.get("target_price"))
             confirmed_tp = None

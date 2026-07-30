@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import raspberry_executor.sqlite_db as sqlite_db
+import raspberry_executor.position_sync_v2 as sync_module
 from raspberry_executor.position_sync_v2 import _handle_filled_take_profit, _replay_take_profit, _track_momentum_position, normalize_position_execution_mode
 from raspberry_executor.state import StateStore
 
@@ -324,3 +325,27 @@ def test_track_momentum_defers_recent_missing_balance(tmp_path, monkeypatch):
     assert tracked["balance_missing_grace_until_age_seconds"] == 120.0
     assert state.closed_positions() == []
     assert any(event["event_type"] == "momentum_balance_missing_grace" for event in state.events())
+
+
+def test_sync_keeps_ignoring_momentum_with_legacy_tp_metadata(tmp_path, monkeypatch):
+    state = state_store(tmp_path, monkeypatch)
+    candidate_id = "legacy-local-id"
+    state.add_open_position(candidate_id, {
+        "execution_symbol": "BTCUSDT", "signal_symbol": "BTCUSDT", "side": "long",
+        "strategy": "momentum_rotation", "mode": "spot", "quantity": "1", "entry_price": 100,
+        "tp_order_id": "legacy-tp", "tp_payload": {"orderId": "legacy-tp"}, "needs_tp_replay": True,
+    })
+    kraken = FakeKraken()
+    kraken.current_price = lambda symbol: 100.0
+    monkeypatch.setattr(sync_module, "load_settings", lambda: object())
+    monkeypatch.setattr(sync_module, "create_margin_exchange", lambda settings, dry_run: (kraken, FakeMargin({}), FakeRules()))
+    monkeypatch.setattr(sync_module, "margin_dry_run", lambda: False)
+    monkeypatch.setattr(sync_module, "StateStore", lambda: state)
+
+    summary = sync_module._sync_open_positions()
+
+    position = state.open_positions()[candidate_id]
+    assert summary["momentum_tracked"] == 1
+    assert position["tp_order_id"] == "legacy-tp"
+    assert position["needs_tp_replay"] is True
+    assert kraken.order_queries == []

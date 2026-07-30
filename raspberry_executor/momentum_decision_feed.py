@@ -14,6 +14,7 @@ from raspberry_executor.logging_setup import setup_logging
 from raspberry_executor.margin_client import MarginClient
 from raspberry_executor.margin_order_manager import MarginOrderManager
 from raspberry_executor.margin_settings import execution_mode, margin_dry_run, margin_enabled, margin_leverage_attempts, margin_multiplier
+from raspberry_executor.position_order_helpers import is_tp_order, order_qty
 from raspberry_executor.state import StateStore
 from raspberry_executor.spot_order_manager import SpotOrderManager
 
@@ -610,6 +611,77 @@ def _margin_wallet_value(margin: MarginClient, rules: KrakenSymbolRules, kraken:
     return base, qty, price, qty * price
 
 
+def _order_id(order: dict[str, Any]) -> str:
+    return str(order.get("orderId") or order.get("txid") or order.get("id") or "")
+
+
+def _cancel_reserved_momentum_exit(
+    *,
+    state: StateStore,
+    candidate_id: str,
+    position: dict[str, Any] | None,
+    symbol: str,
+    exchange: Any,
+    use_margin: bool,
+) -> bool:
+    """Cancel a Momentum limit exit which may be hiding all free base balance."""
+    if not position:
+        return False
+    tp_order_id = str(position.get("tp_order_id") or "")
+    open_orders = exchange.open_margin_orders(symbol) if use_margin else exchange.open_orders(symbol)
+    expected_qty = max(0.0, float(position.get("quantity") or 0.0))
+    exits = [
+        order for order in (open_orders or [])
+        if (_order_id(order) == tp_order_id and tp_order_id)
+        or (is_tp_order(order) and (expected_qty <= 0 or order_qty(order) >= expected_qty * 0.02))
+    ]
+    if not exits:
+        return False
+
+    canceled_ids: list[str] = []
+    for order in exits:
+        order_id = _order_id(order)
+        if use_margin and hasattr(exchange, "cancel_margin_order"):
+            exchange.cancel_margin_order(symbol, order_id)
+        elif use_margin and hasattr(exchange, "kraken"):
+            exchange.kraken.cancel_order(symbol, order_id)
+        else:
+            exchange.cancel_order(symbol, order_id)
+        canceled_ids.append(order_id)
+
+    attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
+    sleep_sec = max(0.0, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
+    remaining_ids = set(canceled_ids)
+    for attempt in range(attempts):
+        current = exchange.open_margin_orders(symbol) if use_margin else exchange.open_orders(symbol)
+        remaining_ids = {_order_id(order) for order in (current or [])} & set(canceled_ids)
+        if not remaining_ids:
+            break
+        if attempt + 1 < attempts:
+            time.sleep(sleep_sec)
+    if remaining_ids:
+        raise RuntimeError(f"momentum_exit_cancel_not_confirmed:{symbol}:orders={sorted(remaining_ids)}")
+
+    updates = {
+        "tp_order_id": None,
+        "tp_payload": {},
+        "tp_exchange_confirmed": False,
+        "needs_tp_confirmation": False,
+        "needs_tp_replay": False,
+    }
+    state.update_open_position(candidate_id, updates, event_type="momentum_exit_order_canceled")
+    return True
+
+
+def _wait_for_released_base(balance_reader, *, attempts: int, sleep_sec: float) -> None:
+    """Give Kraken time to move a canceled order's reserved base back to free."""
+    for attempt in range(attempts):
+        if balance_reader() > 0:
+            return
+        if attempt + 1 < attempts:
+            time.sleep(sleep_sec)
+
+
 def _sell_symbol_margin(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, symbol: str, decision: dict[str, Any], *, require_confirmed: bool = True) -> str:
     symbol = symbol.upper()
     cid = _candidate_id(symbol)
@@ -622,6 +694,10 @@ def _sell_symbol_margin(kraken: KrakenClient, rules: KrakenSymbolRules, state: S
     margin.ensure_margin_account(symbol)
     base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
+    position = state.open_positions().get(cid)
+    if (qty <= 0 or value < dust_value) and _cancel_reserved_momentum_exit(state=state, candidate_id=cid, position=position, symbol=symbol, exchange=margin, use_margin=True):
+        _wait_for_released_base(lambda: margin.margin_free_balance(symbol, base), attempts=max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8)), sleep_sec=max(0.0, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0)))
+        base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
     max_attempts = max(1, _int_env("MOMENTUM_DECISION_SELL_MAX_ATTEMPTS", 5))
     chunk_ratio = min(1.0, max(0.1, _float_env("MOMENTUM_DECISION_SELL_CHUNK_RATIO", 0.995)))
     details: list[dict[str, Any]] = []
@@ -736,6 +812,10 @@ def sell_symbol(kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStor
     wait_attempts = max(1, _int_env("MOMENTUM_DECISION_BALANCE_CONFIRM_ATTEMPTS", 8))
     wait_sleep = max(0.2, _float_env("MOMENTUM_DECISION_BALANCE_CONFIRM_SLEEP", 1.0))
     details: list[dict[str, Any]] = []
+
+    if (qty <= 0 or value < dust_value) and _cancel_reserved_momentum_exit(state=state, candidate_id=cid, position=position, symbol=symbol, exchange=kraken, use_margin=False):
+        _wait_for_released_base(lambda: kraken.free_balance(base), attempts=wait_attempts, sleep_sec=wait_sleep)
+        base, qty, price, value = _wallet_value(kraken, rules, symbol)
 
     if qty <= 0 or value < dust_value:
         state.add_event(cid, "momentum_sell_confirmed_no_balance", {"symbol": symbol, "base": base, "qty": qty, "value": value, "dust_value": dust_value, "decision": decision})
