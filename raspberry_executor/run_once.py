@@ -7,7 +7,6 @@ from raspberry_executor.main import execute_candidate, report_final_events
 from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.state import StateStore
-import raspberry_executor.position_sync_v2 as position_sync_v2
 
 logger = setup_logging("raspberry-executor-run-once")
 
@@ -23,7 +22,8 @@ def run_once(limit: int = 10) -> dict:
     for candidate in candidates:
         execute_candidate(settings, exchange, state, guard, candidate)
     report_final_events(exchange, state)
-    position_sync_v2.sync_open_positions()
+    # The dedicated order monitor owns periodic TP synchronization. This entry
+    # point only executes candidates and must not multiply Kraken private calls.
     summary = {
         "exchange": getattr(exchange, "exchange_name", settings.exchange),
         "fetched": len(candidates),

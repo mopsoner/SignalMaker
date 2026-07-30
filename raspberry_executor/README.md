@@ -24,6 +24,11 @@ Startup chain:
 
 `run_all_v2` remains the internal engine. Do not launch it directly for normal Raspberry operation. `scripts/start_raspberry_executor.sh` is kept only as a deprecated compatibility wrapper that delegates to `./run.sh device`.
 
+Position monitoring is coordinated across processes: `POSITION_SYNC_MIN_INTERVAL_SECONDS`
+defaults to 15 seconds and prevents duplicate TP synchronization passes. Kraken margin
+position reconciliation runs independently every `KRAKEN_MARGIN_RECONCILE_SECONDS`
+(300 seconds by default, with a 60-second minimum).
+
 ## Startup
 
 The Raspberry installer registers a single user crontab entry so `bash run.sh` starts at boot. To inspect it, run `crontab -l`. Logs are appended to `logs/startup.log`.

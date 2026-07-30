@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 
 from raspberry_executor.candidate_status_sync import run_loop as candidate_status_sync_loop
 from raspberry_executor.candle_auto_feed import run_loop as candle_feed_loop
@@ -14,6 +15,28 @@ from raspberry_executor.spot_executor_v2 import main as spot_executor_main
 from raspberry_executor.wallet_position_bootstrap import bootstrap_wallet_positions
 
 logger = setup_logging("raspberry-executor")
+
+
+def margin_reconcile_interval_seconds() -> int:
+    try:
+        return max(60, int(os.getenv("KRAKEN_MARGIN_RECONCILE_SECONDS", "300") or "300"))
+    except Exception:
+        return 300
+
+
+def margin_reconcile_loop() -> None:
+    """Reconcile remote margin positions independently from frequent TP checks."""
+    seconds = margin_reconcile_interval_seconds()
+    logger.info("kraken margin reconcile loop started seconds=%s", seconds)
+    while True:
+        time.sleep(seconds)
+        try:
+            from raspberry_executor.margin_position_reconcile import reconcile_kraken_margin_positions
+
+            summary = reconcile_kraken_margin_positions()
+            logger.info("kraken margin position reconcile periodic=%s", summary)
+        except Exception as exc:
+            logger.error("kraken margin position reconcile periodic error=%s", str(exc))
 
 
 def executor_main() -> None:
@@ -65,6 +88,9 @@ def main() -> None:
 
     threading.Thread(target=order_monitor_loop, daemon=True).start()
     logger.info("order monitor thread started for configured exchange position sync")
+
+    threading.Thread(target=margin_reconcile_loop, daemon=True).start()
+    logger.info("kraken margin reconcile thread started")
 
     threading.Thread(target=candidate_status_sync_loop, daemon=True).start()
     logger.info("candidate status sync thread started for take-profit protected positions")

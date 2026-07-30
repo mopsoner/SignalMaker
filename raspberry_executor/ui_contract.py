@@ -161,7 +161,7 @@ def position_row(candidate_id: str, row: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def positions_view(limit: int = 50, sync: bool = True) -> dict[str, Any]:
+def positions_view(limit: int = 50, sync: bool = False) -> dict[str, Any]:
     sync_result: dict[str, Any] | None = None
     sync_error = ""
     if sync:

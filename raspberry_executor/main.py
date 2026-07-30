@@ -10,7 +10,6 @@ from raspberry_executor.risk_guard import RiskGuard
 from raspberry_executor.signalmaker_client import SignalMakerClient
 from raspberry_executor.spot_order_manager import SpotOrderManager
 from raspberry_executor.state import StateStore
-import raspberry_executor.position_sync_v2 as position_sync_v2
 
 logger = setup_logging("raspberry-executor")
 
@@ -57,7 +56,8 @@ def main() -> None:
             for candidate in candidates:
                 execute_candidate(settings, exchange, state, guard, candidate, rules, spot_manager)
             report_final_events(exchange, state)
-            position_sync_v2.sync_open_positions()
+            # TP monitoring is owned by order_monitor_loop in the official
+            # runtime bundle, avoiding two concurrent periodic synchronizers.
         except Exception:
             logger.exception("main loop error")
         time.sleep(settings.poll_seconds)
