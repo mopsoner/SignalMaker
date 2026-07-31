@@ -574,7 +574,7 @@ def test_execute_decision_accepts_matching_wait_action_fields(tmp_path, monkeypa
 
     decision = {"action": "WAIT", "decision_action": "WAIT", "reason": "no_signal", "should_trade": False}
 
-    assert momentum_module.execute_decision(decision) == "wait:WAIT:missing_target_symbol"
+    assert momentum_module.execute_decision(decision) == "wait"
     assert decision["action"] == "WAIT"
     assert decision["decision_action"] == "WAIT"
 
@@ -682,7 +682,7 @@ def test_execute_buy_reconstructs_cross_margin_wallet_position_and_sells_before_
     assert ("BALANCE", "BANKUSDC") in calls
 
 
-def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
+def test_execute_hold_without_position_does_not_buy_target_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "0")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
@@ -690,8 +690,8 @@ def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
     calls = []
 
     monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
-    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[20.0], base_balance=0.0))
-    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: (calls.append(("exchange_client", "kraken")), FakeKraken(quote_balances=[20.0], base_balance=0.0))[1])
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: (calls.append(("exchange_client", "rules")), FakeRules())[1])
 
     def fake_buy(settings_arg, kraken, rules, store, decision, *, exclude=None):
         calls.append((decision["action"], decision["buy_symbol"], decision["symbol"], decision["target_symbol"], exclude))
@@ -701,12 +701,12 @@ def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_asset": {"symbol": "ALLUSDC"}})
 
-    assert result == "bought:ALLUSDC:qty=10.00000000:notional=10.0000"
-    assert calls == [("HOLD", "ALLUSDC", "ALLUSDC", "ALLUSDC", None)]
+    assert result == "hold_existing_momentum_position:none"
+    assert calls == []
     assert state.events() == []
 
 
-def test_execute_wait_with_target_differs_from_held_momentum_position_rotates(tmp_path, monkeypatch):
+def test_execute_wait_with_target_differs_from_held_momentum_position_does_not_rotate(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setattr(momentum_module, "load_settings", lambda: SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], kraken_base_url="https://kraken.test", kraken_api_key="key", kraken_secret_key="secret", dry_run=False))
     state = StateStore()
@@ -714,8 +714,8 @@ def test_execute_wait_with_target_differs_from_held_momentum_position_rotates(tm
     calls = []
 
     monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
-    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: FakeKraken(quote_balances=[0.0], base_balance=0.0))
-    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: FakeRules())
+    monkeypatch.setattr(momentum_module, "KrakenClient", lambda *args, **kwargs: (calls.append(("exchange_client", "kraken")), FakeKraken(quote_balances=[0.0], base_balance=0.0))[1])
+    monkeypatch.setattr(momentum_module, "KrakenSymbolRules", lambda *args, **kwargs: (calls.append(("exchange_client", "rules")), FakeRules())[1])
 
     def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed: bool = True):
         calls.append(("sell", symbol, decision["action"], decision["buy_symbol"]))
@@ -731,8 +731,8 @@ def test_execute_wait_with_target_differs_from_held_momentum_position_rotates(tm
 
     result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
 
-    assert result == "rotate:sell_confirmed:BANKUSDC:remaining_value=0.0000:quote=25.0000:bought:ALLUSDC:qty=10.00000000:notional=10.0000"
-    assert calls == [("sell", "BANKUSDC", "ROTATE", "ALLUSDC"), ("buy", "ALLUSDC", "ROTATE", ["BANKUSDC"])]
+    assert result == "wait"
+    assert calls == []
 
 
 def test_execute_wait_holds_existing_momentum_target(tmp_path, monkeypatch):
@@ -747,7 +747,7 @@ def test_execute_wait_holds_existing_momentum_target(tmp_path, monkeypatch):
 
     result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "ALLUSDC"})
 
-    assert result == "hold_existing_momentum_position:ALLUSDC"
+    assert result == "wait"
 
 
 def test_confirmed_recorded_buy_turns_new_buy_into_sell_then_buy_rotation(tmp_path, monkeypatch):
@@ -962,22 +962,22 @@ def _stub_execute_decision_runtime(monkeypatch, held_symbol: str | None = None):
     return calls
 
 
-def test_execute_decision_wait_without_held_symbol_buys_target(monkeypatch):
+def test_execute_decision_wait_without_held_symbol_does_not_buy_target(monkeypatch):
     calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
 
     result = momentum_module.execute_decision({"action": "WAIT", "should_trade": False, "target_symbol": "OMGUSD"})
 
-    assert calls == [("buy", "OMGUSD")]
-    assert result == "bought:OMGUSD"
+    assert calls == []
+    assert result == "wait"
 
 
-def test_execute_decision_hold_without_held_symbol_buys_target(monkeypatch):
+def test_execute_decision_hold_without_held_symbol_does_not_buy_target(monkeypatch):
     calls = _stub_execute_decision_runtime(monkeypatch, held_symbol=None)
 
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False, "target_symbol": "OMGUSD"})
 
-    assert calls == [("buy", "OMGUSD")]
-    assert result == "bought:OMGUSD"
+    assert calls == []
+    assert result == "hold_existing_momentum_position:none"
 
 
 def test_execute_decision_hold_without_target_waits(monkeypatch):
@@ -986,7 +986,7 @@ def test_execute_decision_hold_without_target_waits(monkeypatch):
     result = momentum_module.execute_decision({"action": "HOLD", "should_trade": False})
 
     assert calls == []
-    assert result == "wait:HOLD:missing_target_symbol"
+    assert result == "hold_existing_momentum_position:none"
 
 
 def test_execute_decision_buy_without_held_symbol_allows_buy(monkeypatch):
@@ -1025,14 +1025,28 @@ def test_execute_decision_hold_existing_momentum_position(monkeypatch):
     assert result == "hold_existing_momentum_position:OMGUSD"
 
 
-@pytest.mark.parametrize("action", ["BUY", "HOLD", "WAIT", "NO_ENTRY"])
-def test_execute_decision_reconciles_different_held_asset_regardless_of_no_trade_fields(monkeypatch, action):
+@pytest.mark.parametrize(
+    ("action", "expected_calls", "expected_result"),
+    [
+        ("BUY", [("rotate", "ALLUSD->OMGUSD")], "rotate:ALLUSD->OMGUSD"),
+        ("HOLD", [], "hold_existing_momentum_position:ALLUSD"),
+        ("WAIT", [], "wait"),
+        ("NO_ENTRY", [], "no_entry"),
+    ],
+)
+def test_execute_decision_reconciles_different_held_asset_regardless_of_no_trade_fields(monkeypatch, action, expected_calls, expected_result):
     calls = _stub_execute_decision_runtime(monkeypatch, held_symbol="ALLUSD")
+    if action != "BUY":
+        monkeypatch.setattr(
+            momentum_module,
+            "create_spot_exchange",
+            lambda cfg: (calls.append(("exchange_client", None)), (FakeKraken(), FakeRules()))[1],
+        )
 
     result = momentum_module.execute_decision({"action": action, "should_trade": False, "status": "no_trade", "target_symbol": "OMGUSD"})
 
-    assert calls == [("rotate", "ALLUSD->OMGUSD")]
-    assert result == "rotate:ALLUSD->OMGUSD"
+    assert calls == expected_calls
+    assert result == expected_result
 
 
 def test_execute_decision_sell_blocked_when_target_is_not_held(monkeypatch):
