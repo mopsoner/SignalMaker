@@ -927,23 +927,22 @@ def buy_best_available(settings, kraken: KrakenClient, rules: KrakenSymbolRules,
         return f"buy_skipped_excluded_target:{symbol}"
     return buy_symbol(settings, kraken, rules, state, symbol, decision, use_available_quote=True)
 
-def current_momentum_position(state: StateStore) -> dict[str, Any] | None:
+def momentum_positions(state: StateStore) -> list[dict[str, Any]]:
+    """Return all open Momentum positions with stable identity and symbol fields."""
+    positions: list[dict[str, Any]] = []
     for candidate_id, position in state.open_positions().items():
         if str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict):
-            return position
-    return None
+            positions.append({
+                **position,
+                "candidate_id": position.get("candidate_id") or candidate_id,
+                "symbol": _position_symbol(position),
+            })
+    return positions
 
 
 def _local_momentum_positions(state: StateStore) -> list[dict[str, Any]]:
     """Return every local Momentum position rather than an arbitrary first row."""
-    if not hasattr(state, "open_positions"):
-        position = current_momentum_position(state)
-        return [position] if position else []
-    positions = []
-    for candidate_id, position in state.open_positions().items():
-        if str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict):
-            positions.append({**position, "candidate_id": position.get("candidate_id") or candidate_id})
-    return positions
+    return momentum_positions(state)
 
 
 def _configured_momentum_symbols(decision: dict[str, Any], local_positions: list[dict[str, Any]]) -> list[str]:
@@ -1031,19 +1030,13 @@ def _resolve_momentum_positions(
             )
             detected.append(position)
 
-    detected_symbols = sorted({_position_symbol(position) for position in detected if _position_symbol(position)})
-    if len(detected_symbols) > 1:
-        state.add_event("momentum-decision", "momentum_buy_blocked_multiple_wallet_positions", {
-            "symbols": detected_symbols, "dust_value": dust_value, "decision": decision,
-        })
-        return detected, f"buy_blocked:multiple_momentum_wallet_positions:{','.join(detected_symbols)}"
     return detected, None
 
 
 def _position_symbol(position: dict[str, Any] | None) -> str:
     if not position:
         return ""
-    return str(position.get("execution_symbol") or position.get("signal_symbol") or "").upper()
+    return str(position.get("execution_symbol") or position.get("signal_symbol") or position.get("symbol") or "").upper()
 
 
 def _target_asset_symbol(target_asset: Any) -> str:
@@ -1134,10 +1127,11 @@ def _mark_momentum_buy_cadence_checked(state: StateStore, decision: dict[str, An
     })
 
 
-def _rotation_order_sequence(sell_symbol: str | None, buy_symbol: str | None) -> list[dict[str, Any]]:
+def _rotation_order_sequence(sell_symbols: str | list[str] | None, buy_symbol: str | None) -> list[dict[str, Any]]:
     sequence: list[dict[str, Any]] = []
-    if sell_symbol:
-        sequence.append({"step": 1, "action": "SELL", "symbol": sell_symbol, "role": "exit_held_momentum_asset"})
+    symbols = [sell_symbols] if isinstance(sell_symbols, str) else (sell_symbols or [])
+    for symbol in symbols:
+        sequence.append({"step": len(sequence) + 1, "action": "SELL", "symbol": symbol, "role": "exit_held_momentum_asset"})
     if buy_symbol:
         sequence.append({"step": len(sequence) + 1, "action": "BUY", "symbol": buy_symbol, "role": "enter_new_momentum_asset"})
     return sequence
@@ -1154,22 +1148,47 @@ def _buy_with_momentum_cadence(settings, kraken: KrakenClient, rules: KrakenSymb
     return buy_best_available(settings, kraken, rules, state, decision, exclude=exclude)
 
 
-def _rotate_momentum_position(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, held_symbol: str, buy_symbol: str, decision: dict[str, Any]) -> str:
+def _rotate_momentum_position(settings, kraken: KrakenClient, rules: KrakenSymbolRules, state: StateStore, held_positions: list[dict[str, Any]], buy_symbol: str, decision: dict[str, Any]) -> str:
+    # Accept the former single-symbol shape at this internal boundary while
+    # callers migrate; execution itself always works on the complete list.
+    if isinstance(held_positions, str):
+        held_positions = [{"execution_symbol": held_positions}]
+    sell_symbols = [
+        _position_symbol(position) for position in held_positions
+        if _position_symbol(position) and _position_symbol(position) != buy_symbol
+    ]
+    target_already_held = any(_position_symbol(position) == buy_symbol for position in held_positions)
     rotation_decision = {
         **decision,
         "action": "ROTATE",
         "raw_action": decision.get("raw_action") or decision.get("action") or "BUY",
-        "sell_symbol": held_symbol,
+        "sell_symbol": sell_symbols[0] if len(sell_symbols) == 1 else None,
+        "sell_symbols": sell_symbols,
         "buy_symbol": buy_symbol,
         "symbol": buy_symbol,
         "target_symbol": decision.get("target_symbol") or buy_symbol,
         "should_trade": True,
-        "order_sequence": _rotation_order_sequence(held_symbol, buy_symbol),
+        "order_sequence": _rotation_order_sequence(sell_symbols, None if target_already_held else buy_symbol),
     }
-    state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbol": held_symbol, "buy_symbol": buy_symbol, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
-    sell_result = sell_symbol(kraken, rules, state, held_symbol, rotation_decision, require_confirmed=True)
-    buy_result = _buy_with_momentum_cadence(settings, kraken, rules, state, rotation_decision, exclude={held_symbol})
-    return f"rotate:{sell_result}:{buy_result}"
+    decision["order_sequence"] = rotation_decision["order_sequence"]
+    state.add_event("momentum-decision", "momentum_rotation_started", {"sell_symbols": sell_symbols, "buy_symbol": buy_symbol, "order_sequence": rotation_decision.get("order_sequence"), "decision": rotation_decision})
+    sell_results: list[str] = []
+    for symbol in sell_symbols:
+        try:
+            result = sell_symbol(kraken, rules, state, symbol, rotation_decision, require_confirmed=True)
+            if not str(result).startswith(("sell_confirmed:", "sell_confirmed_margin:")):
+                raise RuntimeError(f"sell_not_confirmed:{symbol}:result={result}")
+        except Exception as exc:
+            state.add_event(_candidate_id(symbol), "momentum_rotation_sell_failed", {
+                "symbol": symbol, "error": str(exc), "order_sequence": rotation_decision["order_sequence"], "decision": rotation_decision,
+            })
+            return f"rotate_failed:{symbol}:{exc}"
+        sell_results.append(result)
+
+    if target_already_held:
+        return f"rotate:{':'.join(sell_results)}:hold_existing_momentum_position:{buy_symbol}"
+    buy_result = _buy_with_momentum_cadence(settings, kraken, rules, state, rotation_decision, exclude=set(sell_symbols))
+    return f"rotate:{':'.join(sell_results + [buy_result])}"
 
 
 def _normalized_should_trade(value: Any, *, default: bool = False) -> bool:
@@ -1244,18 +1263,15 @@ def execute_decision(decision: dict[str, Any]) -> str:
         held_positions, blocked = _resolve_momentum_positions(settings, kraken, rules, state, decision)
         if blocked:
             return blocked
-        held_position = held_positions[0] if held_positions else None
     else:
-        held_position = current_momentum_position(state)
-    held_symbol = _position_symbol(held_position)
+        held_positions = momentum_positions(state)
+    held_symbols = [_position_symbol(position) for position in held_positions if _position_symbol(position)]
 
-    if action == "SELL" and (not held_symbol or not _decision_targets_held_symbol(decision, held_symbol)):
-        return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-    if action != "SELL" and held_symbol == target_symbol:
-        return f"hold_existing_momentum_position:{held_symbol}"
+    if action == "SELL" and sell not in held_symbols:
+        return f"sell_blocked:decision_not_on_held_momentum_asset:held={','.join(held_symbols) or 'none'}:sell={sell or 'none'}"
 
     if action == "SELL":
-        return sell_symbol(kraken, rules, state, held_symbol, decision, require_confirmed=True)
+        return sell_symbol(kraken, rules, state, sell, decision, require_confirmed=True)
 
     desired_decision = {
         **decision,
@@ -1264,8 +1280,11 @@ def execute_decision(decision: dict[str, Any]) -> str:
         "target_symbol": target_symbol,
         "should_trade": True,
     }
-    if held_symbol:
-        return _rotate_momentum_position(settings, kraken, rules, state, held_symbol, target_symbol, desired_decision)
+    unwanted_positions = [position for position in held_positions if _position_symbol(position) != target_symbol]
+    if unwanted_positions:
+        return _rotate_momentum_position(settings, kraken, rules, state, held_positions, target_symbol, desired_decision)
+    if target_symbol in held_symbols:
+        return f"hold_existing_momentum_position:{target_symbol}"
     return _buy_with_momentum_cadence(settings, kraken, rules, state, desired_decision)
 
 

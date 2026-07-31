@@ -933,13 +933,16 @@ def _stub_execute_decision_runtime(monkeypatch, held_symbol: str | None = None):
     monkeypatch.setattr(momentum_module, "create_spot_exchange", lambda cfg: (FakeKraken(quote_balances=[25.0]), FakeRules()))
     monkeypatch.setattr(momentum_module, "StateStore", lambda: SimpleNamespace(add_event=lambda *args, **kwargs: None))
     held_position = {"execution_symbol": held_symbol, "signal_symbol": held_symbol} if held_symbol else None
-    monkeypatch.setattr(momentum_module, "current_momentum_position", lambda state: held_position)
+    held_positions = [held_position] if held_position else []
+    monkeypatch.setattr(momentum_module, "momentum_positions", lambda state: held_positions)
+    monkeypatch.setattr(momentum_module, "_resolve_momentum_positions", lambda cfg, kraken, rules, state, decision: (held_positions, None))
 
     def fake_buy_with_cadence(cfg, kraken, rules, state, decision, *, exclude=None):
         calls.append(("buy", decision.get("buy_symbol") or decision.get("target_symbol") or decision.get("symbol")))
         return f"bought:{decision.get('buy_symbol') or decision.get('target_symbol') or decision.get('symbol')}"
 
-    def fake_rotate(cfg, kraken, rules, state, current_symbol, buy_symbol, decision):
+    def fake_rotate(cfg, kraken, rules, state, positions, buy_symbol, decision):
+        current_symbol = momentum_module._position_symbol(positions[0])
         calls.append(("rotate", f"{current_symbol}->{buy_symbol}"))
         return f"rotate:{current_symbol}->{buy_symbol}"
 
@@ -1048,3 +1051,84 @@ def test_execute_decision_unsupported_action(monkeypatch):
 
     assert calls == []
     assert result == "unsupported_action:CANCEL"
+
+
+def test_momentum_positions_returns_every_position_with_identity_and_symbol():
+    state = SimpleNamespace(open_positions=lambda: {
+        "momentum-ALLUSD": {"execution_symbol": "ALLUSD"},
+        "momentum-BANKUSD": {"signal_symbol": "BANKUSD", "candidate_id": "custom-bank"},
+        "other": {"execution_symbol": "OMGUSD"},
+    })
+
+    assert momentum_module.momentum_positions(state) == [
+        {"execution_symbol": "ALLUSD", "candidate_id": "momentum-ALLUSD", "symbol": "ALLUSD"},
+        {"signal_symbol": "BANKUSD", "candidate_id": "custom-bank", "symbol": "BANKUSD"},
+    ]
+
+
+def test_rotation_sells_all_unwanted_positions_then_buys(monkeypatch):
+    events = []
+    calls = []
+    state = SimpleNamespace(add_event=lambda candidate_id, event_type, payload: events.append((candidate_id, event_type, payload)))
+    positions = [{"execution_symbol": "ALLUSD"}, {"execution_symbol": "BANKUSD"}]
+
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed):
+        calls.append(("SELL", symbol, require_confirmed))
+        return f"sell_confirmed:{symbol}"
+
+    def fake_buy(cfg, kraken, rules, store, decision, *, exclude=None):
+        calls.append(("BUY", decision["buy_symbol"], exclude))
+        return "bought:OMGUSD"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
+
+    result = momentum_module._rotate_momentum_position(None, None, None, state, positions, "OMGUSD", {"action": "BUY"})
+
+    assert calls == [("SELL", "ALLUSD", True), ("SELL", "BANKUSD", True), ("BUY", "OMGUSD", {"ALLUSD", "BANKUSD"})]
+    assert result == "rotate:sell_confirmed:ALLUSD:sell_confirmed:BANKUSD:bought:OMGUSD"
+    assert events[0][2]["order_sequence"] == [
+        {"step": 1, "action": "SELL", "symbol": "ALLUSD", "role": "exit_held_momentum_asset"},
+        {"step": 2, "action": "SELL", "symbol": "BANKUSD", "role": "exit_held_momentum_asset"},
+        {"step": 3, "action": "BUY", "symbol": "OMGUSD", "role": "enter_new_momentum_asset"},
+    ]
+
+
+def test_rotation_stops_when_second_sell_fails_without_buy(monkeypatch):
+    events = []
+    calls = []
+    state = SimpleNamespace(add_event=lambda candidate_id, event_type, payload: events.append((candidate_id, event_type, payload)))
+    positions = [{"execution_symbol": "ALLUSD"}, {"execution_symbol": "BANKUSD"}]
+
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed):
+        calls.append(("SELL", symbol))
+        if symbol == "BANKUSD":
+            raise RuntimeError("exchange rejected order")
+        return f"sell_confirmed:{symbol}"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", lambda *args, **kwargs: calls.append(("BUY", "OMGUSD")))
+
+    result = momentum_module._rotate_momentum_position(None, None, None, state, positions, "OMGUSD", {"action": "BUY"})
+
+    assert calls == [("SELL", "ALLUSD"), ("SELL", "BANKUSD")]
+    assert result == "rotate_failed:BANKUSD:exchange rejected order"
+    assert events[-1][1] == "momentum_rotation_sell_failed"
+    assert [step["action"] for step in events[-1][2]["order_sequence"]] == ["SELL", "SELL", "BUY"]
+
+
+def test_rotation_keeps_target_while_selling_other_position(monkeypatch):
+    calls = []
+    state = SimpleNamespace(add_event=lambda *args: None)
+    positions = [{"execution_symbol": "OMGUSD"}, {"execution_symbol": "ALLUSD"}]
+    monkeypatch.setattr(momentum_module, "sell_symbol", lambda kraken, rules, store, symbol, decision, *, require_confirmed: calls.append(("SELL", symbol)) or f"sell_confirmed:{symbol}")
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", lambda *args, **kwargs: calls.append(("BUY", "OMGUSD")))
+    decision = {"action": "HOLD"}
+
+    result = momentum_module._rotate_momentum_position(None, None, None, state, positions, "OMGUSD", decision)
+
+    assert calls == [("SELL", "ALLUSD")]
+    assert result == "rotate:sell_confirmed:ALLUSD:hold_existing_momentum_position:OMGUSD"
+    assert decision["order_sequence"] == [
+        {"step": 1, "action": "SELL", "symbol": "ALLUSD", "role": "exit_held_momentum_asset"},
+    ]
