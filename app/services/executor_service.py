@@ -470,12 +470,31 @@ class ExecutorService:
         if str(decision.get('status') or '').lower() != 'ready':
             return {**base, 'status': 'skipped', 'reason': decision.get('reason') or 'momentum_decision_not_ready'}
         if action == 'BUY':
+            close_result = None
+            order_ids = []
+            fill_ids = []
             try:
-                result = self._execute_momentum_buy(decision, symbol=target_symbol, quantity=quantity, requested_mode=requested_mode)
-                if result.get('status') == 'executed':
-                    return {**result, 'reason': 'initialized_buy'}
-                return result
+                if held_momentum_position is not None:
+                    if held_momentum_position.symbol.upper() == target_symbol:
+                        return {**base, 'status': 'skipped', 'reason': 'already_held', 'position_id': held_momentum_position.position_id}
+                    close_result = self._close_momentum_position(held_momentum_position, reason='momentum_rotate_exit', mode=requested_mode)
+                    order_ids.append(close_result['order_id'])
+                    fill_ids.append(close_result['fill_id'])
+
+                buy_result = self._execute_momentum_buy(decision, symbol=target_symbol, quantity=quantity, requested_mode=requested_mode)
+                if close_result is None:
+                    if buy_result.get('status') == 'executed':
+                        return {**buy_result, 'reason': 'initialized_buy'}
+                    return buy_result
+
+                order_ids.extend(buy_result.get('order_ids') or [])
+                fill_ids.extend(buy_result.get('fill_ids') or [])
+                status = 'executed' if buy_result.get('status') == 'executed' else 'skipped'
+                reason = 'momentum_rotated' if status == 'executed' else f"position_closed_entry_{buy_result.get('status', 'unknown')}"
+                return {**base, 'status': status, 'reason': reason, 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result, 'entry_result': buy_result}
             except Exception as exc:
+                if close_result is not None:
+                    return {**base, 'status': 'error', 'reason': f'position_closed_entry_error: {exc}', 'order_ids': order_ids, 'fill_ids': fill_ids, 'exit_result': close_result}
                 return {**base, 'status': 'error', 'reason': str(exc)}
         if action == 'SELL':
             try:

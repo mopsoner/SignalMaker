@@ -345,6 +345,126 @@ def test_momentum_executor_rotate_closes_source_before_buying_target(client, mon
         db.close()
 
 
+def test_momentum_executor_buy_opens_target_when_no_momentum_position_exists(client, monkeypatch):
+    _, session_factory = client
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "BUY",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": "test_buy",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert result["status"] == "executed"
+    assert result["reason"] == "initialized_buy"
+    assert result["order_ids"]
+    assert result["fill_ids"]
+
+
+def test_momentum_executor_buy_skips_target_already_held(client, monkeypatch):
+    _, session_factory = client
+    position_id = seed_open_position(session_factory, symbol="BTCUSDC")
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "BUY",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": "test_buy",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "already_held"
+    assert result["position_id"] == position_id
+    assert result["order_ids"] == []
+    assert result["fill_ids"] == []
+
+
+def test_momentum_executor_buy_rotates_from_different_momentum_asset(client, monkeypatch):
+    _, session_factory = client
+    source_position_id = seed_open_position(session_factory, symbol="ALLUSDC")
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "BUY",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": "test_buy",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert result["status"] == "executed"
+    assert result["reason"] == "momentum_rotated"
+    assert result["exit_result"]["position_id"] == source_position_id
+    assert result["entry_result"]["status"] == "executed"
+    assert result["exit_result"]["order_id"] in result["order_ids"]
+    assert result["exit_result"]["fill_id"] in result["fill_ids"]
+    assert len(result["order_ids"]) >= 2
+    assert len(result["fill_ids"]) >= 2
+
+
+def test_momentum_executor_buy_does_not_submit_entry_when_sell_fails(client, monkeypatch):
+    from app.services.executor_service import ExecutorService
+
+    _, session_factory = client
+    source_position_id = seed_open_position(session_factory, symbol="ALLUSDC")
+    seed_named_momentum_candidate(session_factory, symbol="BTCUSDC")
+    buy_calls = []
+
+    def fail_close(self, position, *, reason, mode):
+        assert position.position_id == source_position_id
+        assert reason == "momentum_rotate_exit"
+        raise RuntimeError("sell rejected")
+
+    def track_buy(self, decision, *, symbol, quantity, requested_mode):
+        buy_calls.append(symbol)
+        raise AssertionError("BUY must not be submitted after a failed SELL")
+
+    monkeypatch.setattr(ExecutorService, "_close_momentum_position", fail_close)
+    monkeypatch.setattr(ExecutorService, "_execute_momentum_buy", track_buy)
+
+    result = execute_with_stubbed_decision(
+        session_factory,
+        monkeypatch,
+        {
+            "decision_action": "BUY",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "status": "ready",
+            "reason": "test_buy",
+            "order_ids": [],
+            "fill_ids": [],
+        },
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "sell rejected"
+    assert result["order_ids"] == []
+    assert result["fill_ids"] == []
+    assert buy_calls == []
+
+
 @pytest.mark.parametrize("action", ["WAIT", "HOLD", "NO_ENTRY"])
 def test_momentum_executor_passive_action_acquires_missing_target(client, monkeypatch, action):
     _, session_factory = client
