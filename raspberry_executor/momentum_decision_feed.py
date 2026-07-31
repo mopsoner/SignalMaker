@@ -934,6 +934,112 @@ def current_momentum_position(state: StateStore) -> dict[str, Any] | None:
     return None
 
 
+def _local_momentum_positions(state: StateStore) -> list[dict[str, Any]]:
+    """Return every local Momentum position rather than an arbitrary first row."""
+    if not hasattr(state, "open_positions"):
+        position = current_momentum_position(state)
+        return [position] if position else []
+    positions = []
+    for candidate_id, position in state.open_positions().items():
+        if str(candidate_id).startswith("momentum-") or isinstance(position.get("momentum_decision"), dict):
+            positions.append({**position, "candidate_id": position.get("candidate_id") or candidate_id})
+    return positions
+
+
+def _configured_momentum_symbols(decision: dict[str, Any], local_positions: list[dict[str, Any]]) -> list[str]:
+    """Build the bounded set of Momentum symbols whose Kraken balance is relevant."""
+    symbols = {_position_symbol(position) for position in local_positions}
+    symbols.update({
+        str(decision.get("target_symbol") or "").upper(),
+        str(decision.get("buy_symbol") or "").upper(),
+        str(decision.get("sell_symbol") or "").upper(),
+        _target_asset_symbol(decision.get("target_asset")),
+    })
+    symbols.update(_candidate_symbol(row) for row in decision_buy_candidates(decision))
+    configured = _env("MOMENTUM_DECISION_SYMBOLS") or _env("CANDLE_FEED_SYMBOLS") or ""
+    symbols.update(item.strip().upper().replace("/", "") for item in configured.split(","))
+    return sorted(symbol for symbol in symbols if symbol)
+
+
+def _restore_momentum_position(
+    state: StateStore,
+    *,
+    symbol: str,
+    mode: str,
+    base: str,
+    quantity: float,
+    price: float,
+    value: float,
+    decision: dict[str, Any],
+) -> dict[str, Any]:
+    position = {
+        "candidate_id": _candidate_id(symbol),
+        "signal_symbol": symbol,
+        "execution_symbol": symbol,
+        "side": "long",
+        "strategy": "momentum_rotation",
+        "mode": mode,
+        "margin_account_mode": "cross" if mode == "margin" else None,
+        "margin_isolated": False if mode == "margin" else None,
+        "quantity": str(quantity),
+        "entry_price": price,
+        "momentum_decision": decision,
+        "wallet_asset": base,
+        "wallet_notional": value,
+        "source": "momentum_wallet_reconciliation",
+    }
+    state.add_open_position(_candidate_id(symbol), position)
+    state.add_event(_candidate_id(symbol), "momentum_position_reconstructed_from_wallet", {
+        "symbol": symbol, "base": base, "quantity": quantity, "price": price,
+        "value": value, "mode": mode, "decision": decision,
+    })
+    return position
+
+
+def _resolve_momentum_positions(
+    settings,
+    kraken: KrakenClient,
+    rules: KrakenSymbolRules,
+    state: StateStore,
+    decision: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Reconcile local Momentum state with Kraken before permitting a buy."""
+    local_positions = _local_momentum_positions(state)
+    local_by_symbol = {_position_symbol(position): position for position in local_positions if _position_symbol(position)}
+    symbols = _configured_momentum_symbols(decision, local_positions)
+    dust_value = max(1.0, _float_env("MOMENTUM_DECISION_SELL_DUST_VALUE", 5.0))
+    detected: list[dict[str, Any]] = []
+    margin = None
+
+    for symbol in symbols:
+        local = local_by_symbol.get(symbol)
+        mode = "margin" if _is_margin_position(local) or (not local and _explicit_margin_requested()) else "spot"
+        if mode == "margin":
+            if margin is None:
+                margin = MarginClient(kraken, dry_run=getattr(settings, "dry_run", False) or margin_dry_run())
+            margin.ensure_margin_account(symbol)
+            base, qty, price, value = _margin_wallet_value(margin, rules, kraken, symbol)
+        else:
+            base, qty, price, value = _wallet_value(kraken, rules, symbol)
+        # A local row can temporarily have no *free* quantity (for example
+        # while an exit order reserves it), so reconciliation must not erase
+        # it merely because the wallet read is currently below dust.
+        if local or value > dust_value:
+            position = local or _restore_momentum_position(
+                state, symbol=symbol, mode=mode, base=base, quantity=qty,
+                price=price, value=value, decision=decision,
+            )
+            detected.append(position)
+
+    detected_symbols = sorted({_position_symbol(position) for position in detected if _position_symbol(position)})
+    if len(detected_symbols) > 1:
+        state.add_event("momentum-decision", "momentum_buy_blocked_multiple_wallet_positions", {
+            "symbols": detected_symbols, "dust_value": dust_value, "decision": decision,
+        })
+        return detected, f"buy_blocked:multiple_momentum_wallet_positions:{','.join(detected_symbols)}"
+    return detected, None
+
+
 def _position_symbol(position: dict[str, Any] | None) -> str:
     if not position:
         return ""
@@ -1116,8 +1222,6 @@ def execute_decision(decision: dict[str, Any]) -> str:
     decision = _normalize_execution_decision(decision, action)
 
     state = StateStore()
-    held_position = current_momentum_position(state)
-    held_symbol = _position_symbol(held_position)
     target_symbol = str(decision.get("target_symbol") or "").upper()
     buy = str(decision.get("buy_symbol") or target_symbol or "").upper()
     sell = str(decision.get("sell_symbol") or "").upper()
@@ -1125,19 +1229,30 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action not in {"BUY", "SELL", "ROTATE", "HOLD", "WAIT", "NO_ENTRY"}:
         return f"unsupported_action:{action}"
 
-    if action == "SELL":
-        if not held_symbol or not _decision_targets_held_symbol(decision, held_symbol):
-            return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
-    elif not target_symbol:
+    if action != "SELL" and not target_symbol:
         return f"wait:{action}:missing_target_symbol"
-    elif held_symbol == target_symbol:
-        return f"hold_existing_momentum_position:{held_symbol}"
 
     if not _bool(_env("MOMENTUM_DECISION_EXECUTE_ENABLED"), default=True):
         return "execution_disabled"
 
     settings = load_settings()
     kraken, rules = _momentum_execution_clients(settings)
+
+    # Any path below can ultimately buy (BUY/ROTATE and HOLD/WAIT recovery).
+    # Resolve all local rows and Kraken balances before choosing hold/rotate/buy.
+    if action != "SELL":
+        held_positions, blocked = _resolve_momentum_positions(settings, kraken, rules, state, decision)
+        if blocked:
+            return blocked
+        held_position = held_positions[0] if held_positions else None
+    else:
+        held_position = current_momentum_position(state)
+    held_symbol = _position_symbol(held_position)
+
+    if action == "SELL" and (not held_symbol or not _decision_targets_held_symbol(decision, held_symbol)):
+        return f"sell_blocked:decision_not_on_held_momentum_asset:held={held_symbol or 'none'}:sell={sell or 'none'}"
+    if action != "SELL" and held_symbol == target_symbol:
+        return f"hold_existing_momentum_position:{held_symbol}"
 
     if action == "SELL":
         return sell_symbol(kraken, rules, state, held_symbol, decision, require_confirmed=True)

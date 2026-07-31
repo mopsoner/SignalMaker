@@ -606,6 +606,82 @@ def test_execute_buy_decision_rotates_when_different_momentum_asset_is_held(tmp_
     assert calls == [("sell", "BANKUSDC"), ("buy", "ALLUSDC", "ROTATE", ["BANKUSDC"], ["momentum-BANKUSDC"])]
 
 
+def test_execute_buy_reconstructs_spot_wallet_position_and_sells_before_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_SYMBOLS", "BANKUSDC,ALLUSDC")
+    cfg = SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], exchange="kraken", dry_run=False)
+    state = StateStore()
+    calls = []
+
+    class WalletKraken(FakeKraken):
+        def free_balance(self, asset: str) -> float:
+            return {"BANK": 12.0, "ALL": 0.0, "USDC": 20.0}.get(asset.upper(), 0.0)
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: cfg)
+    monkeypatch.setattr(momentum_module, "create_spot_exchange", lambda settings: (WalletKraken(), FakeRules()))
+
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed=True):
+        calls.append(("SELL", symbol, store.open_positions()["momentum-BANKUSDC"]["mode"]))
+        return "sell_confirmed:BANKUSDC"
+
+    def fake_buy(settings, kraken, rules, store, decision, *, exclude=None):
+        calls.append(("BUY", decision["buy_symbol"], None))
+        return "bought:ALLUSDC"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "BUY", "target_symbol": "ALLUSDC"})
+
+    assert result == "rotate:sell_confirmed:BANKUSDC:bought:ALLUSDC"
+    assert calls == [("SELL", "BANKUSDC", "spot"), ("BUY", "ALLUSDC", None)]
+    assert any(event["event_type"] == "momentum_position_reconstructed_from_wallet" for event in state.events())
+
+
+def test_execute_buy_reconstructs_cross_margin_wallet_position_and_sells_before_buy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
+    monkeypatch.setenv("MOMENTUM_DECISION_USE_MARGIN", "true")
+    monkeypatch.setenv("MOMENTUM_DECISION_SYMBOLS", "BANKUSDC,ALLUSDC")
+    cfg = SimpleNamespace(order_quote_amount=10.0, quote_assets=["USDC"], exchange="kraken", dry_run=False)
+    state = StateStore()
+    calls = []
+
+    class CrossMargin:
+        dry_run = False
+
+        def __init__(self, kraken, **kwargs):
+            self.kraken = kraken
+
+        def ensure_margin_account(self, symbol):
+            calls.append(("BALANCE", symbol))
+
+        def margin_free_balance(self, symbol, asset):
+            return 12.0 if asset == "BANK" else 0.0
+
+    monkeypatch.setattr(momentum_module, "StateStore", lambda: state)
+    monkeypatch.setattr(momentum_module, "load_settings", lambda: cfg)
+    monkeypatch.setattr(momentum_module, "create_spot_exchange", lambda settings: (FakeKraken(), FakeRules()))
+    monkeypatch.setattr(momentum_module, "MarginClient", CrossMargin)
+
+    def fake_sell(kraken, rules, store, symbol, decision, *, require_confirmed=True):
+        calls.append(("SELL", symbol, store.open_positions()["momentum-BANKUSDC"]["mode"]))
+        return "sell_confirmed_margin:BANKUSDC"
+
+    def fake_buy(settings, kraken, rules, store, decision, *, exclude=None):
+        calls.append(("BUY", decision["buy_symbol"], None))
+        return "bought_margin:ALLUSDC"
+
+    monkeypatch.setattr(momentum_module, "sell_symbol", fake_sell)
+    monkeypatch.setattr(momentum_module, "_buy_with_momentum_cadence", fake_buy)
+
+    result = momentum_module.execute_decision({"action": "BUY", "target_symbol": "ALLUSDC"})
+
+    assert result == "rotate:sell_confirmed_margin:BANKUSDC:bought_margin:ALLUSDC"
+    assert calls[-2:] == [("SELL", "BANKUSDC", "margin"), ("BUY", "ALLUSDC", None)]
+    assert ("BALANCE", "BANKUSDC") in calls
+
+
 def test_execute_hold_without_position_buys_target_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite_db, "DB_PATH", tmp_path / "raspberry_executor.db")
     monkeypatch.setenv("MOMENTUM_DECISION_CADENCE_HOURS", "0")
