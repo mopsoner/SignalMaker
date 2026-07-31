@@ -1248,6 +1248,30 @@ def execute_decision(decision: dict[str, Any]) -> str:
     if action not in {"BUY", "SELL", "ROTATE", "HOLD", "WAIT", "NO_ENTRY"}:
         return f"unsupported_action:{action}"
 
+    # HOLD, WAIT and NO_ENTRY are authoritative non-transactional decisions.
+    # Inspect local state only so the target can help diagnose a stale or
+    # inconsistent decision, but never create an exchange client (and thus
+    # never reconcile balances or turn the target into an order).
+    if action in {"HOLD", "WAIT", "NO_ENTRY"}:
+        held_symbols = [
+            _position_symbol(position)
+            for position in momentum_positions(state)
+            if _position_symbol(position)
+        ]
+        if target_symbol and held_symbols and target_symbol not in held_symbols:
+            logger.warning(
+                "non-transactional momentum decision target differs from local state: "
+                "action=%s target=%s held=%s",
+                action,
+                target_symbol,
+                ",".join(held_symbols),
+            )
+        if action == "HOLD":
+            return f"hold_existing_momentum_position:{','.join(held_symbols) or 'none'}"
+        if action == "WAIT":
+            return "wait"
+        return "no_entry"
+
     if action != "SELL" and not target_symbol:
         return f"wait:{action}:missing_target_symbol"
 
@@ -1257,8 +1281,8 @@ def execute_decision(decision: dict[str, Any]) -> str:
     settings = load_settings()
     kraken, rules = _momentum_execution_clients(settings)
 
-    # Any path below can ultimately buy (BUY/ROTATE and HOLD/WAIT recovery).
-    # Resolve all local rows and Kraken balances before choosing hold/rotate/buy.
+    # Only BUY and ROTATE can reconcile a different held asset by selling it
+    # before buying the target. Non-transactional actions returned above.
     if action != "SELL":
         held_positions, blocked = _resolve_momentum_positions(settings, kraken, rules, state, decision)
         if blocked:
