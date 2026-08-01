@@ -46,11 +46,49 @@ class ExternalMarketCandleIngestRequest(BaseModel):
     provider_symbol: str | None = None
     asset_id: str | None = None
     asset_type: str | None = None
+    name: str | None = None
+    exchange_code: str | None = None
+    currency: str | None = None
+    region: str | None = None
+    country: str | None = None
+    universe: str | None = None
+    isin: str | None = None
+    mic: str | None = None
+    pea_eligible: bool | None = None
+    ucits: bool | None = None
+    priority: int | None = None
     provider: str = "IBKR"
     timeframe: str = "1d"
     run_type: str = "external_ingest"
     queue_analysis: bool = False
     candles: list[ExternalMarketCandleIn] = Field(default_factory=list)
+
+
+def _symbol_suffix(*symbols: str | None) -> str | None:
+    for symbol in symbols:
+        if symbol and "." in symbol:
+            suffix = symbol.rsplit(".", 1)[-1].upper()
+            if suffix:
+                return suffix
+    return None
+
+
+def _ibkr_universe_name(payload: ExternalMarketCandleIngestRequest) -> str:
+    if payload.universe:
+        return payload.universe
+
+    asset_type = (payload.asset_type or "ETF").upper()
+    currency = (payload.currency or "").upper()
+    suffix = _symbol_suffix(payload.symbol, payload.provider_symbol)
+    if asset_type == "ETF" and currency == "EUR":
+        return "ETF Europe UCITS"
+    if asset_type == "ETF" and suffix == "PA":
+        return "ETF PEA"
+    if asset_type == "STOCK" and suffix == "PA":
+        return "Stocks Euronext Paris"
+    if asset_type == "STOCK" and (currency == "USD" or suffix == "US"):
+        return "Stocks US"
+    return "IBKR Imported"
 
 
 def _delete_table_rows(db: Session, table_name: str) -> int:
@@ -193,8 +231,44 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         symbol=payload.symbol,
         asset_type=payload.asset_type,
     )
+    asset_created = False
     if asset is None:
-        raise HTTPException(status_code=404, detail="No market asset matched asset_id, provider_symbol, or symbol")
+        symbol = payload.symbol or payload.provider_symbol
+        created_provider_symbol = payload.provider_symbol or payload.symbol
+        if not symbol or not created_provider_symbol:
+            raise HTTPException(status_code=422, detail="symbol or provider_symbol is required to create a market asset")
+
+        asset_type = (payload.asset_type or "ETF").upper()
+        suffix = _symbol_suffix(payload.symbol, payload.provider_symbol)
+        currency = payload.currency or ("EUR" if suffix == "PA" else "USD" if suffix == "US" else None)
+        universe_id = await repo.create_or_update_universe(
+            _ibkr_universe_name(payload),
+            description="Automatically created for IBKR candle ingestion",
+            region=payload.region,
+            asset_type=asset_type,
+            currency=currency,
+            provider="IBKR",
+            enabled=True,
+        )
+        asset_id = await repo.upsert_market_asset(
+            universe_id,
+            symbol=symbol,
+            provider_symbol=created_provider_symbol,
+            exchange_code=payload.exchange_code or suffix,
+            name=payload.name or symbol,
+            asset_type=asset_type,
+            region=payload.region,
+            country=payload.country,
+            currency=currency,
+            isin=payload.isin,
+            mic=payload.mic,
+            pea_eligible=payload.pea_eligible,
+            ucits=payload.ucits,
+            enabled=True,
+            priority=payload.priority or 100,
+        )
+        asset = await repo.find_market_asset_for_ingest(asset_id=asset_id)
+        asset_created = True
 
     run_id = await repo.create_import_run(
         payload.provider.upper(),
@@ -233,6 +307,7 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
     db.commit()
     return {
         "ok": True,
+        "asset_created": asset_created,
         "provider": payload.provider.upper(),
         "asset_id": str(asset["id"]),
         "symbol": asset.get("symbol"),
