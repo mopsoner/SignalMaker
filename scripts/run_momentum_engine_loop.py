@@ -23,6 +23,14 @@ DEFAULT_STARTING_CAPITAL = 1000.0
 DEFAULT_MIN_SCORE = 0.0
 
 
+def validated_cadence_hours(value: object) -> int:
+    try:
+        cadence_hours = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CADENCE_HOURS
+    return cadence_hours if cadence_hours >= 1 else DEFAULT_CADENCE_HOURS
+
+
 if __name__ == "__main__":
     print("Momentum engine worker started", flush=True)
     while True:
@@ -33,14 +41,16 @@ if __name__ == "__main__":
             bot = runtime.get("bot", {})
             momentum = runtime.get("momentum", {})
 
+            cadence_hours = validated_cadence_hours(
+                momentum.get("momentum_engine_cadence_hours", DEFAULT_CADENCE_HOURS)
+            )
             enabled = bot.get("bot_momentum_engine_enabled", momentum.get("momentum_engine_enabled", True))
             if not enabled:
-                print("Momentum engine disabled — sleeping 30s", flush=True)
+                print(f"Momentum engine disabled — cadence_hours={cadence_hours} sleeping 30s", flush=True)
                 time.sleep(30)
                 continue
 
             interval = int(bot.get("bot_momentum_engine_interval_sec", momentum.get("momentum_engine_interval_sec", DEFAULT_INTERVAL)))
-            cadence_hours = int(momentum.get("momentum_engine_cadence_hours", DEFAULT_CADENCE_HOURS))
             starting_capital = float(momentum.get("momentum_engine_starting_capital", DEFAULT_STARTING_CAPITAL))
             min_score = float(momentum.get("momentum_engine_min_score", DEFAULT_MIN_SCORE))
 
@@ -54,6 +64,7 @@ if __name__ == "__main__":
             best_asset = result.get("best_asset") or {}
             print(
                 "Momentum engine tick: "
+                f"cadence_hours={cadence_hours} "
                 f"due={result.get('due_now')} "
                 f"equity={result.get('equity')} "
                 f"pnl={result.get('total_pnl')} "

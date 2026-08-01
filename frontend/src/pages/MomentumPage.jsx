@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
@@ -80,6 +80,23 @@ function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = true) {
       starting_capital: STARTING_CAPITAL,
       min_momentum_score: MIN_MOMENTUM_SCORE,
     }),
+  })
+}
+
+async function loadMomentumCadence() {
+  const settings = await fetchJson('/api/v1/admin/settings')
+  return Number(settings?.momentum?.momentum_engine_cadence_hours || DEFAULT_CADENCE_HOURS)
+}
+
+async function persistMomentumCadence(cadenceHours) {
+  const settings = await fetchJson('/api/v1/admin/settings')
+  settings.momentum = {
+    ...(settings.momentum || {}),
+    momentum_engine_cadence_hours: Number(cadenceHours),
+  }
+  return fetchJson('/api/v1/admin/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
   })
 }
 
@@ -245,6 +262,25 @@ export default function MomentumPage() {
   const engineTimeline = useMemo(() => buildMomentumTimeline(engine), [engine])
   const quoteCurrency = useMemo(() => resolveMomentumQuote(engine, rows), [engine, rows])
 
+  useEffect(() => {
+    loadMomentumCadence()
+      .then(setCadenceHours)
+      .catch((err) => setEngineActionError(err.message || String(err)))
+  }, [])
+
+  async function onCadenceChange(value) {
+    const cadence = Number(value)
+    setEngineActionError(null)
+    try {
+      await persistMomentumCadence(cadence)
+      setCadenceHours(cadence)
+      setEngineOverride(null)
+      refreshEngine()
+    } catch (err) {
+      setEngineActionError(err.message || String(err))
+    }
+  }
+
   const counts = useMemo(() => ({
     all: rows.length,
     strong_bull: rows.filter((row) => row.classification === 'strong_bull').length,
@@ -393,7 +429,7 @@ export default function MomentumPage() {
           <button className="filter-chip active" type="button" onClick={() => onRunEngine(true)}>Run engine now</button>
           <button className="filter-chip" type="button" onClick={() => onRunEngine(false)}>Run only if due</button>
           <label className="market-toolbar-hint">Cadence{' '}
-            <select value={cadenceHours} onChange={(event) => { setCadenceHours(Number(event.target.value)); setEngineOverride(null) }}>
+            <select value={cadenceHours} onChange={(event) => onCadenceChange(event.target.value)}>
               <option value={1}>1h · default</option>
               <option value={4}>4h · macro rotation</option>
               <option value={8}>8h · calmer rotation</option>

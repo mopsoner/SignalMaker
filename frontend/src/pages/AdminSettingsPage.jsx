@@ -7,6 +7,7 @@ const EMPTY_SETTINGS = {
   strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_entry_rsi_min: 45, signal_entry_rsi_max: 65, signal_entry_rsi_timeframe: '1h', signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 25, planner_min_rr: 1.75 },
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
+  momentum: { momentum_engine_cadence_hours: 1 },
   live: { live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: false },
 }
 
@@ -47,6 +48,7 @@ export default function AdminSettingsPage() {
         strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) },
         notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
+        momentum: { ...EMPTY_SETTINGS.momentum, ...(data.momentum || {}) },
         live: { ...EMPTY_SETTINGS.live, ...(data.live || {}) },
       }
       setSettings(merged)
@@ -81,6 +83,7 @@ export default function AdminSettingsPage() {
         strategy: { ...EMPTY_SETTINGS.strategy, ...(saved.strategy || {}) },
         notifications: { ...EMPTY_SETTINGS.notifications, ...(saved.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(saved.bot || {}) },
+        momentum: { ...EMPTY_SETTINGS.momentum, ...(saved.momentum || {}) },
         live: { ...EMPTY_SETTINGS.live, ...(saved.live || {}) },
       }
       setSettings(merged)
@@ -219,6 +222,7 @@ export default function AdminSettingsPage() {
         <Field label="Scheduler interval sec"><input style={inputStyle} type="number" value={settings.bot.bot_scheduler_interval_sec} onChange={(e) => updateField('bot', 'bot_scheduler_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Executor limit"><input style={inputStyle} type="number" value={settings.bot.bot_executor_limit} onChange={(e) => updateField('bot', 'bot_executor_limit', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Executor quantity"><input style={inputStyle} type="number" step="0.1" value={settings.bot.bot_executor_quantity} onChange={(e) => updateField('bot', 'bot_executor_quantity', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Momentum engine cadence"><select style={inputStyle} value={settings.momentum.momentum_engine_cadence_hours} onChange={(e) => updateField('momentum', 'momentum_engine_cadence_hours', e.target.value, 'number')} disabled={loading}><option value={1}>1 hour (default)</option><option value={4}>4 hours</option><option value={8}>8 hours</option><option value={24}>24 hours</option></select></Field>
       </Section>
 
       <section className="panel">

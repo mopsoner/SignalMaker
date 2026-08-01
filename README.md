@@ -85,6 +85,14 @@ Then edit the database URL and runtime values.
 ## systemd templates
 Templates are available in `deploy/systemd/`.
 
+### Momentum cadence setting
+
+The momentum worker cadence is stored in `AppSetting` with category `momentum`
+and key `momentum_engine_cadence_hours`. Its default is one hour. Select 1, 4, 8,
+or 24 hours on the Momentum page or in **Admin Settings → Bot runtime → Momentum
+engine cadence**. The selection is persisted immediately and is used by the
+momentum worker on its next tick.
+
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.

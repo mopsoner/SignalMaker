@@ -10,6 +10,10 @@ from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
 
 
+MOMENTUM_CADENCE_KEY = "momentum_engine_cadence_hours"
+SUPPORTED_MOMENTUM_CADENCES = {1, 4, 8, 24}
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -25,6 +29,14 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 def _entry_rsi_timeframe(value: Any) -> str:
     value = str(value or "1h").strip().lower()
     return value if value in {"1h", "4h"} else "1h"
+
+
+def _momentum_cadence(value: Any, default: int = 1) -> int:
+    try:
+        cadence = int(value)
+    except (TypeError, ValueError):
+        return default
+    return cadence if cadence in SUPPORTED_MOMENTUM_CADENCES else default
 
 
 DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
@@ -106,6 +118,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             momentum.get("momentum_engine_enabled", True),
             default=True,
         )
+        momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum.get(MOMENTUM_CADENCE_KEY))
         return payload
     finally:
         if owns_session:
@@ -124,8 +137,11 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
         bot["bot_momentum_engine_enabled"] = _as_bool(bot["bot_momentum_engine_enabled"], default=True)
 
     momentum = payload.get("momentum")
-    if isinstance(momentum, dict) and "momentum_engine_enabled" in momentum:
-        momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
+    if isinstance(momentum, dict):
+        if "momentum_engine_enabled" in momentum:
+            momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
+        if MOMENTUM_CADENCE_KEY in momentum:
+            momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum[MOMENTUM_CADENCE_KEY])
 
     for category, values in payload.items():
         if not isinstance(values, dict):
@@ -162,4 +178,3 @@ def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
             "price_near_extreme_pct": strategy["signal_price_near_extreme_pct"],
         },
     }
-
