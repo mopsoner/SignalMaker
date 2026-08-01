@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -161,3 +161,61 @@ def test_crypto_and_stock_etf_tables_keep_independent_constraints_and_data():
     assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 1
     assert db.execute(text("SELECT provider FROM stock_etf_candles")).scalar_one() == "IBKR"
     db.close()
+
+
+@pytest.mark.parametrize("starting_schema", ["empty", "crypto_only", "partial_stock"])
+def test_stock_etf_schema_upgrade_is_idempotent_and_never_alters_crypto_table(starting_schema):
+    engine = create_engine("sqlite://")
+    if starting_schema == "crypto_only":
+        Base.metadata.create_all(bind=engine)
+    elif starting_schema == "partial_stock":
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE TABLE stock_etf_candles (id INTEGER PRIMARY KEY, asset_id TEXT, open NUMERIC)"
+            ))
+            # A matching name with the wrong definition must not fool introspection.
+            connection.execute(text(
+                "CREATE INDEX uq_stock_etf_candles_asset_provider_time "
+                "ON stock_etf_candles (asset_id)"
+            ))
+
+    statements = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    with Session(engine) as db:
+        repository = MarketDataRepository(db)
+        repository.ensure_schema()
+        repository.ensure_schema()
+
+        columns = {
+            row["name"]
+            for row in db.execute(text("PRAGMA table_info(stock_etf_candles)")).mappings()
+        }
+        assert {
+            "asset_id", "provider", "provider_symbol", "timeframe", "timestamp",
+            "open", "high", "low", "close", "adjusted_close", "volume",
+            "created_at", "updated_at",
+        } <= columns
+
+        indexes = {
+            row["name"]: row
+            for row in db.execute(text("PRAGMA index_list(stock_etf_candles)")).mappings()
+        }
+        assert indexes["uq_stock_etf_candles_asset_provider_time"]["unique"] == 1
+        assert indexes["uq_stock_etf_candles_asset_provider_time"]["partial"] == 0
+        unique_columns = [
+            row["name"]
+            for row in db.execute(text(
+                "PRAGMA index_info(uq_stock_etf_candles_asset_provider_time)"
+            )).mappings()
+        ]
+        assert unique_columns == ["asset_id", "provider", "timeframe", "timestamp"]
+        assert "idx_stock_etf_candles_asset_timeframe_timestamp" in indexes
+        assert "idx_stock_etf_candles_symbol_timeframe_timestamp" in indexes
+        assert "uq_market_candles_asset_provider_time" not in indexes
+
+    ddl = "\n".join(statements).lower()
+    assert "alter table market_candles" not in ddl
