@@ -3,7 +3,7 @@ from app.db.session import SessionLocal
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
 from signalmaker.data_providers.ibkr.client import IBKRClient
 from signalmaker.data_providers.ibkr.historical import IBKRHistoricalService
-from signalmaker.data_providers.eodhd.repository import EODHDRepository
+from signalmaker.market_data.repository import MarketDataRepository
 
 async def main():
     p=argparse.ArgumentParser(); p.add_argument('--limit', type=int); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--symbols')
@@ -11,7 +11,7 @@ async def main():
     ok=fail=0
     try:
       with SessionLocal() as db:
-        repo=EODHDRepository(db); repo.ensure_schema(); hist=IBKRHistoricalService(client, config)
+        repo=MarketDataRepository(db); repo.ensure_schema(); hist=IBKRHistoricalService(client, config)
         symbols=[s.strip() for s in args.symbols.split(',')] if args.symbols else None
         assets=await repo.list_enabled_market_assets(asset_type=args.asset_type, universe_name=args.universe, limit=args.limit, symbols=symbols)
         run_id=await repo.create_import_run('IBKR','daily_backfill', metadata={'universe':args.universe,'asset_type':args.asset_type,'symbols':symbols})

@@ -101,7 +101,9 @@ class MarketDataService:
         else:
             stmt = stmt.order_by(MarketCandle.ingested_at.desc())
 
-        stmt = stmt.limit(limit)
+        # Boundary lookups return exactly one candle unless the caller explicitly
+        # requests an ordinary range.
+        stmt = stmt.limit(1 if latest or first else limit)
         return list(self.db.scalars(stmt).all())
 
     def candle_summary(self, symbol: str | None = None, provider: str | None = None) -> list[dict[str, Any]]:

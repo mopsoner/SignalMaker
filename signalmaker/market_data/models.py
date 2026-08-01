@@ -1,1 +1,1 @@
-"""SQL DDL for isolated EODHD market data tables lives in migrations and repository.ensure_schema()."""
+"""SQL DDL for shared market data tables lives in migrations and repository.ensure_schema()."""

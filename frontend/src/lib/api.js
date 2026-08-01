@@ -78,7 +78,6 @@ export const api = {
   clearStockEtfGeneratedData: () => request('/api/v1/stocks-etfs/cleanup', { method: 'DELETE' }),
   marketDataSettings: () => request('/admin/market-data'),
   envSettings: () => request('/admin/env'),
-  testEodhd: () => request('/admin/market-data/test-eodhd', { method: 'POST' }),
   syncMarketAssets: () => request('/admin/market-data/sync-assets', { method: 'POST' }),
   runMarketAnalysis: (payload = {}) => request('/admin/market-data/analyze', { method: 'POST', body: JSON.stringify(payload) }),
   previewMarketAction: (payload = {}) => request('/admin/market-data/preview', { method: 'POST', body: JSON.stringify(payload) }),

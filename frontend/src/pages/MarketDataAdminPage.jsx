@@ -33,12 +33,11 @@ export default function MarketDataAdminPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Admin · ETF & Stock Market Data" subtitle="EODHD configuration, PEA/Europe universes and stock/ETF analysis controls. Secrets are never displayed in full." />
+    <PageHeader title="Admin · ETF & Stock Market Data" subtitle="IBKR configuration and dynamically discovered universes and stock/ETF analysis controls. Secrets are never displayed in full." />
     {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error">{error.message}</div> : null}
-    <div className="stats-grid"><StatCard label="Primary provider" value={data?.primary_provider || '—'} /><StatCard label="EODHD enabled" value={data?.eodhd_enabled ? 'Yes' : 'No'} /><StatCard label="API key" value={data?.eodhd_api_key_configured ? 'Configured' : 'Missing'} /><StatCard label="Assets / candles" value={`${data?.total_assets || 0} / ${data?.total_candles || 0}`} /></div>
+    <div className="stats-grid"><StatCard label="Primary provider" value={data?.primary_provider || '—'} /><StatCard label="IBKR enabled" value={data?.ibkr_enabled ? 'Yes' : 'No'} /><StatCard label="IBKR auth" value={data?.ibkr_auth_method || '—'} /><StatCard label="Assets / candles" value={`${data?.total_assets || 0} / ${data?.total_candles || 0}`} /></div>
     <section className="panel"><h2>Actions</h2><div className="page-actions" style={{ flexWrap: 'wrap', marginTop: 12 }}>
       <select value={universe} onChange={(e) => setUniverse(e.target.value)}><option>ETF PEA</option><option>ETF Europe UCITS</option><option>Stocks Euronext Paris</option><option>Stocks Europe</option><option>Benchmark Indices</option><option>US Benchmarks</option></select>
-      <button className="button" onClick={() => action('Test EODHD', api.testEodhd)}>Test EODHD connection</button>
       <button className="button" onClick={() => action('Sync assets', api.syncMarketAssets)}>Run asset sync</button>
       <button className="button" onClick={() => action('Run momentum', () => api.runMarketAnalysis({ engine: 'momentum', universe, limit: 50 }))}>Run Momentum</button>
       <button className="button" onClick={() => action('Run Wyckoff SMC', () => api.runMarketAnalysis({ engine: 'wyckoff_smc', universe, limit: 50 }))}>Run Wyckoff SMC</button>

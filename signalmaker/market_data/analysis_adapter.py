@@ -3,11 +3,11 @@ from __future__ import annotations
 from statistics import fmean
 from typing import Any
 
-from signalmaker.data_providers.eodhd.repository import EODHDRepository
+from signalmaker.market_data.repository import MarketDataRepository
 
 
 class MarketAnalysisAdapter:
-    def __init__(self, repo: EODHDRepository):
+    def __init__(self, repo: MarketDataRepository):
         self.repo = repo
 
     async def load_candles_for_asset(self, asset_id, timeframe="1d"):
