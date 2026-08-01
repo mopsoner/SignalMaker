@@ -33,6 +33,8 @@ class MomentumEngineService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
+        self._active_event_key: str | None = None
+        self._pending_event_key: str | None = None
 
     def status(self, *, cadence_hours: int = 1, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
         rankings = self._rankings()
@@ -83,6 +85,9 @@ class MomentumEngineService:
             "recommendation": message,
             "reason": message,
             "due_now": False,
+            "cadence_due": False,
+            "event_due": False,
+            "due_reason": None,
             "open_position": None,
             "best_asset": None,
             "top_watch_asset": None,
@@ -99,11 +104,16 @@ class MomentumEngineService:
             starting_capital=starting_capital,
             min_momentum_score=min_momentum_score,
         )
+        # Urgent market events are part of `due_now`, so this guard must remain
+        # after the status/event evaluation.  In particular, risk exits must not
+        # wait for the hourly cadence.
         if not force and not before["due_now"]:
             decision = self._decision_from_status(before)
             self._save_current_decision(decision)
             self.db.commit()
             return before
+
+        self._active_event_key = self._pending_event_key if before.get("event_due") else None
 
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
@@ -182,6 +192,7 @@ class MomentumEngineService:
                 starting_capital=starting_capital,
                 min_momentum_score=min_momentum_score,
             )
+            status = self._status_for_execution(status, before=before, force=force)
             decision = self._decision_from_status(status)
             self._save_current_decision(decision)
             self.db.commit()
@@ -205,6 +216,7 @@ class MomentumEngineService:
                 starting_capital=starting_capital,
                 min_momentum_score=min_momentum_score,
             )
+            status = self._status_for_execution(status, before=before, force=force)
             decision = self._decision_from_status(status)
             self._save_current_decision(decision)
             self.db.commit()
@@ -223,6 +235,7 @@ class MomentumEngineService:
             starting_capital=starting_capital,
             min_momentum_score=min_momentum_score,
         )
+        status = self._status_for_execution(status, before=before, force=force)
         decision = self._decision_from_status(status)
         self._save_current_decision(decision)
         self.db.commit()
@@ -250,8 +263,20 @@ class MomentumEngineService:
         last_trade = self._last_check_trade()
         now = datetime.now(timezone.utc)
         last_check_at = self._as_utc(last_trade.created_at) if last_trade else None
-        next_check_at = last_check_at + timedelta(hours=cadence_hours) if last_check_at else None
-        due_now = next_check_at is None or now >= next_check_at
+        # A newly opened position is also a check timestamp.  This keeps a
+        # position created outside this method from being checked immediately.
+        cadence_anchor = last_check_at
+        if open_position and (cadence_anchor is None or self._as_utc(open_position.opened_at) > cadence_anchor):
+            cadence_anchor = self._as_utc(open_position.opened_at)
+        next_check_at = cadence_anchor + timedelta(hours=cadence_hours) if cadence_anchor else None
+        cadence_due = next_check_at is None or now >= next_check_at
+        event_due, event_reason, _ = self._is_event_due(
+            open_position=open_position,
+            current_asset=current_asset,
+            best_asset=best_asset,
+        )
+        due_now = cadence_due or event_due
+        due_reason = event_reason if event_due else ("cadence_elapsed" if cadence_due else None)
         cash = self._cash_balance(starting_capital=starting_capital)
         equity = cash + self._open_position_value(open_position, rankings=rankings)
         total_pnl = equity - starting_capital
@@ -274,9 +299,51 @@ class MomentumEngineService:
             "last_check_at": last_check_at,
             "next_check_at": next_check_at,
             "due_now": due_now,
+            "cadence_due": cadence_due,
+            "event_due": event_due,
+            "due_reason": due_reason,
             "recommendation": recommendation,
             "trades": self._recent_trades(limit=50),
         }
+
+    def _is_event_due(
+        self,
+        *,
+        open_position: MomentumEnginePosition | None,
+        current_asset: dict[str, Any] | None,
+        best_asset: dict[str, Any] | None,
+    ) -> tuple[bool, str | None, str | None]:
+        """Return urgent, idempotent triggers independent of the hourly cadence.
+
+        Broken support is urgent. A newly eligible better-ranked asset is *not*
+        urgent: rotation opportunities are deliberately evaluated only on the
+        cadence (or when forced), avoiding churn on every five-minute poll.
+        """
+        del best_asset  # Documents that ranking replacements are cadence-only.
+        self._pending_event_key = None
+        if not open_position or not self._structure_broken(current_asset):
+            return False, None, None
+        event_state = (
+            current_asset.get("structure_broken_at")
+            or current_asset.get("momentum_candle_time_15m")
+            or current_asset.get("calculated_at")
+            or current_asset.get("structure_reason")
+            or "broken"
+        ) if current_asset else "missing"
+        event_key = f"support_broken:{open_position.position_id}:{event_state}"
+        self._pending_event_key = event_key
+        last_trade = self._last_check_trade()
+        if last_trade and (last_trade.meta or {}).get("event_key") == event_key:
+            return False, None, event_key
+        return True, "support_broken", event_key
+
+    def _status_for_execution(self, status: dict[str, Any], *, before: dict[str, Any], force: bool) -> dict[str, Any]:
+        """Keep the trigger visible in the run response after recording it."""
+        status["cadence_due"] = before["cadence_due"]
+        status["event_due"] = before["event_due"]
+        status["due_now"] = before["due_now"]
+        status["due_reason"] = before.get("due_reason") or ("forced" if force else None)
+        return status
 
 
     def _decision_from_status(self, status: dict[str, Any]) -> dict[str, Any]:
@@ -695,6 +762,9 @@ class MomentumEngineService:
         )
 
     def _record_trade(self, *, action: str, symbol: str, price: float, quantity: float, value: float, pnl: float, reason: str, meta: dict[str, Any] | None = None) -> MomentumEngineTrade:
+        trade_meta = dict(meta or {})
+        if self._active_event_key:
+            trade_meta["event_key"] = self._active_event_key
         trade = MomentumEngineTrade(
             trade_id=f"momtrade-{uuid4().hex}",
             strategy=self.STRATEGY,
@@ -705,7 +775,7 @@ class MomentumEngineService:
             value=float(value or 0),
             pnl=float(pnl or 0),
             reason=reason,
-            meta=meta or {},
+            meta=trade_meta,
             created_at=datetime.now(timezone.utc),
         )
         self.db.add(trade)
