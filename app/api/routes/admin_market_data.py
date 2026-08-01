@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
@@ -9,9 +10,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
-from signalmaker.data_providers.eodhd.config import get_eodhd_config
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
-from signalmaker.data_providers.eodhd.repository import EODHDRepository
+from signalmaker.market_data.repository import MarketDataRepository
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
 
@@ -57,11 +57,11 @@ class ExternalMarketCandleIngestRequest(BaseModel):
     pea_eligible: bool | None = None
     ucits: bool | None = None
     priority: int | None = None
-    provider: str = "IBKR"
+    provider: Literal["IBKR"] = "IBKR"
     timeframe: str = "1d"
     run_type: str = "external_ingest"
     queue_analysis: bool = False
-    candles: list[ExternalMarketCandleIn] = Field(default_factory=list)
+    candles: list[ExternalMarketCandleIn] = Field(min_length=1)
 
 
 def _symbol_suffix(*symbols: str | None) -> str | None:
@@ -104,8 +104,8 @@ def _delete_table_rows(db: Session, table_name: str) -> int:
         raise
 
 
-def _repo(db: Session) -> EODHDRepository:
-    repo = EODHDRepository(db)
+def _repo(db: Session) -> MarketDataRepository:
+    repo = MarketDataRepository(db)
     repo.ensure_schema()
     return repo
 
@@ -317,19 +317,15 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         "upserted": upserted,
         "import_run_id": run_id,
         "queued_analysis_job_id": queued_job_id,
+        "diagnostics": {
+            "schema": "ok",
+            "asset_resolution": "created" if asset_created else "matched",
+            "import_run": "created",
+            "candle_upsert": {"status": "ok", "count": upserted},
+            "analysis_queue": "queued" if queued_job_id is not None else "skipped",
+            "transaction": "committed",
+        },
     }
-
-
-@router.post('/admin/market-data/test-eodhd')
-async def test_eodhd():
-    from signalmaker.data_providers.eodhd.client import EODHDClient
-    cfg = get_eodhd_config()
-    client = EODHDClient(cfg)
-    try:
-        sample = await client.get_json('eod/AIR.PA', {'from': cfg.start_date, 'period': 'd'})
-        return {'ok': True, 'rows': len(sample) if isinstance(sample, list) else None}
-    finally:
-        await client.close()
 
 
 @router.post('/admin/market-data/test-ibkr')
@@ -387,7 +383,7 @@ async def queue_market_job(payload: dict | None = None, db: Session = Depends(ge
 
 @router.post('/admin/market-data/backfill')
 async def backfill(payload: dict | None = None):
-    return {'accepted': True, 'message': 'Run python -m signalmaker.jobs.eodhd_backfill_daily or python -m signalmaker.jobs.ibkr_backfill_daily for controlled backfills.', 'payload': payload or {}}
+    return {'accepted': True, 'message': 'Run python -m signalmaker.jobs.ibkr_backfill_daily for controlled backfills.', 'payload': payload or {}}
 
 
 @router.post('/admin/market-data/analyze')

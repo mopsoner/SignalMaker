@@ -1,13 +1,13 @@
 import argparse, asyncio
 from app.db.session import SessionLocal
-from signalmaker.data_providers.eodhd.repository import EODHDRepository
+from signalmaker.market_data.repository import MarketDataRepository
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 
 async def main():
  p=argparse.ArgumentParser(); p.add_argument('--engine', choices=['momentum','wyckoff_smc','both'], default='both'); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--limit', type=int, default=50); p.add_argument('--timeframe', default='1d')
  args=p.parse_args(); ok=fail=0
  with SessionLocal() as db:
-  repo=EODHDRepository(db); repo.ensure_schema(); adapter=MarketAnalysisAdapter(repo)
+  repo=MarketDataRepository(db); repo.ensure_schema(); adapter=MarketAnalysisAdapter(repo)
   assets=await repo.list_enabled_market_assets(asset_type=args.asset_type, universe_name=args.universe, limit=args.limit)
   engines=['momentum','wyckoff_smc'] if args.engine=='both' else [args.engine]
   run_id=await repo.create_analysis_run(args.engine, timeframe=args.timeframe, metadata={'universe':args.universe,'asset_type':args.asset_type})

@@ -1,1 +1,1 @@
-from signalmaker.data_providers.eodhd.repository import EODHDRepository
+from signalmaker.market_data.repository import MarketDataRepository

@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS market_universes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL,
-  region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'EODHD',
+  region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR',
   enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS market_assets (
 );
 
 ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS asset_id UUID NULL REFERENCES market_assets(id);
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'EODHD';
+ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'IBKR';
 ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS provider_symbol TEXT NULL;
 ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NULL;
 ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP NULL;

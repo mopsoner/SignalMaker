@@ -11,7 +11,7 @@ def _row(row: Any) -> dict[str, Any]:
     return dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
 
 
-class EODHDRepository:
+class MarketDataRepository:
     def __init__(self, db: Session):
         self.db = db
 
@@ -64,7 +64,7 @@ class EODHDRepository:
 
     async def create_or_update_universe(self, name: str, description: str | None = None, region: str | None = None,
                                         asset_type: str | None = None, currency: str | None = None,
-                                        provider: str = "EODHD", enabled: bool = True):
+                                        provider: str = "IBKR", enabled: bool = True):
         q = text("""
         INSERT INTO market_universes (name, description, region, asset_type, currency, provider, enabled, updated_at)
         VALUES (:name, :description, :region, :asset_type, :currency, :provider, :enabled, CURRENT_TIMESTAMP)
@@ -130,17 +130,37 @@ class EODHDRepository:
     async def list_enabled_assets_by_universe(self, universe_name: str, limit: int | None = None):
         return await self.list_enabled_market_assets(universe_name=universe_name, limit=limit)
 
+    def _market_candle_columns(self) -> set[str]:
+        if self.db.get_bind().dialect.name == "sqlite":
+            return {row[1] for row in self.db.execute(text("PRAGMA table_info(market_candles)")).all()}
+        rows = self.db.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='market_candles'")).all()
+        return {row[0] for row in rows}
+
     async def upsert_market_candles(self, asset_id, provider: str, provider_symbol: str, timeframe: str, candles: list) -> int:
-        q = text("""
-        INSERT INTO market_candles (asset_id,provider,provider_symbol,timeframe,timestamp,open,high,low,close,adjusted_close,volume,updated_at)
-        VALUES (:asset_id,:provider,:provider_symbol,:timeframe,:timestamp,:open,:high,:low,:close,:adjusted_close,:volume,CURRENT_TIMESTAMP)
-        ON CONFLICT(asset_id, provider, timeframe, timestamp) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,adjusted_close=excluded.adjusted_close,volume=excluded.volume,updated_at=CURRENT_TIMESTAMP
-        """)
-        count = 0
-        for c in candles:
-            self.db.execute(q, {"asset_id": asset_id, "provider": provider, "provider_symbol": provider_symbol, "timeframe": timeframe, "timestamp": c.timestamp, "open": c.open, "high": c.high, "low": c.low, "close": c.close, "adjusted_close": c.adjusted_close, "volume": c.volume})
-            count += 1
-        return count
+        """Upsert provider candles while satisfying both shared and legacy candle schemas."""
+        columns = self._market_candle_columns()
+        shared = ["asset_id", "provider", "provider_symbol", "timeframe", "timestamp", "open", "high", "low", "close", "adjusted_close", "volume"]
+        legacy = ["candle_id", "symbol", "interval", "open_time", "close_time", "quote_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"]
+        insert_columns = [name for name in shared + legacy if name in columns]
+        update_columns = [name for name in ("provider_symbol", "open", "high", "low", "close", "adjusted_close", "volume", "close_time") if name in columns]
+        conflict = "asset_id, provider, timeframe, timestamp"
+        assignments = ", ".join(f"{name}=excluded.{name}" for name in update_columns)
+        sql = f"INSERT INTO market_candles ({', '.join(insert_columns)}) VALUES ({', '.join(':'+name for name in insert_columns)}) ON CONFLICT({conflict}) DO UPDATE SET {assignments}"
+        for candle in candles:
+            timestamp = candle.timestamp
+            epoch_ms = int(timestamp.timestamp() * 1000)
+            close_time = getattr(candle, "close_time", None) or epoch_ms
+            values = {
+                "asset_id": asset_id, "provider": provider, "provider_symbol": provider_symbol,
+                "timeframe": timeframe, "timestamp": timestamp, "open": candle.open, "high": candle.high,
+                "low": candle.low, "close": candle.close, "adjusted_close": getattr(candle, "adjusted_close", None),
+                "volume": getattr(candle, "volume", None) or 0, "candle_id": f"{provider}:{provider_symbol}:{timeframe}:{epoch_ms}",
+                "symbol": provider_symbol, "interval": timeframe, "open_time": getattr(candle, "open_time", None) or epoch_ms,
+                "close_time": close_time, "quote_volume": 0, "number_of_trades": 0,
+                "taker_buy_base_volume": 0, "taker_buy_quote_volume": 0,
+            }
+            self.db.execute(text(sql), {key: values[key] for key in insert_columns})
+        return len(candles)
 
     async def create_import_run(self, provider: str, run_type: str, status: str = "RUNNING", metadata: dict | None = None):
         return self.db.execute(text("INSERT INTO market_data_import_runs (provider,run_type,status,metadata) VALUES (:provider,:run_type,:status,:metadata) RETURNING id"), {"provider":provider,"run_type":run_type,"status":status,"metadata":json.dumps(metadata or {})}).scalar_one()
@@ -213,10 +233,10 @@ class EODHDRepository:
         query = """
         SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency,
                a.priority, u.name AS universe_name,
-               COUNT(c.id) AS candles_count, MIN(c.timestamp) AS first_candle_at, MAX(c.timestamp) AS last_candle_at,
+               COUNT(c.asset_id) AS candles_count, MIN(c.timestamp) AS first_candle_at, MAX(c.timestamp) AS last_candle_at,
                MAX(r.created_at) AS last_analysis_at,
                CASE
-                 WHEN COUNT(c.id) = 0 THEN 'MISSING'
+                 WHEN COUNT(c.asset_id) = 0 THEN 'MISSING'
                  WHEN MAX(c.timestamp) < CURRENT_TIMESTAMP - INTERVAL '7 days' THEN 'STALE'
                  ELSE 'OK'
                END AS data_status
@@ -304,9 +324,9 @@ class EODHDRepository:
 
 _POSTGRES_SCHEMA = [
 "CREATE EXTENSION IF NOT EXISTS pgcrypto",
-"CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'EODHD', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
+"CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
 "CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
-"CREATE TABLE IF NOT EXISTS market_candles (id BIGSERIAL, asset_id UUID NULL REFERENCES market_assets(id), provider TEXT DEFAULT 'EODHD', provider_symbol TEXT, timeframe TEXT, timestamp TIMESTAMP, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
+"CREATE TABLE IF NOT EXISTS market_candles (id BIGSERIAL, asset_id UUID NULL REFERENCES market_assets(id), provider TEXT DEFAULT 'IBKR', provider_symbol TEXT, timeframe TEXT, timestamp TIMESTAMP, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
 "CREATE UNIQUE INDEX IF NOT EXISTS uq_market_candles_asset_provider_time ON market_candles(asset_id, provider, timeframe, timestamp) WHERE asset_id IS NOT NULL",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id BIGSERIAL PRIMARY KEY, engine_name TEXT NOT NULL, universe_id UUID NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata JSONB NULL, error_message TEXT NULL)",

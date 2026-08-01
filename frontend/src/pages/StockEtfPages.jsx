@@ -39,7 +39,7 @@ function ResultsTable({ rows, engine }) {
     { key: 'engine', title: 'Engine', render: (row) => row.engine_name || engine, sortValue: (row) => row.engine_name || engine },
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.created_at), sortValue: (row) => row.created_at },
   ]
-  return <FoldableTable rows={rows} columns={columns} initialSortKey="score" initialSortDirection="desc" emptyMessage="No EODHD analysis results yet. Sync assets, backfill daily candles, then run analysis from Admin Market Data." />
+  return <FoldableTable rows={rows} columns={columns} initialSortKey="score" initialSortDirection="desc" emptyMessage="No IBKR analysis results yet. Sync assets, backfill daily candles, then run analysis from Admin Market Data." />
 }
 
 function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsOnly = false }) {
@@ -56,7 +56,7 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   const counts = useMemo(() => ({ total: rows.length, buy: rows.filter((r) => r.signal === 'BUY').length, sell: rows.filter((r) => r.signal === 'SELL').length, hold: rows.filter((r) => ['HOLD', 'NO_SIGNAL'].includes(r.signal)).length }), [rows])
   return <div className="page-stack">
     <PageHeader title={title} subtitle={subtitle} />
-    <div className="panel"><strong>Phase 1 Stock/ETF mode:</strong> daily EODHD data only · no realtime stream · no broker execution · isolated from crypto decision flows.</div>
+    <div className="panel"><strong>Phase 1 Stock/ETF mode:</strong> daily IBKR data · no realtime stream · no broker execution · isolated from crypto decision flows.</div>
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="stats-grid"><StatCard label="Results" value={counts.total} /><StatCard label="Buy" value={counts.buy} /><StatCard label="Sell" value={counts.sell} /><StatCard label="Hold / No signal" value={counts.hold} /></div>
     {loading ? <div className="panel">Loading…</div> : null}
@@ -65,10 +65,10 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   </div>
 }
 
-export function StockEtfWyckoffDashboardPage() { return <Dashboard engine="wyckoff_smc" title="ETF & Stocks · Wyckoff SMC Dashboard" subtitle="Daily EODHD stock/ETF candles adapted into the existing Wyckoff-SMC workflow without touching the crypto process." /> }
-export function StockEtfTradeCandidatesPage() { return <Dashboard engine="wyckoff_smc" candidatesOnly title="ETF & Stocks · Trade Candidates" subtitle="BUY/SELL candidates generated from stock/ETF EODHD daily analysis results." /> }
+export function StockEtfWyckoffDashboardPage() { return <Dashboard engine="wyckoff_smc" title="ETF & Stocks · Wyckoff SMC Dashboard" subtitle="Daily IBKR stock/ETF candles adapted into the existing Wyckoff-SMC workflow without touching the crypto process." /> }
+export function StockEtfTradeCandidatesPage() { return <Dashboard engine="wyckoff_smc" candidatesOnly title="ETF & Stocks · Trade Candidates" subtitle="BUY/SELL candidates generated from stock/ETF IBKR daily analysis results." /> }
 export function StockEtfPositionsPage() { return <Dashboard engine="wyckoff_smc" positionsOnly title="ETF & Stocks · Positions" subtitle="Phase-1 paper/watch positions inferred from BUY analysis results; no broker execution or IBKR dependency." /> }
-export function StockEtfMomentumDashboardPage() { return <Dashboard engine="momentum" title="ETF & Stocks · Momentum Dashboard" subtitle="Daily EODHD stock/ETF candles adapted for the momentum dashboard layer." /> }
+export function StockEtfMomentumDashboardPage() { return <Dashboard engine="momentum" title="ETF & Stocks · Momentum Dashboard" subtitle="Daily IBKR stock/ETF candles adapted for the momentum dashboard layer." /> }
 
 
 function QualityTable({ rows }) {
@@ -90,7 +90,7 @@ export function StockEtfDataQualityPage() {
   const q = query(universe, assetType, 'limit=500')
   const { data = [], loading, error } = usePollingQuery(useCallback(() => api.stockEtfFreshness(q), [q]), 30000)
   return <div className="page-stack">
-    <PageHeader title="ETF & Stocks · Data Quality" subtitle="Freshness, candle coverage and stale-analysis checks for isolated EODHD daily candles." />
+    <PageHeader title="ETF & Stocks · Data Quality" subtitle="Freshness, candle coverage and stale-analysis checks for isolated IBKR daily candles." />
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="page-actions"><a className="button" href={api.stockEtfExportUrl(query(universe, assetType, 'kind=quality&limit=500'))}>Export CSV</a></div>
     {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error">{error.message}</div> : null}
