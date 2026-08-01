@@ -163,7 +163,7 @@ async def stocks_etfs_positions(universe: str | None = None, asset_type: str | N
 @router.get('/api/v1/stocks-etfs/data-quality')
 async def stocks_etfs_data_quality(universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
     repo = _repo(db)
-    return await repo.candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
+    return await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
 
 
 @router.get('/api/v1/stocks-etfs/freshness')
@@ -210,7 +210,7 @@ async def clear_stocks_etfs_generated_data(db: Session = Depends(get_db)):
 async def stocks_etfs_export_csv(kind: str = 'results', engine: str | None = None, universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
     repo = _repo(db)
     if kind == 'quality':
-        rows = await repo.candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
+        rows = await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
     elif kind == 'confluence':
         rows = await repo.confluence_results(universe_name=universe, asset_type=asset_type, limit=limit)
     elif kind == 'assets':
@@ -284,7 +284,7 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         },
     )
     candles = [SimpleNamespace(**candle.model_dump()) for candle in payload.candles]
-    upserted = await repo.upsert_market_candles(
+    upserted = await repo.upsert_stock_etf_candles(
         asset["id"],
         payload.provider.upper(),
         asset.get("provider_symbol") or provider_symbol or payload.symbol or "",
