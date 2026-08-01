@@ -10,8 +10,8 @@ class MarketAnalysisAdapter:
     def __init__(self, repo: MarketDataRepository):
         self.repo = repo
 
-    async def load_candles_for_asset(self, asset_id, timeframe="1d"):
-        return await self.repo.load_candles_for_asset(asset_id, timeframe)
+    async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
+        return await self.repo.load_stock_etf_candles_for_asset(asset_id, timeframe)
 
     def to_engine_input(self, candles):
         return [{
@@ -21,7 +21,7 @@ class MarketAnalysisAdapter:
         } for c in candles]
 
     async def run_momentum_analysis(self, asset_id, timeframe="1d"):
-        candles = self.to_engine_input(await self.load_candles_for_asset(asset_id, timeframe))
+        candles = self.to_engine_input(await self.load_stock_etf_candles_for_asset(asset_id, timeframe))
         if len(candles) < 200:
             return self._no_signal("momentum", len(candles), 200)
         closes = [c["close"] for c in candles]
@@ -32,7 +32,7 @@ class MarketAnalysisAdapter:
         return {"engine_name": "momentum", "signal": signal, "score": score, "trend": "UP" if last > ma200 else "DOWN", "confidence": min(1.0, abs(score) / 25), "payload": {"ma50": ma50, "ma200": ma200, "return_20d_pct": ret_20, "candles_count": len(candles)}}
 
     async def run_wyckoff_smc_analysis(self, asset_id, timeframe="1d"):
-        candles = self.to_engine_input(await self.load_candles_for_asset(asset_id, timeframe))
+        candles = self.to_engine_input(await self.load_stock_etf_candles_for_asset(asset_id, timeframe))
         if len(candles) < 100:
             return self._no_signal("wyckoff_smc", len(candles), 100)
         highs = [c["high"] for c in candles[-50:]]; lows = [c["low"] for c in candles[-50:]]; close = candles[-1]["close"]

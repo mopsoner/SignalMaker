@@ -27,40 +27,9 @@ class MarketDataRepository:
                 self.db.execute(text(stmt))
             except Exception:
                 self.db.rollback()
-        self._ensure_market_candle_columns(dialect)
         self._ensure_job_requests_table()
         self.db.commit()
 
-
-    def _ensure_market_candle_columns(self, dialect: str) -> None:
-        required = {
-            "asset_id": "TEXT" if dialect == "sqlite" else "UUID",
-            "provider": "TEXT",
-            "provider_symbol": "TEXT",
-            "timeframe": "TEXT",
-            "timestamp": "TIMESTAMP",
-            "adjusted_close": "NUMERIC",
-            "created_at": "TIMESTAMP",
-            "updated_at": "TIMESTAMP",
-        }
-        existing = set()
-        if dialect == "sqlite":
-            existing = {r[1] for r in self.db.execute(text("PRAGMA table_info(market_candles)")).all()}
-        else:
-            rows = self.db.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='market_candles'")).all()
-            existing = {r[0] for r in rows}
-        for name, typ in required.items():
-            if name in existing:
-                continue
-            default = " DEFAULT CURRENT_TIMESTAMP" if name in {"created_at", "updated_at"} else ""
-            try:
-                self.db.execute(text(f"ALTER TABLE market_candles ADD COLUMN {name} {typ}{default}"))
-            except Exception:
-                self.db.rollback()
-        try:
-            self.db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_market_candles_asset_provider_time ON market_candles(asset_id, provider, timeframe, timestamp)"))
-        except Exception:
-            self.db.rollback()
 
     async def create_or_update_universe(self, name: str, description: str | None = None, region: str | None = None,
                                         asset_type: str | None = None, currency: str | None = None,
@@ -130,36 +99,25 @@ class MarketDataRepository:
     async def list_enabled_assets_by_universe(self, universe_name: str, limit: int | None = None):
         return await self.list_enabled_market_assets(universe_name=universe_name, limit=limit)
 
-    def _market_candle_columns(self) -> set[str]:
-        if self.db.get_bind().dialect.name == "sqlite":
-            return {row[1] for row in self.db.execute(text("PRAGMA table_info(market_candles)")).all()}
-        rows = self.db.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='market_candles'")).all()
-        return {row[0] for row in rows}
-
-    async def upsert_market_candles(self, asset_id, provider: str, provider_symbol: str, timeframe: str, candles: list) -> int:
-        """Upsert provider candles while satisfying both shared and legacy candle schemas."""
-        columns = self._market_candle_columns()
-        shared = ["asset_id", "provider", "provider_symbol", "timeframe", "timestamp", "open", "high", "low", "close", "adjusted_close", "volume"]
-        legacy = ["candle_id", "symbol", "interval", "open_time", "close_time", "quote_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"]
-        insert_columns = [name for name in shared + legacy if name in columns]
-        update_columns = [name for name in ("provider_symbol", "open", "high", "low", "close", "adjusted_close", "volume", "close_time") if name in columns]
-        conflict = "asset_id, provider, timeframe, timestamp"
-        assignments = ", ".join(f"{name}=excluded.{name}" for name in update_columns)
-        sql = f"INSERT INTO market_candles ({', '.join(insert_columns)}) VALUES ({', '.join(':'+name for name in insert_columns)}) ON CONFLICT({conflict}) DO UPDATE SET {assignments}"
+    async def upsert_stock_etf_candles(self, asset_id, provider: str, provider_symbol: str, timeframe: str, candles: list) -> int:
+        """Upsert STOCK/ETF candles without touching the crypto candle table."""
+        sql = """
+        INSERT INTO stock_etf_candles
+          (asset_id, provider, provider_symbol, timeframe, timestamp, open, high, low, close, adjusted_close, volume)
+        VALUES
+          (:asset_id, :provider, :provider_symbol, :timeframe, :timestamp, :open, :high, :low, :close, :adjusted_close, :volume)
+        ON CONFLICT (asset_id, provider, timeframe, timestamp) DO UPDATE SET
+          provider_symbol=excluded.provider_symbol, open=excluded.open, high=excluded.high,
+          low=excluded.low, close=excluded.close, adjusted_close=excluded.adjusted_close,
+          volume=excluded.volume, updated_at=CURRENT_TIMESTAMP
+        """
         for candle in candles:
-            timestamp = candle.timestamp
-            epoch_ms = int(timestamp.timestamp() * 1000)
-            close_time = getattr(candle, "close_time", None) or epoch_ms
-            values = {
+            self.db.execute(text(sql), {
                 "asset_id": asset_id, "provider": provider, "provider_symbol": provider_symbol,
-                "timeframe": timeframe, "timestamp": timestamp, "open": candle.open, "high": candle.high,
+                "timeframe": timeframe, "timestamp": candle.timestamp, "open": candle.open, "high": candle.high,
                 "low": candle.low, "close": candle.close, "adjusted_close": getattr(candle, "adjusted_close", None),
-                "volume": getattr(candle, "volume", None) or 0, "candle_id": f"{provider}:{provider_symbol}:{timeframe}:{epoch_ms}",
-                "symbol": provider_symbol, "interval": timeframe, "open_time": getattr(candle, "open_time", None) or epoch_ms,
-                "close_time": close_time, "quote_volume": 0, "number_of_trades": 0,
-                "taker_buy_base_volume": 0, "taker_buy_quote_volume": 0,
-            }
-            self.db.execute(text(sql), {key: values[key] for key in insert_columns})
+                "volume": getattr(candle, "volume", None),
+            })
         return len(candles)
 
     async def create_import_run(self, provider: str, run_type: str, status: str = "RUNNING", metadata: dict | None = None):
@@ -177,8 +135,8 @@ class MarketDataRepository:
     async def insert_analysis_result(self, analysis_run_id, asset_id, engine_name: str, timeframe: str, result: dict):
         self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,signal,score,trend,confidence,payload) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:signal,:score,:trend,:confidence,:payload)"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload":json.dumps(result.get("payload", {}))})
 
-    async def load_candles_for_asset(self, asset_id, timeframe="1d"):
-        return [_row(r) for r in self.db.execute(text("SELECT * FROM market_candles WHERE asset_id=:asset_id AND timeframe=:timeframe ORDER BY timestamp ASC"), {"asset_id": asset_id, "timeframe": timeframe}).all()]
+    async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
+        return [_row(r) for r in self.db.execute(text("SELECT * FROM stock_etf_candles WHERE asset_id=:asset_id AND timeframe=:timeframe ORDER BY timestamp ASC"), {"asset_id": asset_id, "timeframe": timeframe}).all()]
 
 
     async def list_market_universes(self):
@@ -229,7 +187,7 @@ class MarketDataRepository:
         row = self.db.execute(text("SELECT * FROM market_analysis_runs ORDER BY started_at DESC LIMIT 1")).first()
         return _row(row) if row else None
 
-    async def candle_quality(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500):
+    async def stock_etf_candle_quality(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500):
         query = """
         SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency,
                a.priority, u.name AS universe_name,
@@ -242,7 +200,7 @@ class MarketDataRepository:
                END AS data_status
         FROM market_assets a
         LEFT JOIN market_universes u ON u.id = a.universe_id
-        LEFT JOIN market_candles c ON c.asset_id = a.id AND c.timeframe = '1d'
+        LEFT JOIN stock_etf_candles c ON c.asset_id = a.id AND c.timeframe = '1d'
         LEFT JOIN market_analysis_results r ON r.asset_id = a.id
         WHERE a.enabled = true
         """
@@ -257,7 +215,7 @@ class MarketDataRepository:
         return [_row(r) for r in self.db.execute(text(query), params).all()]
 
     async def analysis_freshness(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500):
-        rows = await self.candle_quality(universe_name=universe_name, asset_type=asset_type, limit=limit)
+        rows = await self.stock_etf_candle_quality(universe_name=universe_name, asset_type=asset_type, limit=limit)
         for row in rows:
             row["analysis_status"] = "MISSING_ANALYSIS" if row.get("last_analysis_at") is None else "OK"
             if row.get("last_candle_at") and row.get("last_analysis_at") and str(row["last_candle_at"]) > str(row["last_analysis_at"]):
@@ -320,17 +278,17 @@ class MarketDataRepository:
 
     def stats(self):
         def scalar(sql): return self.db.execute(text(sql)).scalar() or 0
-        return {"total_universes": scalar("SELECT COUNT(*) FROM market_universes"), "total_assets": scalar("SELECT COUNT(*) FROM market_assets"), "total_candles": scalar("SELECT COUNT(*) FROM market_candles WHERE asset_id IS NOT NULL")}
+        return {"total_universes": scalar("SELECT COUNT(*) FROM market_universes"), "total_assets": scalar("SELECT COUNT(*) FROM market_assets"), "total_candles": scalar("SELECT COUNT(*) FROM stock_etf_candles")}
 
 _POSTGRES_SCHEMA = [
 "CREATE EXTENSION IF NOT EXISTS pgcrypto",
 "CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
 "CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
-"CREATE TABLE IF NOT EXISTS market_candles (id BIGSERIAL, asset_id UUID NULL REFERENCES market_assets(id), provider TEXT DEFAULT 'IBKR', provider_symbol TEXT, timeframe TEXT, timestamp TIMESTAMP, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
-"CREATE UNIQUE INDEX IF NOT EXISTS uq_market_candles_asset_provider_time ON market_candles(asset_id, provider, timeframe, timestamp) WHERE asset_id IS NOT NULL",
+"CREATE TABLE IF NOT EXISTS stock_etf_candles (id BIGSERIAL PRIMARY KEY, asset_id UUID NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT uq_stock_etf_candles_asset_provider_time UNIQUE (asset_id, provider, timeframe, timestamp))",
+"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_asset_timeframe_timestamp ON stock_etf_candles(asset_id, timeframe, timestamp DESC)",
+"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_symbol_timeframe_timestamp ON stock_etf_candles(provider_symbol, timeframe, timestamp DESC)",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id BIGSERIAL PRIMARY KEY, engine_name TEXT NOT NULL, universe_id UUID NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata JSONB NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now())",
 ]
-_SQLITE_SCHEMA = [s.replace("UUID PRIMARY KEY DEFAULT gen_random_uuid()", "TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16))))").replace("UUID NULL", "TEXT NULL").replace("UUID NOT NULL", "TEXT NOT NULL").replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("BIGSERIAL", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("TIMESTAMP NOT NULL DEFAULT now()", "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP").replace("JSONB", "TEXT").replace("::jsonb", "").replace("BOOLEAN", "BOOLEAN") for s in _POSTGRES_SCHEMA if not s.startswith("CREATE EXTENSION") and "UNIQUE INDEX" not in s]
-_SQLITE_SCHEMA.append("CREATE UNIQUE INDEX IF NOT EXISTS uq_market_candles_asset_provider_time ON market_candles(asset_id, provider, timeframe, timestamp)")
+_SQLITE_SCHEMA = [s.replace("UUID PRIMARY KEY DEFAULT gen_random_uuid()", "TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16))))").replace("UUID NULL", "TEXT NULL").replace("UUID NOT NULL", "TEXT NOT NULL").replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("BIGSERIAL", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("TIMESTAMP NOT NULL DEFAULT now()", "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP").replace("JSONB", "TEXT").replace("::jsonb", "").replace("BOOLEAN", "BOOLEAN") for s in _POSTGRES_SCHEMA if not s.startswith("CREATE EXTENSION")]

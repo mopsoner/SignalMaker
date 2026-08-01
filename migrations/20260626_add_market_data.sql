@@ -15,15 +15,21 @@ CREATE TABLE IF NOT EXISTS market_assets (
   UNIQUE(provider_symbol, asset_type)
 );
 
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS asset_id UUID NULL REFERENCES market_assets(id);
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'IBKR';
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS provider_symbol TEXT NULL;
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NULL;
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP NULL;
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS adjusted_close NUMERIC NULL;
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();
-ALTER TABLE market_candles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();
-CREATE UNIQUE INDEX IF NOT EXISTS uq_market_candles_asset_provider_time ON market_candles(asset_id, provider, timeframe, timestamp) WHERE asset_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS stock_etf_candles (
+  id BIGSERIAL PRIMARY KEY,
+  asset_id UUID NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL,
+  open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL,
+  adjusted_close NUMERIC NULL, volume NUMERIC NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_stock_etf_candles_asset_provider_time UNIQUE (asset_id, provider, timeframe, timestamp)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_asset_timeframe_timestamp
+  ON stock_etf_candles(asset_id, timeframe, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_symbol_timeframe_timestamp
+  ON stock_etf_candles(provider_symbol, timeframe, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS market_data_import_runs (
   id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL,

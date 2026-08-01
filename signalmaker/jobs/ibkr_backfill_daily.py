@@ -21,7 +21,7 @@ async def main():
           async with sem:
             try:
               candles=await hist.fetch_daily_candles(asset['provider_symbol'])
-              n=await repo.upsert_market_candles(asset['id'],'IBKR',asset['provider_symbol'],'1d',candles)
+              n=await repo.upsert_stock_etf_candles(asset['id'],'IBKR',asset['provider_symbol'],'1d',candles)
               ok+=1; print(f"OK {asset['provider_symbol']} candles={n}")
             except Exception as e:
               fail+=1; print(f"FAILED {asset['provider_symbol']}: {e}")
