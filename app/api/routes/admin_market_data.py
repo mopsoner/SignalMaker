@@ -223,7 +223,15 @@ async def stocks_etfs_export_csv(kind: str = 'results', engine: str | None = Non
 @router.post('/api/v1/stocks-etfs/ibkr/candles')
 async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Session = Depends(get_db)):
     """Ingest externally collected IBKR candles into the stocks/ETFs market-data tables."""
-    repo = _repo(db)
+    repo = MarketDataRepository(db)
+    try:
+        repo.ensure_schema()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={"step": "ensure_schema", "error": str(exc)},
+        ) from exc
     provider_symbol = payload.provider_symbol or payload.symbol
     asset = await repo.find_market_asset_for_ingest(
         asset_id=payload.asset_id,

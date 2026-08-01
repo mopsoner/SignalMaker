@@ -23,12 +23,117 @@ class MarketDataRepository:
         else:
             stmts = _POSTGRES_SCHEMA
         for stmt in stmts:
-            try:
-                self.db.execute(text(stmt))
-            except Exception:
-                self.db.rollback()
+            self.db.execute(text(stmt))
+        self._ensure_stock_etf_candle_schema()
         self._ensure_job_requests_table()
         self.db.commit()
+
+    def _ensure_stock_etf_candle_schema(self) -> None:
+        """Create or upgrade only the STOCK/ETF candle table."""
+        dialect = self.db.get_bind().dialect.name
+        if dialect == "sqlite":
+            exists = self.db.execute(text(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stock_etf_candles'"
+            )).first()
+            if not exists:
+                self.db.execute(text(_SQLITE_STOCK_ETF_CANDLES_TABLE))
+            columns = {
+                row.name for row in self.db.execute(text("PRAGMA table_info(stock_etf_candles)"))
+            }
+            column_definitions = _SQLITE_STOCK_ETF_CANDLE_COLUMNS
+        else:
+            exists = self.db.execute(text("""
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name = 'stock_etf_candles'
+            """)).first()
+            if not exists:
+                self.db.execute(text(_POSTGRES_STOCK_ETF_CANDLES_TABLE))
+            columns = {
+                row.column_name for row in self.db.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'stock_etf_candles'
+                """))
+            }
+            column_definitions = _POSTGRES_STOCK_ETF_CANDLE_COLUMNS
+
+        for name, definition in column_definitions.items():
+            if name not in columns:
+                self.db.execute(text(
+                    f"ALTER TABLE stock_etf_candles ADD COLUMN {name} {definition}"
+                ))
+
+        self._ensure_stock_etf_candle_indexes(dialect)
+
+    def _ensure_stock_etf_candle_indexes(self, dialect: str) -> None:
+        expected = {
+            "uq_stock_etf_candles_asset_provider_time": (
+                True, (("asset_id", False), ("provider", False),
+                       ("timeframe", False), ("timestamp", False))
+            ),
+            "idx_stock_etf_candles_asset_timeframe_timestamp": (
+                False, (("asset_id", False), ("timeframe", False), ("timestamp", True))
+            ),
+            "idx_stock_etf_candles_symbol_timeframe_timestamp": (
+                False, (("provider_symbol", False), ("timeframe", False), ("timestamp", True))
+            ),
+        }
+        if dialect == "sqlite":
+            rows = self.db.execute(text("PRAGMA index_list(stock_etf_candles)")).mappings()
+            existing = {}
+            for row in rows:
+                details = self.db.execute(
+                    text(f"PRAGMA index_xinfo('{row['name']}')")
+                ).mappings()
+                columns = tuple(
+                    (detail["name"], bool(detail["desc"]))
+                    for detail in details
+                    if detail["key"] and detail["name"] is not None
+                )
+                existing[row["name"]] = (bool(row["unique"]), columns, bool(row["partial"]))
+        else:
+            rows = self.db.execute(text("""
+                SELECT i.relname AS name, ix.indisunique AS is_unique,
+                       ix.indpred IS NOT NULL AS is_partial,
+                       array_agg(a.attname ORDER BY k.ordinality) AS columns,
+                       array_agg((ix.indoption[k.ordinality - 1] & 1) = 1
+                                 ORDER BY k.ordinality) AS descending
+                FROM pg_class t
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                JOIN pg_index ix ON ix.indrelid = t.oid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                JOIN unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ordinality) ON true
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                WHERE n.nspname = current_schema() AND t.relname = 'stock_etf_candles'
+                GROUP BY i.relname, ix.indisunique, ix.indpred
+            """)).mappings()
+            existing = {
+                row["name"]: (
+                    row["is_unique"],
+                    tuple(zip(row["columns"], row["descending"])),
+                    row["is_partial"],
+                )
+                for row in rows
+            }
+
+        for name, (unique, columns) in expected.items():
+            definition = existing.get(name)
+            if definition is not None and definition != (unique, columns, False):
+                self.db.execute(text(f'DROP INDEX "{name}"'))
+                definition = None
+            if definition is None:
+                unique_sql = "UNIQUE " if unique else ""
+                columns_sql = ", ".join(
+                    f'{column}{" DESC" if descending else ""}'
+                    for column, descending in columns
+                )
+                self.db.execute(text(
+                    f'CREATE {unique_sql}INDEX "{name}" '
+                    f'ON stock_etf_candles ({columns_sql})'
+                ))
 
 
     async def create_or_update_universe(self, name: str, description: str | None = None, region: str | None = None,
@@ -284,9 +389,6 @@ _POSTGRES_SCHEMA = [
 "CREATE EXTENSION IF NOT EXISTS pgcrypto",
 "CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
 "CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
-"CREATE TABLE IF NOT EXISTS stock_etf_candles (id BIGSERIAL PRIMARY KEY, asset_id UUID NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT uq_stock_etf_candles_asset_provider_time UNIQUE (asset_id, provider, timeframe, timestamp))",
-"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_asset_timeframe_timestamp ON stock_etf_candles(asset_id, timeframe, timestamp DESC)",
-"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_symbol_timeframe_timestamp ON stock_etf_candles(provider_symbol, timeframe, timestamp DESC)",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id BIGSERIAL PRIMARY KEY, engine_name TEXT NOT NULL, universe_id UUID NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata JSONB NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now())",
@@ -294,10 +396,27 @@ _POSTGRES_SCHEMA = [
 _SQLITE_SCHEMA = [
 "CREATE TABLE IF NOT EXISTS market_universes (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 "CREATE TABLE IF NOT EXISTS market_assets (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), universe_id TEXT NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(provider_symbol, asset_type))",
-"CREATE TABLE IF NOT EXISTS stock_etf_candles (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT uq_stock_etf_candles_asset_provider_time UNIQUE (asset_id, provider, timeframe, timestamp))",
-"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_asset_timeframe_timestamp ON stock_etf_candles(asset_id, timeframe, timestamp DESC)",
-"CREATE INDEX IF NOT EXISTS idx_stock_etf_candles_symbol_timeframe_timestamp ON stock_etf_candles(provider_symbol, timeframe, timestamp DESC)",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, engine_name TEXT NOT NULL, universe_id TEXT NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata TEXT NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id TEXT NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 ]
+
+_POSTGRES_STOCK_ETF_CANDLES_TABLE = "CREATE TABLE stock_etf_candles (id BIGSERIAL PRIMARY KEY, asset_id UUID NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+_SQLITE_STOCK_ETF_CANDLES_TABLE = "CREATE TABLE stock_etf_candles (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+
+# Upgrades intentionally use nullable definitions: legacy tables can contain rows
+# for which a safe value cannot be inferred. New tables retain the stricter schema.
+_POSTGRES_STOCK_ETF_CANDLE_COLUMNS = {
+    "asset_id": "UUID", "provider": "TEXT DEFAULT 'IBKR'", "provider_symbol": "TEXT",
+    "timeframe": "TEXT", "timestamp": "TIMESTAMP", "open": "NUMERIC", "high": "NUMERIC",
+    "low": "NUMERIC", "close": "NUMERIC", "adjusted_close": "NUMERIC", "volume": "NUMERIC",
+    "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+}
+_SQLITE_STOCK_ETF_CANDLE_COLUMNS = {
+    **_POSTGRES_STOCK_ETF_CANDLE_COLUMNS,
+    "asset_id": "TEXT",
+    # SQLite rejects non-constant defaults in ALTER TABLE ADD COLUMN.
+    "created_at": "TIMESTAMP",
+    "updated_at": "TIMESTAMP",
+}
