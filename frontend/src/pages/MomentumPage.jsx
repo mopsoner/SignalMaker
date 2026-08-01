@@ -422,7 +422,7 @@ export default function MomentumPage() {
         <StatCard label="Equity paper" value={fmtNumber(engine?.equity, 2)} hint={`Start ${fmtNumber(engine?.starting_capital || STARTING_CAPITAL, 2)} · PnL ${fmtNumber(engine?.total_pnl, 2)} ${quoteCurrency} (${fmtNumber(engine?.total_pnl_pct, 2)}%)`} />
         <StatCard label="Current paper position" value={engine?.open_position?.symbol || 'Cash'} hint={engine?.open_position ? `Open PnL ${fmtNumber(engine.open_position.unrealized_pnl, 2)} ${quoteCurrency} · mark ${fmtNumber(engine.open_position.mark_price, 6)}` : `Cash ${fmtNumber(engine?.cash, 2)} ${quoteCurrency}`} />
         <StatCard label="Best eligible now" value={engine?.best_asset?.symbol || '—'} hint={engine?.best_asset ? `Score ${fmtNumber(engine.best_asset.momentum_score, 2)} · rank #${engine.best_asset.rank}` : `Needs score > ${MIN_MOMENTUM_SCORE}`} />
-        <StatCard label="Next action" value={engine?.due_now ? 'Due now' : 'Waiting'} hint={`${engine?.recommendation || '—'} · cadence ${cadenceHours}h${engine?.next_check_at ? ` · next ${fmtDate(engine.next_check_at)}` : ''}`} />
+        <StatCard label="Next action" value={engine?.due_now ? (engine?.due_reason || 'Due now').replaceAll('_', ' ') : 'Waiting'} hint={`${engine?.recommendation || '—'} · cadence ${cadenceHours}h${engine?.next_check_at ? ` · next ${fmtDate(engine.next_check_at)}` : ''}`} />
       </div>
       <div className="market-toolbar">
         <div className="filter-chips">

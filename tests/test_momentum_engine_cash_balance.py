@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -967,6 +967,9 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
         "recommendation": "No persisted momentum decision available yet.",
         "reason": "No persisted momentum decision available yet.",
         "due_now": False,
+        "cadence_due": False,
+        "event_due": False,
+        "due_reason": None,
         "open_position": None,
         "best_asset": None,
         "top_watch_asset": None,
@@ -974,6 +977,61 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
         "next_check_at": None,
         "source": "persisted_current_decision",
     }
+
+
+def test_run_once_waits_before_cadence_for_normal_position() -> None:
+    with _make_session() as db:
+        db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
+        db.commit()
+        status = MomentumEngineService(db).run_once()
+        assert status["cadence_due"] is False
+        assert status["event_due"] is False
+        assert status["due_now"] is False
+        assert list(db.scalars(select(MomentumEngineTrade)).all()) == []
+
+
+def test_run_once_executes_broken_support_before_cadence_and_is_idempotent() -> None:
+    with _make_session() as db:
+        db.add_all([
+            *_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1, structure_15m_status="broken_bearish"),
+            *_momentum_row("ETHUSDC", price=50, momentum_score=20, stored_rank=2),
+            _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1),
+        ])
+        db.commit()
+        first = MomentumEngineService(db).run_once()
+        first_count = len(list(db.scalars(select(MomentumEngineTrade)).all()))
+        second = MomentumEngineService(db).run_once()
+        second_count = len(list(db.scalars(select(MomentumEngineTrade)).all()))
+        assert first["cadence_due"] is False
+        assert first["event_due"] is True
+        assert first["due_reason"] == "support_broken"
+        assert first_count == 2
+        assert second["due_now"] is False
+        assert second_count == first_count
+
+
+def test_run_once_executes_when_hourly_cadence_elapsed() -> None:
+    with _make_session() as db:
+        position = _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)
+        position.opened_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), position])
+        db.commit()
+        status = MomentumEngineService(db).run_once()
+        assert status["cadence_due"] is True
+        assert status["event_due"] is False
+        assert status["due_reason"] == "cadence_elapsed"
+        assert list(db.scalars(select(MomentumEngineTrade.action)).all()) == ["HOLD_NO_BETTER_VALID_MOMENTUM"]
+
+
+def test_run_once_force_executes_when_no_due_predicate() -> None:
+    with _make_session() as db:
+        db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
+        db.commit()
+        status = MomentumEngineService(db).run_once(force=True)
+        assert status["cadence_due"] is False
+        assert status["event_due"] is False
+        assert status["due_reason"] == "forced"
+        assert list(db.scalars(select(MomentumEngineTrade.action)).all()) == ["HOLD_NO_BETTER_VALID_MOMENTUM"]
 
 
 def test_current_decision_returns_fallback_when_current_snapshot_payload_is_empty() -> (

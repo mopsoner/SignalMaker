@@ -62,6 +62,9 @@ class MomentumEngineDecision(BaseModel):
     recommendation: str
     reason: str
     due_now: bool
+    cadence_due: bool = False
+    event_due: bool = False
+    due_reason: str | None = None
     open_position: MomentumEnginePositionRead | None = None
     best_asset: dict | None = None
     top_watch_asset: dict | None = None
@@ -86,6 +89,9 @@ class MomentumEngineStatus(BaseModel):
     last_check_at: datetime | None = None
     next_check_at: datetime | None = None
     due_now: bool
+    cadence_due: bool = False
+    event_due: bool = False
+    due_reason: str | None = None
     recommendation: str
     trades: list[MomentumEngineTradeRead] = Field(default_factory=list)
 
