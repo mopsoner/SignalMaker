@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -15,6 +16,7 @@ from app.api.routes import admin_market_data
 from app.models.base import Base
 from app.models.market_candle import MarketCandle
 from app.services.market_data_service import MarketDataService
+from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.repository import MarketDataRepository
 
 
@@ -80,6 +82,77 @@ def test_ibkr_ingest_is_idempotent_and_isolated_from_crypto_candles():
     assert Decimal(str(changed["close"])) == Decimal("215.25")
     assert Decimal(str(changed["volume"])) == Decimal("1200000")
     assert db.scalar(select(func.count()).select_from(MarketCandle)) == 0
+    db.close()
+
+
+def test_ibkr_ingest_supports_assets_currencies_timeframes_and_analysis_reads():
+    client, db = _client_and_db()
+    requests = [
+        _payload(),
+        {
+            **_payload(close="42.25", volume="5000"),
+            "provider_symbol": "AIR.PA", "symbol": "AIR.PA",
+            "currency": "EUR", "timeframe": "1h",
+        },
+        {
+            **_payload(close="98.75", volume="7500"),
+            "provider_symbol": "IWDA.AS", "symbol": "IWDA.AS",
+            "asset_type": "ETF", "currency": "EUR", "timeframe": "1d",
+        },
+    ]
+
+    responses = [client.post("/api/v1/stocks-etfs/ibkr/candles", json=item) for item in requests]
+    assert all(response.status_code == 200 for response in responses)
+    assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 3
+    assert set(db.execute(text("SELECT DISTINCT timeframe FROM stock_etf_candles")).scalars()) == {"1d", "1h"}
+    assert set(db.execute(text("SELECT DISTINCT currency FROM market_assets")).scalars()) == {"USD", "EUR"}
+
+    aapl_id = responses[0].json()["asset_id"]
+    adapter = MarketAnalysisAdapter(MarketDataRepository(db))
+    loaded = asyncio.run(adapter.load_stock_etf_candles_for_asset(aapl_id, "1d"))
+    assert len(loaded) == 1
+    assert Decimal(str(loaded[0]["close"])) == Decimal("213.5")
+    assert db.scalar(select(func.count()).select_from(MarketCandle)) == 0
+    db.close()
+
+
+def test_ibkr_ingest_rolls_back_asset_and_universe_when_upsert_fails(monkeypatch):
+    client, db = _client_and_db()
+
+    async def fail_upsert(*_args, **_kwargs):
+        raise RuntimeError("upsert failed")
+
+    monkeypatch.setattr(MarketDataRepository, "upsert_stock_etf_candles", fail_upsert)
+    response = client.post("/api/v1/stocks-etfs/ibkr/candles", json=_payload())
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["step"] == "upsert_stock_etf_candles"
+    assert db.execute(text("SELECT COUNT(*) FROM market_universes")).scalar_one() == 0
+    assert db.execute(text("SELECT COUNT(*) FROM market_assets")).scalar_one() == 0
+    assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 0
+    db.close()
+
+
+def test_ibkr_ingest_rolls_back_everything_when_commit_fails(monkeypatch):
+    client, db = _client_and_db()
+    real_commit = db.commit
+    commit_calls = 0
+
+    def fail_endpoint_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 1:  # ensure_schema has its own successful transaction.
+            return real_commit()
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(db, "commit", fail_endpoint_commit)
+    response = client.post("/api/v1/stocks-etfs/ibkr/candles", json=_payload())
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["step"] == "commit"
+    assert db.execute(text("SELECT COUNT(*) FROM market_universes")).scalar_one() == 0
+    assert db.execute(text("SELECT COUNT(*) FROM market_assets")).scalar_one() == 0
+    assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 0
     db.close()
 
 

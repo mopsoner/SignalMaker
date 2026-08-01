@@ -292,13 +292,20 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         },
     )
     candles = [SimpleNamespace(**candle.model_dump()) for candle in payload.candles]
-    upserted = await repo.upsert_stock_etf_candles(
-        asset["id"],
-        payload.provider.upper(),
-        asset.get("provider_symbol") or provider_symbol or payload.symbol or "",
-        payload.timeframe,
-        candles,
-    )
+    try:
+        upserted = await repo.upsert_stock_etf_candles(
+            asset["id"],
+            "IBKR",
+            asset.get("provider_symbol") or provider_symbol or payload.symbol or "",
+            payload.timeframe,
+            candles,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={"step": "upsert_stock_etf_candles", "error": str(exc)},
+        ) from exc
     queued_job_id = None
     if payload.queue_analysis:
         queued_job_id = await repo.create_job_request(
@@ -312,7 +319,14 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             },
         )
     await repo.finish_import_run(run_id, "SUCCESS", total_assets=1, success_count=1, failed_count=0)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={"step": "commit", "error": str(exc)},
+        ) from exc
     return {
         "ok": True,
         "asset_created": asset_created,
