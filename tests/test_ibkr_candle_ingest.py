@@ -2,9 +2,11 @@ import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -98,4 +100,64 @@ def test_crypto_pipeline_still_writes_after_stock_etf_schema_initialization():
     loaded = MarketDataService(db).list_candles(symbol="BTCUSD", interval="1m")
     assert [c.candle_id for c in loaded] == [crypto.candle_id]
     assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 0
+    db.close()
+
+
+def test_crypto_and_stock_etf_tables_keep_independent_constraints_and_data():
+    _, db = _client_and_db()
+    repository = MarketDataRepository(db)
+    repository.ensure_schema()
+    # A second initialization exercises CREATE TABLE IF NOT EXISTS against both
+    # the pre-existing historical table and the new STOCK/ETF table.
+    repository.ensure_schema()
+
+    crypto_columns = {
+        row["name"]: row
+        for row in db.execute(text("PRAGMA table_info(market_candles)")).mappings()
+    }
+    stock_columns = {
+        row["name"]: row
+        for row in db.execute(text("PRAGMA table_info(stock_etf_candles)")).mappings()
+    }
+    assert crypto_columns["candle_id"]["pk"] == 1
+    assert crypto_columns["quote_volume"]["notnull"] == 1
+    assert crypto_columns["number_of_trades"]["notnull"] == 1
+    assert stock_columns["id"]["pk"] == 1
+    assert stock_columns["asset_id"]["type"] == "TEXT"
+    assert stock_columns["open"]["notnull"] == 1
+    assert stock_columns["adjusted_close"]["notnull"] == 0
+    assert stock_columns["volume"]["notnull"] == 0
+
+    crypto = MarketCandle(
+        candle_id="KRAKEN:ETHUSD:1m:1", symbol="ETHUSD", interval="1m",
+        open_time=1_000, close_time=59_999, open=10.0, high=12.0,
+        low=9.0, close=11.0, volume=2.0, quote_volume=22.0,
+        number_of_trades=3, taker_buy_base_volume=1.0,
+        taker_buy_quote_volume=11.0, provider="KRAKEN",
+        ingested_at=datetime.now(timezone.utc),
+    )
+    db.add(crypto)
+    asset_id = db.execute(text("""
+        INSERT INTO market_assets (symbol, provider_symbol, asset_type)
+        VALUES ('AAPL', 'AAPL.US', 'STOCK') RETURNING id
+    """)).scalar_one()
+    db.execute(text("""
+        INSERT INTO stock_etf_candles
+          (asset_id, provider_symbol, timeframe, timestamp, open, high, low, close)
+        VALUES (:asset_id, 'AAPL.US', '1d', '2026-07-31 00:00:00', 210, 214, 209, 213.5)
+    """), {"asset_id": asset_id})
+    db.commit()
+
+    with pytest.raises(IntegrityError):
+        db.execute(text("""
+            INSERT INTO stock_etf_candles
+              (asset_id, provider_symbol, timeframe, timestamp, high, low, close)
+            VALUES (:asset_id, 'AAPL.US', '1d', '2026-08-01 00:00:00', 214, 209, 213.5)
+        """), {"asset_id": asset_id})
+    db.rollback()
+
+    assert db.scalar(select(func.count()).select_from(MarketCandle)) == 1
+    assert db.get(MarketCandle, crypto.candle_id).provider == "KRAKEN"
+    assert db.execute(text("SELECT COUNT(*) FROM stock_etf_candles")).scalar_one() == 1
+    assert db.execute(text("SELECT provider FROM stock_etf_candles")).scalar_one() == "IBKR"
     db.close()
