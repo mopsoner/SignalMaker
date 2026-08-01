@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -206,23 +207,42 @@ class MarketDataRepository:
 
     async def upsert_stock_etf_candles(self, asset_id, provider: str, provider_symbol: str, timeframe: str, candles: list) -> int:
         """Upsert STOCK/ETF candles without touching the crypto candle table."""
+        normalized_provider = provider.strip().upper()
+        if normalized_provider != "IBKR":
+            raise ValueError("IBKR is the only supported STOCK/ETF candle provider")
+
+        def utc_timestamp(value: datetime | None) -> datetime:
+            if value is None:
+                raise ValueError("candle timestamp must not be null")
+            # Both schemas use TIMESTAMP without a timezone. Persist a naive UTC
+            # value so PostgreSQL and SQLite compare and return identical values.
+            if value.tzinfo is not None:
+                return value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value
+
+        parameters = []
+        for candle in candles:
+            parameters.append({
+                "asset_id": asset_id, "provider": normalized_provider,
+                "provider_symbol": provider_symbol, "timeframe": timeframe,
+                "timestamp": utc_timestamp(getattr(candle, "timestamp", None)),
+                "open": candle.open, "high": candle.high, "low": candle.low,
+                "close": candle.close,
+                "adjusted_close": getattr(candle, "adjusted_close", None),
+                "volume": getattr(candle, "volume", None),
+            })
         sql = """
         INSERT INTO stock_etf_candles
-          (asset_id, provider, provider_symbol, timeframe, timestamp, open, high, low, close, adjusted_close, volume)
+          (asset_id, provider, provider_symbol, timeframe, timestamp, open, high, low, close, adjusted_close, volume, updated_at)
         VALUES
-          (:asset_id, :provider, :provider_symbol, :timeframe, :timestamp, :open, :high, :low, :close, :adjusted_close, :volume)
+          (:asset_id, :provider, :provider_symbol, :timeframe, :timestamp, :open, :high, :low, :close, :adjusted_close, :volume, CURRENT_TIMESTAMP)
         ON CONFLICT (asset_id, provider, timeframe, timestamp) DO UPDATE SET
           provider_symbol=excluded.provider_symbol, open=excluded.open, high=excluded.high,
           low=excluded.low, close=excluded.close, adjusted_close=excluded.adjusted_close,
           volume=excluded.volume, updated_at=CURRENT_TIMESTAMP
         """
-        for candle in candles:
-            self.db.execute(text(sql), {
-                "asset_id": asset_id, "provider": provider, "provider_symbol": provider_symbol,
-                "timeframe": timeframe, "timestamp": candle.timestamp, "open": candle.open, "high": candle.high,
-                "low": candle.low, "close": candle.close, "adjusted_close": getattr(candle, "adjusted_close", None),
-                "volume": getattr(candle, "volume", None),
-            })
+        for values in parameters:
+            self.db.execute(text(sql), values)
         return len(candles)
 
     async def create_import_run(self, provider: str, run_type: str, status: str = "RUNNING", metadata: dict | None = None):
