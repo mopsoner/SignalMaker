@@ -25,9 +25,38 @@ class MarketDataRepository:
             stmts = _POSTGRES_SCHEMA
         for stmt in stmts:
             self.db.execute(text(stmt))
+        self._ensure_run_tables_schema()
         self._ensure_stock_etf_candle_schema()
         self._ensure_job_requests_table()
         self.db.commit()
+
+    def _ensure_run_tables_schema(self) -> None:
+        """Upgrade legacy import/analysis run tables without rebuilding them."""
+        dialect = self.db.get_bind().dialect.name
+        definitions = (
+            _SQLITE_RUN_TABLE_COLUMNS
+            if dialect == "sqlite"
+            else _POSTGRES_RUN_TABLE_COLUMNS
+        )
+
+        for table_name, columns in definitions.items():
+            if dialect == "sqlite":
+                existing = {
+                    row.name
+                    for row in self.db.execute(text(f"PRAGMA table_info({table_name})"))
+                }
+                for column_name, definition in columns.items():
+                    if column_name not in existing:
+                        self.db.execute(text(
+                            f"ALTER TABLE {table_name} ADD COLUMN "
+                            f"{column_name} {definition}"
+                        ))
+            else:
+                for column_name, definition in columns.items():
+                    self.db.execute(text(
+                        f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+                        f"{column_name} {definition}"
+                    ))
 
     def _ensure_stock_etf_candle_schema(self) -> None:
         """Create or upgrade only the STOCK/ETF candle table."""
@@ -420,6 +449,74 @@ _SQLITE_SCHEMA = [
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, engine_name TEXT NOT NULL, universe_id TEXT NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata TEXT NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id TEXT NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 ]
+
+# Columns are deliberately nullable when upgrading legacy tables if no reliable
+# value can be inferred for existing rows. Defaults still apply to new rows.
+_POSTGRES_RUN_TABLE_COLUMNS = {
+    "market_data_import_runs": {
+        "metadata": "JSONB NULL",
+        "total_assets": "INTEGER DEFAULT 0",
+        "success_count": "INTEGER DEFAULT 0",
+        "failed_count": "INTEGER DEFAULT 0",
+        "error_message": "TEXT NULL",
+        "finished_at": "TIMESTAMP NULL",
+    },
+    "market_analysis_runs": {
+        "universe_id": "UUID NULL REFERENCES market_universes(id)",
+        "timeframe": "TEXT DEFAULT '1d'",
+        "metadata": "JSONB NULL",
+        "total_assets": "INTEGER DEFAULT 0",
+        "success_count": "INTEGER DEFAULT 0",
+        "failed_count": "INTEGER DEFAULT 0",
+        "error_message": "TEXT NULL",
+        "finished_at": "TIMESTAMP NULL",
+    },
+    "market_analysis_results": {
+        "analysis_run_id": "BIGINT NULL REFERENCES market_analysis_runs(id)",
+        "asset_id": "UUID NULL REFERENCES market_assets(id)",
+        "engine_name": "TEXT NULL",
+        "timeframe": "TEXT NULL",
+        "signal": "TEXT NULL",
+        "score": "NUMERIC NULL",
+        "trend": "TEXT NULL",
+        "confidence": "NUMERIC NULL",
+        "payload": "JSONB NULL DEFAULT '{}'::jsonb",
+        "created_at": "TIMESTAMP NULL DEFAULT now()",
+    },
+}
+
+_SQLITE_RUN_TABLE_COLUMNS = {
+    "market_data_import_runs": {
+        "metadata": "TEXT NULL",
+        "total_assets": "INTEGER DEFAULT 0",
+        "success_count": "INTEGER DEFAULT 0",
+        "failed_count": "INTEGER DEFAULT 0",
+        "error_message": "TEXT NULL",
+        "finished_at": "TIMESTAMP NULL",
+    },
+    "market_analysis_runs": {
+        "universe_id": "TEXT NULL REFERENCES market_universes(id)",
+        "timeframe": "TEXT DEFAULT '1d'",
+        "metadata": "TEXT NULL",
+        "total_assets": "INTEGER DEFAULT 0",
+        "success_count": "INTEGER DEFAULT 0",
+        "failed_count": "INTEGER DEFAULT 0",
+        "error_message": "TEXT NULL",
+        "finished_at": "TIMESTAMP NULL",
+    },
+    "market_analysis_results": {
+        "analysis_run_id": "BIGINT NULL REFERENCES market_analysis_runs(id)",
+        "asset_id": "TEXT NULL REFERENCES market_assets(id)",
+        "engine_name": "TEXT NULL",
+        "timeframe": "TEXT NULL",
+        "signal": "TEXT NULL",
+        "score": "NUMERIC NULL",
+        "trend": "TEXT NULL",
+        "confidence": "NUMERIC NULL",
+        "payload": "TEXT NULL DEFAULT '{}'",
+        "created_at": "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+}
 
 _POSTGRES_STOCK_ETF_CANDLES_TABLE = "CREATE TABLE stock_etf_candles (id BIGSERIAL PRIMARY KEY, asset_id UUID NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
 _SQLITE_STOCK_ETF_CANDLES_TABLE = "CREATE TABLE stock_etf_candles (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL REFERENCES market_assets(id) ON DELETE CASCADE, provider TEXT NOT NULL DEFAULT 'IBKR', provider_symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp TIMESTAMP NOT NULL, open NUMERIC NOT NULL, high NUMERIC NOT NULL, low NUMERIC NOT NULL, close NUMERIC NOT NULL, adjusted_close NUMERIC NULL, volume NUMERIC NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
