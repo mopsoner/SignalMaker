@@ -5,4 +5,5 @@ pydantic-settings>=2.10,<3
 psycopg[c]==3.3.4
 python-dotenv>=1.1,<2
 requests>=2.32,<3
+python-dateutil>=2.9,<3
 aiofiles>=24.0,<25

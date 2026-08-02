@@ -59,6 +59,8 @@ if _FRONTEND_DIST.is_dir():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_static_frontend(full_path: str) -> FileResponse:
+        if full_path == "ibkr-feeder":
+            return FileResponse(_FRONTEND_DIST / "ibkr-feeder.html")
         requested = (_FRONTEND_DIST / full_path).resolve()
         if requested.is_file() and _FRONTEND_DIST.resolve() in requested.parents:
             return FileResponse(requested)
