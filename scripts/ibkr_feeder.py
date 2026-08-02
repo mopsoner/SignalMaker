@@ -15,6 +15,28 @@ import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def asset_config_error(path: Path) -> str:
+    """Return an actionable message when the local, untracked universe is absent."""
+    example = ROOT / "config/ibkr_assets.example.json"
+    try:
+        target = path.relative_to(ROOT)
+    except ValueError:
+        target = path
+    try:
+        source = example.relative_to(ROOT)
+    except ValueError:
+        source = example
+    return f"IBKR asset configuration not found: {path}. Create it with: cp {source} {target}"
+
+def load_assets(path: Path) -> list[dict]:
+    if not path.is_file():
+        raise FileNotFoundError(asset_config_error(path))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assets = document.get("assets", []) if isinstance(document, dict) else document
+    if not isinstance(assets, list):
+        raise ValueError(f"IBKR asset configuration must contain an 'assets' list: {path}")
+    return assets
+
 def env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -106,7 +128,17 @@ def get_filters(args: argparse.Namespace) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     filters = get_filters(parser().parse_args(argv)); asset_path = ROOT / os.getenv("IBKR_FEEDER_ASSETS_FILE", "config/ibkr_assets.json")
-    assets_doc = json.loads(asset_path.read_text()); assets = assets_doc.get("assets", []) if isinstance(assets_doc, dict) else assets_doc
+    try:
+        assets = load_assets(asset_path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        message = str(exc)
+        status = default_status()
+        status["run"].update(status="configuration_error", finished_at=now())
+        status["filters"]["configuration_error"] = message
+        status_path = ROOT / os.getenv("IBKR_FEEDER_STATUS_FILE", "data/ibkr_feeder_status.json")
+        write_status(status_path, status)
+        print(f"CONFIGURATION ERROR: {message}", file=sys.stderr)
+        return 2
     selected = filter_assets(assets, filters); print(f"Selected {len(selected)} assets from {len(assets)} configured assets.")
     if not selected: print("No IBKR assets matched the selected filters."); return 1
     status_path = ROOT / os.getenv("IBKR_FEEDER_STATUS_FILE", "data/ibkr_feeder_status.json"); status = default_status(len(assets)); started = time.monotonic()
