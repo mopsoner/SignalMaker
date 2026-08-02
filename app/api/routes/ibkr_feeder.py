@@ -11,7 +11,7 @@ import requests
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
-from scripts.ibkr_feeder import default_status
+from scripts.ibkr_feeder import asset_config_error, default_status
 
 router = APIRouter()
 ROOT = Path(__file__).resolve().parents[3]
@@ -52,6 +52,9 @@ def _start(filters: RunFilters):
     global _process
     with _lock:
         if _process and _process.poll() is None: return {"ok": False, "started": False, "message": "IBKR feeder is already running"}
+        assets_path = _paths()[1]
+        if not assets_path.is_file():
+            return {"ok": False, "started": False, "message": asset_config_error(assets_path)}
         args = [str(ROOT / ".venv/bin/python") if (ROOT / ".venv/bin/python").exists() else "python3", str(ROOT / "scripts/ibkr_feeder.py")]
         values = filters.model_dump()
         for key in ("asset_type", "region", "country", "currency", "exchange_code", "universe"):

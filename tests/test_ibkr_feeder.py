@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from app.main import app
-from scripts.ibkr_feeder import build_payload, filter_assets, normalize_timestamp, parse_ibkr_bars, write_status
+from scripts.ibkr_feeder import build_payload, filter_assets, load_assets, main, normalize_timestamp, parse_ibkr_bars, write_status
 
 ASSETS=[
  {"enabled":True,"symbol":"AAPL.US","provider_symbol":"AAPL.US","asset_type":"STOCK","region":"US","currency":"USD","exchange_code":"US","universe":"Stocks US","pea_eligible":False,"ucits":False},
@@ -40,6 +40,23 @@ def test_monitoring_missing_status_and_logs(monkeypatch,tmp_path):
  import app.api.routes.ibkr_feeder as route
  monkeypatch.setattr(route,"_paths",lambda:(tmp_path/"missing.json",tmp_path/"assets.json",tmp_path/"missing.log"))
  client=TestClient(app); assert client.get('/api/ibkr-feeder/status').json()["run"]["status"]=="never_run";assert client.get('/api/ibkr-feeder/logs').json()["lines"]==[]
+
+def test_missing_asset_config_is_actionable(monkeypatch,tmp_path,capsys):
+ path=tmp_path/"missing.json"
+ with patch.dict("os.environ",{"IBKR_FEEDER_ASSETS_FILE":str(path),"IBKR_FEEDER_STATUS_FILE":str(tmp_path/"status.json")}):
+  assert main([])==2
+ assert "cp config/ibkr_assets.example.json" in capsys.readouterr().err
+ assert json.loads((tmp_path/"status.json").read_text())["run"]["status"]=="configuration_error"
+ try: load_assets(path)
+ except FileNotFoundError as exc: assert "IBKR asset configuration not found" in str(exc)
+ else: raise AssertionError("missing configuration should fail")
+
+def test_run_endpoint_rejects_missing_asset_config(monkeypatch,tmp_path):
+ import app.api.routes.ibkr_feeder as route
+ monkeypatch.setattr(route,"_paths",lambda:(tmp_path/"status.json",tmp_path/"assets.json",tmp_path/"log.txt"))
+ body=TestClient(app).post('/api/ibkr-feeder/run-once',json={}).json()
+ assert body["ok"] is False and body["started"] is False
+ assert "cp config/ibkr_assets.example.json" in body["message"]
 
 def test_auth_unavailable_and_unauthenticated():
  client=TestClient(app)
