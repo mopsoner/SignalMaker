@@ -4,31 +4,43 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 
+RUNTIME_DIR="$APP_DIR/.runtime"
+mkdir -p "$RUNTIME_DIR"
+
+WORKER_PIDS=()
+WORKER_PID_FILES=()
+
+start_worker() {
+  local name="$1"
+  local script="$2"
+  local pid
+
+  bash "$script" &
+  pid=$!
+
+  printf -v "${name^^}_PID" '%s' "$pid"
+  printf '%s\n' "$pid" > "$RUNTIME_DIR/$name.pid"
+  WORKER_PIDS+=("$pid")
+  WORKER_PID_FILES+=("$RUNTIME_DIR/$name.pid")
+}
+
 bash run.sh init-db
 
 bash run.sh api &
 API_PID=$!
 
-bash scripts/start_pipeline_worker.sh &
-PIPELINE_PID=$!
-
-bash scripts/start_executor_worker.sh &
-EXECUTOR_PID=$!
-
-bash scripts/start_scheduler_worker.sh &
-SCHEDULER_PID=$!
-
-bash scripts/start_momentum_engine_worker.sh &
-MOMENTUM_ENGINE_PID=$!
-
-bash scripts/start_momentum_backtest_worker.sh &
-MOMENTUM_BACKTEST_PID=$!
+start_worker "pipeline" "scripts/start_pipeline_worker.sh"
+start_worker "executor" "scripts/start_executor_worker.sh"
+start_worker "scheduler" "scripts/start_scheduler_worker.sh"
+start_worker "momentum_engine" "scripts/start_momentum_engine_worker.sh"
+start_worker "momentum_backtest" "scripts/start_momentum_backtest_worker.sh"
 
 FRONTEND_PORT=${FRONTEND_PORT:-5000} bash scripts/start_frontend.sh &
 FRONTEND_PID=$!
 
 cleanup() {
-  kill "$API_PID" "$PIPELINE_PID" "$EXECUTOR_PID" "$SCHEDULER_PID" "$MOMENTUM_ENGINE_PID" "$MOMENTUM_BACKTEST_PID" "$FRONTEND_PID" 2>/dev/null || true
+  kill "$API_PID" "${WORKER_PIDS[@]}" "$FRONTEND_PID" 2>/dev/null || true
+  rm -f "${WORKER_PID_FILES[@]}"
 }
 
 trap cleanup EXIT INT TERM
