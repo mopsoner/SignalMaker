@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+// An unset base deliberately uses same-origin requests.  This is the production
+// default because the frontend server proxies /api and /admin to FastAPI.
+const configuredBase = String(import.meta.env.VITE_API_BASE || '').trim()
+const API_BASE = configuredBase.replace(/\/+$/, '')
 
 function getOperatorKey() {
   try {
@@ -13,15 +16,30 @@ async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
   if (operatorKey) headers['x-operator-key'] = operatorKey
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers,
-    ...options,
-  })
+  const url = `${API_BASE}${path}`
+  let res
+  try {
+    res = await fetch(url, { ...options, headers })
+  } catch (error) {
+    throw new Error(`API request failed for ${url}: ${error.message || 'network error'}`)
+  }
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    let detail = text
+    try {
+      const payload = JSON.parse(text)
+      detail = payload.detail || payload.message || text
+    } catch {
+      // Keep a plain-text response as-is.
+    }
+    throw new Error(`${res.status} ${res.statusText} from ${url}${detail ? `: ${detail}` : ''}`)
   }
-  return res.json()
+  if (res.status === 204) return null
+  try {
+    return await res.json()
+  } catch {
+    throw new Error(`API returned invalid JSON from ${url}`)
+  }
 }
 
 export const api = {

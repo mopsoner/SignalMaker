@@ -34,9 +34,12 @@ Start it with:
 bash scripts/start_frontend.sh
 ```
 
-Set an alternate API base if needed:
+Leave `VITE_API_BASE` unset for the normal same-origin deployment. The frontend
+server proxies `/api`, `/admin`, and `/healthz` to the backend. Set an alternate
+base only when the browser can reach that backend URL (for example, during
+development with the API on another host):
 ```bash
-VITE_API_BASE=http://127.0.0.1:8080
+VITE_API_BASE=https://api.example.com npm run build
 ```
 
 ## Main endpoints
