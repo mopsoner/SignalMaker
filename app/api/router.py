@@ -6,6 +6,7 @@ from app.api.routes import (
     executor,
     fills,
     health,
+    ibkr_feeder,
     live_runs,
     market_data,
     momentum,
@@ -20,6 +21,7 @@ api_router = APIRouter()
 public_router = APIRouter()
 public_router.include_router(executor.router, tags=["public-executor"])
 api_router.include_router(health.router, prefix="/api/v1", tags=["health"])
+api_router.include_router(ibkr_feeder.router, prefix="/api/ibkr-feeder", tags=["ibkr-feeder"])
 api_router.include_router(services.router, prefix="/api/v1", tags=["services"])
 api_router.include_router(pipeline.router, prefix="/api/v1", tags=["pipeline"])
 api_router.include_router(executor.router, prefix="/api/v1", tags=["executor"])

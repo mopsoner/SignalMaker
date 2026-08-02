@@ -18,7 +18,7 @@
   function countBy(rows, key) { return rows.reduce(function (a, r) { var v = r[key] || '-'; a[v] = (a[v] || 0) + 1; return a; }, {}); }
   function statCards(items) { return '<div class="stats">' + items.map(function (i) { return '<div class="stat"><strong>'+text(i.value)+'</strong><span>'+text(i.label)+'</span></div>'; }).join('') + '</div>'; }
   function byHour(row) { var d = new Date(row.received_at || row.created_at || row.updated_at || Date.now()); if (isNaN(d.getTime())) return '-'; d.setMinutes(0,0,0); return d.toLocaleString(); }
-  function nav() { var cur = (location.pathname.split('/').pop() || 'index.html'); var items = [['index.html','Dashboard'],['candidates.html','Trade candidates'],['orders.html','Orders / Positions'],['momentum-candidates.html','Momentum'],['ops.html','Settings / Logs']]; return items.map(function(i){ return '<a href="./'+i[0]+'"'+(cur===i[0]?' aria-current="page"':'')+'>'+i[1]+'</a>'; }).join(''); }
+  function nav() { var cur = (location.pathname.split('/').pop() || 'index.html'); var items = [['index.html','Dashboard'],['candidates.html','Trade candidates'],['orders.html','Orders / Positions'],['momentum-candidates.html','Momentum'],['ibkr-feeder.html','IBKR Feeder'],['ops.html','Settings / Logs']]; return items.map(function(i){ return '<a href="./'+i[0]+'"'+(cur===i[0]?' aria-current="page"':'')+'>'+i[1]+'</a>'; }).join(''); }
   function initNav(){ document.querySelectorAll('nav[data-main-nav]').forEach(function(n){ n.innerHTML = nav(); }); }
 
   function isAdminInput(el) { return !!(el && el.getAttribute && el.getAttribute('data-admin-section') && el.getAttribute('data-admin-key')); }

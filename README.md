@@ -247,3 +247,31 @@ Templates are available in `deploy/systemd/`.
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.
+
+## IBKR local feeder
+
+The local feeder is opt-in: it runs only from the wrapper, monitoring UI, or installed systemd unit. Start the IBKR Client Portal Gateway Java application, open **https://localhost:5000**, and log in. Verify the session:
+
+```bash
+curl -k -i -X POST -H "Content-Type: application/json" -d '{}' https://localhost:5000/v1/api/iserver/auth/status
+```
+
+Prepare the universe and replace placeholder contract IDs:
+
+```bash
+cp config/ibkr_assets.example.json config/ibkr_assets.json
+bash scripts/run_ibkr_feeder.sh
+bash scripts/run_ibkr_feeder.sh --asset-type STOCK --region US
+bash scripts/run_ibkr_feeder.sh --asset-type STOCK --region EU
+bash scripts/run_ibkr_feeder.sh --asset-type ETF --pea-eligible true --universe "ETF PEA"
+bash scripts/run_ibkr_feeder.sh --asset-type ETF --ucits true --universe "ETF Europe UCITS"
+```
+
+Filters are cumulative; repeated `--symbol`/`--provider-symbol` arguments are OR sets. Disabled assets are omitted unless `--include-disabled` is supplied. Install the optional startup service/daily timer with `scripts/install_ibkr_feeder_service.sh`; pass `--hourly` and/or `--enable-timer` as needed. Monitor at **http://localhost:<executor_app_port>/ibkr-feeder.html** and inspect `data/ibkr_feeder.log` or `journalctl -u signalmaker-ibkr-feeder.service -n 200 -f`.
+
+Verify remote ingestion:
+
+```bash
+curl -s https://mysginalmaker.replit.app/api/v1/stocks-etfs/assets?limit=20 | python3 -m json.tool
+curl -s https://mysginalmaker.replit.app/api/v1/stocks-etfs/freshness?limit=20 | python3 -m json.tool
+```
