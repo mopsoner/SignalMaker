@@ -12,4 +12,8 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-exec npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-3000}
+if [ ! -d dist ]; then
+  npm run build
+fi
+
+exec npm run preview -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5000}

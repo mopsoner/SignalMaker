@@ -8,6 +8,8 @@ import { fmtDate, fmtNumber } from '../lib/format'
 import { tradingViewUrl } from '../lib/tradingview'
 
 const signalClass = (signal) => signal === 'BUY' ? 'badge green' : signal === 'SELL' ? 'badge orange' : 'badge gray'
+const asRows = (value, key) => Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : []
+const errorText = (error) => error?.message || String(error || '')
 
 function UniverseFilter({ universe, setUniverse, assetType, setAssetType }) {
   return <div className="page-actions" style={{ flexWrap: 'wrap' }}>
@@ -29,7 +31,7 @@ function query(universe, assetType, extra = '') {
   return str ? `?${str}` : ''
 }
 
-function ResultsTable({ rows, engine }) {
+function ResultsTable({ rows, engine, empty }) {
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 4 }}><strong>{row.provider_symbol || row.symbol}</strong><span className="stat-hint">{row.name || '—'} · {row.universe_name || '—'}</span><a href={tradingViewUrl(row.provider_symbol || row.symbol, { market: 'stock-etf' })} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.provider_symbol || row.symbol },
     { key: 'signal', title: 'Signal', render: (row) => <span className={signalClass(row.signal)}>{row.signal || 'NO_SIGNAL'}</span>, sortValue: (row) => row.signal || '' },
@@ -39,7 +41,7 @@ function ResultsTable({ rows, engine }) {
     { key: 'engine', title: 'Engine', render: (row) => row.engine_name || engine, sortValue: (row) => row.engine_name || engine },
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.created_at), sortValue: (row) => row.created_at },
   ]
-  return <FoldableTable rows={rows} columns={columns} initialSortKey="score" initialSortDirection="desc" emptyMessage="No IBKR analysis results yet. Sync assets, backfill daily candles, then run analysis from Admin Market Data." />
+  return <FoldableTable rows={rows} columns={columns} defaultSortKey="score" defaultSortDir="desc" empty={empty || 'No analysis results yet. Sync assets, backfill daily candles, then run analysis from Admin Market Data.'} />
 }
 
 function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsOnly = false }) {
@@ -47,12 +49,13 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   const [assetType, setAssetType] = useState('')
   const fetcher = useCallback(() => {
     const q = query(universe, assetType, engine ? `engine=${engine}&limit=300` : 'limit=300')
-    if (candidatesOnly) return api.stockEtfCandidates(q)
-    if (positionsOnly) return api.stockEtfPositions(q)
-    return engine ? api.stockEtfResults(q) : api.stockEtfDashboard(q)
+    // Dashboard pages consume the dashboard object; candidates and positions
+    // retain their purpose-built endpoints.
+    return candidatesOnly ? api.stockEtfCandidates(q) : positionsOnly ? api.stockEtfPositions(q) : api.stockEtfDashboard(q)
   }, [universe, assetType, engine, candidatesOnly, positionsOnly])
   const { data, loading, error } = usePollingQuery(fetcher, 30000)
-  const rows = Array.isArray(data) ? data : engine === 'momentum' ? data?.momentum || [] : engine === 'wyckoff_smc' ? data?.wyckoff_smc || [] : [...(data?.momentum || []), ...(data?.wyckoff_smc || [])]
+  const rows = candidatesOnly ? asRows(data, 'candidates') : positionsOnly ? asRows(data, 'positions') : engine === 'momentum' ? asRows(data, 'momentum') : engine === 'wyckoff_smc' ? asRows(data, 'wyckoff_smc') : [...asRows(data, 'momentum'), ...asRows(data, 'wyckoff_smc')]
+  const empty = candidatesOnly ? 'No stock/ETF candidates yet.' : positionsOnly ? 'No stock/ETF positions yet.' : engine === 'momentum' ? 'No momentum results yet.' : engine === 'wyckoff_smc' ? 'No Wyckoff SMC results yet.' : 'No analysis results yet.'
   const counts = useMemo(() => ({ total: rows.length, buy: rows.filter((r) => r.signal === 'BUY').length, sell: rows.filter((r) => r.signal === 'SELL').length, hold: rows.filter((r) => ['HOLD', 'NO_SIGNAL'].includes(r.signal)).length }), [rows])
   return <div className="page-stack">
     <PageHeader title={title} subtitle={subtitle} />
@@ -60,8 +63,8 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="stats-grid"><StatCard label="Results" value={counts.total} /><StatCard label="Buy" value={counts.buy} /><StatCard label="Sell" value={counts.sell} /><StatCard label="Hold / No signal" value={counts.hold} /></div>
     {loading ? <div className="panel">Loading…</div> : null}
-    {error ? <div className="panel error">{error.message}</div> : null}
-    <section className="panel"><ResultsTable rows={rows} engine={engine} /></section>
+    {error ? <div className="panel error" role="alert"><strong>Unable to load stock/ETF data.</strong> {errorText(error)}</div> : null}
+    <section className="panel"><ResultsTable rows={rows} engine={engine} empty={empty} /></section>
   </div>
 }
 
@@ -79,7 +82,8 @@ function QualityTable({ rows }) {
     { key: 'first', title: 'First candle', render: (r) => fmtDate(r.first_candle_at), sortValue: (r) => r.first_candle_at },
     { key: 'last', title: 'Last candle', render: (r) => fmtDate(r.last_candle_at), sortValue: (r) => r.last_candle_at },
     { key: 'analysis', title: 'Analysis status', render: (r) => <span className={r.analysis_status === 'OK' ? 'badge green' : 'badge orange'}>{r.analysis_status || '—'}</span>, sortValue: (r) => r.analysis_status || '' },
-    { key: 'lastAnalysis', title: 'Last analysis', render: (r) => fmtDate(r.last_analysis_at), sortValue: (r) => r.last_analysis_at },
+    { key: 'lastAnalysis', title: 'Last analysis', render: (r) => r.last_analysis_at ? fmtDate(r.last_analysis_at) : 'Missing analysis', sortValue: (r) => r.last_analysis_at || '' },
+    { key: 'lastError', title: 'Last error', render: (r) => r.last_error || '—', sortValue: (r) => r.last_error || '' },
   ]
   return <FoldableTable rows={rows} columns={columns} initialSortKey="status" emptyMessage="No stock/ETF data-quality rows yet." />
 }
@@ -88,13 +92,14 @@ export function StockEtfDataQualityPage() {
   const [universe, setUniverse] = useState('')
   const [assetType, setAssetType] = useState('')
   const q = query(universe, assetType, 'limit=500')
-  const { data = [], loading, error } = usePollingQuery(useCallback(() => api.stockEtfFreshness(q), [q]), 30000)
+  const { data, loading, error } = usePollingQuery(useCallback(() => api.stockEtfFreshness(q), [q]), 30000)
+  const rows = asRows(data, 'freshness')
   return <div className="page-stack">
     <PageHeader title="ETF & Stocks · Data Quality" subtitle="Freshness, candle coverage and stale-analysis checks for isolated IBKR daily candles." />
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="page-actions"><a className="button" href={api.stockEtfExportUrl(query(universe, assetType, 'kind=quality&limit=500'))}>Export CSV</a></div>
-    {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error">{error.message}</div> : null}
-    <section className="panel"><QualityTable rows={data} /></section>
+    {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error" role="alert"><strong>Unable to load data quality.</strong> {errorText(error)}</div> : null}
+    <section className="panel"><QualityTable rows={rows} /></section>
   </div>
 }
 
@@ -102,19 +107,20 @@ export function StockEtfConfluencePage() {
   const [universe, setUniverse] = useState('')
   const [assetType, setAssetType] = useState('')
   const q = query(universe, assetType, 'limit=500')
-  const { data = [], loading, error } = usePollingQuery(useCallback(() => api.stockEtfConfluence(q), [q]), 30000)
+  const { data, loading, error } = usePollingQuery(useCallback(() => api.stockEtfConfluence(q), [q]), 30000)
+  const rows = asRows(data, 'confluence')
   const columns = [
     { key: 'symbol', title: 'Symbol', render: (r) => <strong>{r.provider_symbol}</strong>, sortValue: (r) => r.provider_symbol },
     { key: 'confluence', title: 'Confluence', render: (r) => <span className={r.confluence === 'STRONG_BUY' ? 'badge green' : r.confluence === 'AVOID' ? 'badge orange' : 'badge gray'}>{r.confluence}</span>, sortValue: (r) => r.confluence_rank },
-    { key: 'momentum', title: 'Momentum', render: (r) => `${r.momentum_signal || '—'} (${fmtNumber(r.momentum_score, 2)})`, sortValue: (r) => Number(r.momentum_score || 0) },
-    { key: 'wyckoff', title: 'Wyckoff SMC', render: (r) => `${r.wyckoff_signal || '—'} (${fmtNumber(r.wyckoff_score, 2)})`, sortValue: (r) => Number(r.wyckoff_score || 0) },
+    { key: 'momentum', title: 'Momentum', render: (r) => r.momentum_score == null ? 'Missing analysis' : `${r.momentum_signal || '—'} (${fmtNumber(r.momentum_score, 2)})`, sortValue: (r) => Number(r.momentum_score ?? -999) },
+    { key: 'wyckoff', title: 'Wyckoff SMC', render: (r) => r.wyckoff_score == null ? 'Missing analysis' : `${r.wyckoff_signal || '—'} (${fmtNumber(r.wyckoff_score, 2)})`, sortValue: (r) => Number(r.wyckoff_score ?? -999) },
     { key: 'universe', title: 'Universe', render: (r) => r.universe_name || '—', sortValue: (r) => r.universe_name || '' },
   ]
   return <div className="page-stack">
     <PageHeader title="ETF & Stocks · Confluence" subtitle="Momentum + Wyckoff SMC agreement layer; engines remain unchanged and results stay stock/ETF-scoped." />
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="page-actions"><a className="button" href={api.stockEtfExportUrl(query(universe, assetType, 'kind=confluence&limit=500'))}>Export CSV</a></div>
-    {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error">{error.message}</div> : null}
-    <section className="panel"><FoldableTable rows={data} columns={columns} initialSortKey="confluence" emptyMessage="No confluence rows yet. Run both engines first." /></section>
+    {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error" role="alert"><strong>Unable to load confluence.</strong> {errorText(error)}</div> : null}
+    <section className="panel"><FoldableTable rows={rows} columns={columns} defaultSortKey="confluence" empty="No confluence rows yet. Run both engines first." /></section>
   </div>
 }
