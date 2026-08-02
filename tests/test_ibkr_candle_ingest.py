@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -136,6 +137,52 @@ def test_ibkr_ingest_is_idempotent_and_isolated_from_crypto_candles():
     assert Decimal(str(changed["close"])) == Decimal("215.25")
     assert Decimal(str(changed["volume"])) == Decimal("1200000")
     assert db.scalar(select(func.count()).select_from(MarketCandle)) == 0
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("data_type", "udt_name", "expected"),
+    [
+        ("character varying", "varchar", "gen_random_uuid()::text"),
+        ("bigint", "int8", "nextval('market_data_import_runs_id_seq')"),
+    ],
+)
+def test_postgres_legacy_import_run_id_gets_type_appropriate_default(
+    data_type, udt_name, expected
+):
+    """Exercise the PostgreSQL repair SQL without requiring a local server."""
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    lookup = MagicMock()
+    lookup.mappings.return_value.first.return_value = {
+        "data_type": data_type, "udt_name": udt_name, "column_default": None,
+    }
+    db.execute.side_effect = [lookup] + [MagicMock() for _ in range(4)]
+
+    MarketDataRepository(db)._ensure_id_default("market_data_import_runs")
+
+    statements = "\n".join(str(call.args[0]) for call in db.execute.call_args_list)
+    assert expected in statements
+    if data_type == "bigint":
+        assert "CREATE SEQUENCE IF NOT EXISTS" in statements
+        assert "OWNED BY" in statements
+        assert "SELECT setval" in statements
+
+
+def test_schema_status_reports_required_tables_columns_and_candle_indexes():
+    client, db = _client_and_db()
+    assert client.post("/api/v1/stocks-etfs/ibkr/candles", json=_payload()).status_code == 200
+
+    response = client.get("/admin/market-data/schema-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert all(body["table_exists"].values())
+    assert {column["column_name"] for column in body["columns"]["market_data_import_runs"]} >= {
+        "id", "metadata", "started_at", "finished_at",
+    }
+    assert body["indexes"]["stock_etf_candles"]
     db.close()
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,10 +26,65 @@ class MarketDataRepository:
             stmts = _POSTGRES_SCHEMA
         for stmt in stmts:
             self.db.execute(text(stmt))
-        self._ensure_run_tables_schema()
+        self._ensure_legacy_market_data_schema(dialect)
         self._ensure_stock_etf_candle_schema()
-        self._ensure_job_requests_table()
         self.db.commit()
+
+    def _ensure_legacy_market_data_schema(self, dialect: str) -> None:
+        """Bring pre-existing market-data tables forward without replacing data."""
+        self._ensure_job_requests_table()
+        self._ensure_run_tables_schema()
+        if dialect == "postgresql":
+            for table_name in (
+                "market_data_import_runs", "market_analysis_runs",
+                "market_analysis_results", "market_data_job_requests",
+            ):
+                self._ensure_id_default(table_name)
+
+    def _ensure_id_default(self, table_name: str, id_column: str = "id") -> None:
+        """Install a PostgreSQL id generator matching a legacy column's type."""
+        identifier = re.compile(r"^[A-Za-z0-9_]+$")
+        if not identifier.fullmatch(table_name) or not identifier.fullmatch(id_column):
+            raise ValueError("table and column names may contain only letters, digits, and underscores")
+        if self.db.get_bind().dialect.name != "postgresql":
+            return
+        column = self.db.execute(text("""
+            SELECT data_type, udt_name, column_default
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = :table_name AND column_name = :id_column
+        """), {"table_name": table_name, "id_column": id_column}).mappings().first()
+        if not column or column["column_default"] is not None:
+            return
+
+        types = {str(column["data_type"]).lower(), str(column["udt_name"]).lower()}
+        qualified_column = f'"{table_name}"."{id_column}"'
+        if types & {"varchar", "text", "character varying"}:
+            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            self.db.execute(text(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{id_column}" '
+                "SET DEFAULT gen_random_uuid()::text"
+            ))
+        elif "uuid" in types:
+            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            self.db.execute(text(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{id_column}" '
+                "SET DEFAULT gen_random_uuid()"
+            ))
+        elif types & {"bigint", "integer", "int8", "int4"}:
+            sequence = f"{table_name}_{id_column}_seq"
+            self.db.execute(text(f'CREATE SEQUENCE IF NOT EXISTS "{sequence}"'))
+            self.db.execute(text(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{id_column}" '
+                f'''SET DEFAULT nextval('{sequence}')'''
+            ))
+            self.db.execute(text(
+                f'ALTER SEQUENCE "{sequence}" OWNED BY {qualified_column}'
+            ))
+            self.db.execute(text(
+                f'''SELECT setval('{sequence}', COALESCE((SELECT MAX("{id_column}")::bigint '''
+                f'''FROM "{table_name}"), 0) + 1, false)'''
+            ))
 
     def _ensure_run_tables_schema(self) -> None:
         """Upgrade legacy import/analysis run tables without rebuilding them."""
@@ -454,6 +510,7 @@ _SQLITE_SCHEMA = [
 # value can be inferred for existing rows. Defaults still apply to new rows.
 _POSTGRES_RUN_TABLE_COLUMNS = {
     "market_data_import_runs": {
+        "started_at": "TIMESTAMP NOT NULL DEFAULT now()",
         "metadata": "JSONB NULL",
         "total_assets": "INTEGER DEFAULT 0",
         "success_count": "INTEGER DEFAULT 0",
@@ -462,6 +519,7 @@ _POSTGRES_RUN_TABLE_COLUMNS = {
         "finished_at": "TIMESTAMP NULL",
     },
     "market_analysis_runs": {
+        "started_at": "TIMESTAMP NOT NULL DEFAULT now()",
         "universe_id": "UUID NULL REFERENCES market_universes(id)",
         "timeframe": "TEXT DEFAULT '1d'",
         "metadata": "JSONB NULL",
@@ -483,10 +541,15 @@ _POSTGRES_RUN_TABLE_COLUMNS = {
         "payload": "JSONB NULL DEFAULT '{}'::jsonb",
         "created_at": "TIMESTAMP NULL DEFAULT now()",
     },
+    "market_data_job_requests": {
+        "job_type": "TEXT NULL", "status": "TEXT NULL", "payload": "JSONB NULL",
+        "created_at": "TIMESTAMP DEFAULT now()", "updated_at": "TIMESTAMP DEFAULT now()",
+    },
 }
 
 _SQLITE_RUN_TABLE_COLUMNS = {
     "market_data_import_runs": {
+        "started_at": "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP",
         "metadata": "TEXT NULL",
         "total_assets": "INTEGER DEFAULT 0",
         "success_count": "INTEGER DEFAULT 0",
@@ -495,6 +558,7 @@ _SQLITE_RUN_TABLE_COLUMNS = {
         "finished_at": "TIMESTAMP NULL",
     },
     "market_analysis_runs": {
+        "started_at": "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP",
         "universe_id": "TEXT NULL REFERENCES market_universes(id)",
         "timeframe": "TEXT DEFAULT '1d'",
         "metadata": "TEXT NULL",
@@ -515,6 +579,10 @@ _SQLITE_RUN_TABLE_COLUMNS = {
         "confidence": "NUMERIC NULL",
         "payload": "TEXT NULL DEFAULT '{}'",
         "created_at": "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "market_data_job_requests": {
+        "job_type": "TEXT NULL", "status": "TEXT NULL", "payload": "TEXT NULL",
+        "created_at": "TIMESTAMP NULL", "updated_at": "TIMESTAMP NULL",
     },
 }
 

@@ -128,6 +128,70 @@ async def get_market_data(db: Session = Depends(get_db)):
     return payload
 
 
+@router.get('/admin/market-data/schema-status')
+def market_data_schema_status(db: Session = Depends(get_db)):
+    """Expose read-only schema diagnostics for production troubleshooting."""
+    dialect = db.get_bind().dialect.name
+    tables = [
+        "market_universes", "market_assets", "stock_etf_candles",
+        "market_data_import_runs", "market_analysis_runs",
+        "market_analysis_results", "market_data_job_requests",
+    ]
+    inspected_tables = [
+        "market_data_import_runs", "market_assets", "stock_etf_candles",
+    ]
+    if dialect == "sqlite":
+        exists = {
+            name: bool(db.execute(text(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=:name"
+            ), {"name": name}).first())
+            for name in tables
+        }
+        columns = {
+            name: [
+                {
+                    "column_name": row["name"], "data_type": row["type"],
+                    "udt_name": row["type"], "column_default": row["dflt_value"],
+                    "is_nullable": "NO" if row["notnull"] else "YES",
+                }
+                for row in db.execute(text(f"PRAGMA table_info({name})")).mappings()
+            ] if exists.get(name) else []
+            for name in inspected_tables
+        }
+        indexes = [dict(row) for row in db.execute(
+            text("PRAGMA index_list(stock_etf_candles)")
+        ).mappings()] if exists["stock_etf_candles"] else []
+        identity = {"current_database": "sqlite", "current_schema": "main", "current_user": None}
+    else:
+        exists = {
+            name: bool(db.execute(text("""
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema=current_schema() AND table_name=:name
+            """), {"name": name}).first())
+            for name in tables
+        }
+        columns = {
+            name: [dict(row) for row in db.execute(text("""
+                SELECT column_name, data_type, udt_name, column_default, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema=current_schema() AND table_name=:name
+                ORDER BY ordinal_position
+            """), {"name": name}).mappings()]
+            for name in inspected_tables
+        }
+        indexes = [dict(row) for row in db.execute(text("""
+            SELECT indexname, indexdef FROM pg_indexes
+            WHERE schemaname=current_schema() AND tablename='stock_etf_candles'
+            ORDER BY indexname
+        """)).mappings()]
+        row = db.execute(text(
+            "SELECT current_database(), current_schema(), current_user"
+        )).one()
+        identity = dict(zip(("current_database", "current_schema", "current_user"), row))
+    return {"ok": all(exists.values()), **identity, "table_exists": exists,
+            "columns": columns, "indexes": {"stock_etf_candles": indexes}}
+
+
 @router.get('/api/v1/stocks-etfs/dashboard')
 async def stocks_etfs_dashboard(universe: str | None = None, asset_type: str | None = None, db: Session = Depends(get_db)):
     repo = _repo(db)
@@ -230,15 +294,29 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail={"step": "ensure_schema", "error": str(exc)},
+            detail={"error": "IBKR_INGEST_FAILED", "step": "ensure_schema",
+                    "message": str(exc),
+                    "provider_symbol": payload.provider_symbol or payload.symbol,
+                    "symbol": payload.symbol},
         ) from exc
     provider_symbol = payload.provider_symbol or payload.symbol
-    asset = await repo.find_market_asset_for_ingest(
-        asset_id=payload.asset_id,
-        provider_symbol=provider_symbol,
-        symbol=payload.symbol,
-        asset_type=payload.asset_type,
-    )
+
+    async def step(name, operation):
+        try:
+            return await operation
+        except HTTPException:
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail={
+                "error": "IBKR_INGEST_FAILED", "step": name, "message": str(exc),
+                "provider_symbol": provider_symbol, "symbol": payload.symbol,
+            }) from exc
+
+    asset = await step("find_market_asset_for_ingest", repo.find_market_asset_for_ingest(
+        asset_id=payload.asset_id, provider_symbol=provider_symbol,
+        symbol=payload.symbol, asset_type=payload.asset_type,
+    ))
     asset_created = False
     if asset is None:
         symbol = payload.symbol or payload.provider_symbol
@@ -249,7 +327,7 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
         asset_type = (payload.asset_type or "ETF").upper()
         suffix = _symbol_suffix(payload.symbol, payload.provider_symbol)
         currency = payload.currency or ("EUR" if suffix == "PA" else "USD" if suffix == "US" else None)
-        universe_id = await repo.create_or_update_universe(
+        universe_id = await step("create_or_update_universe", repo.create_or_update_universe(
             _ibkr_universe_name(payload),
             description="Automatically created for IBKR candle ingestion",
             region=payload.region,
@@ -257,8 +335,8 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             currency=currency,
             provider="IBKR",
             enabled=True,
-        )
-        asset_id = await repo.upsert_market_asset(
+        ))
+        asset_id = await step("upsert_market_asset", repo.upsert_market_asset(
             universe_id,
             symbol=symbol,
             provider_symbol=created_provider_symbol,
@@ -274,11 +352,11 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             ucits=payload.ucits,
             enabled=True,
             priority=payload.priority or 100,
-        )
-        asset = await repo.find_market_asset_for_ingest(asset_id=asset_id)
+        ))
+        asset = await step("find_market_asset_for_ingest", repo.find_market_asset_for_ingest(asset_id=asset_id))
         asset_created = True
 
-    run_id = await repo.create_import_run(
+    run_id = await step("create_import_run", repo.create_import_run(
         payload.provider.upper(),
         payload.run_type,
         metadata={
@@ -290,25 +368,18 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             "timeframe": payload.timeframe,
             "received": len(payload.candles),
         },
-    )
+    ))
     candles = [SimpleNamespace(**candle.model_dump()) for candle in payload.candles]
-    try:
-        upserted = await repo.upsert_stock_etf_candles(
+    upserted = await step("upsert_stock_etf_candles", repo.upsert_stock_etf_candles(
             asset["id"],
             "IBKR",
             asset.get("provider_symbol") or provider_symbol or payload.symbol or "",
             payload.timeframe,
             candles,
-        )
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail={"step": "upsert_stock_etf_candles", "error": str(exc)},
-        ) from exc
+    ))
     queued_job_id = None
     if payload.queue_analysis:
-        queued_job_id = await repo.create_job_request(
+        queued_job_id = await step("create_job_request", repo.create_job_request(
             "analyze",
             payload={
                 "provider": payload.provider.upper(),
@@ -317,15 +388,18 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
                 "provider_symbol": asset.get("provider_symbol"),
                 "timeframe": payload.timeframe,
             },
-        )
-    await repo.finish_import_run(run_id, "SUCCESS", total_assets=1, success_count=1, failed_count=0)
+        ))
+    await step("finish_import_run", repo.finish_import_run(
+        run_id, "SUCCESS", total_assets=1, success_count=1, failed_count=0
+    ))
     try:
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail={"step": "commit", "error": str(exc)},
+            detail={"error": "IBKR_INGEST_FAILED", "step": "commit", "message": str(exc),
+                    "provider_symbol": provider_symbol, "symbol": payload.symbol},
         ) from exc
     return {
         "ok": True,
