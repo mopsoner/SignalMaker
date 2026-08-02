@@ -52,6 +52,60 @@ def _payload(close="213.50", volume="1000000"):
     }
 
 
+def test_run_tables_legacy_schema_upgrade_is_idempotent_and_allows_ingest():
+    client, db = _client_and_db()
+    db.execute(text("""
+        CREATE TABLE market_data_import_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL,
+            started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    db.execute(text("""
+        CREATE TABLE market_analysis_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            engine_name TEXT NOT NULL, status TEXT NOT NULL,
+            started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    db.execute(text("""
+        CREATE TABLE market_analysis_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+    """))
+    db.commit()
+
+    repository = MarketDataRepository(db)
+    repository.ensure_schema()
+    repository.ensure_schema()
+
+    expected_columns = {
+        "market_data_import_runs": {
+            "metadata", "total_assets", "success_count", "failed_count",
+            "error_message", "finished_at",
+        },
+        "market_analysis_runs": {
+            "universe_id", "timeframe", "metadata", "total_assets",
+            "success_count", "failed_count", "error_message", "finished_at",
+        },
+        "market_analysis_results": {
+            "analysis_run_id", "asset_id", "engine_name", "timeframe", "signal",
+            "score", "trend", "confidence", "payload", "created_at",
+        },
+    }
+    for table_name, expected in expected_columns.items():
+        actual = {
+            row.name
+            for row in db.execute(text(f"PRAGMA table_info({table_name})"))
+        }
+        assert expected <= actual
+
+    response = client.post("/api/v1/stocks-etfs/ibkr/candles", json=_payload())
+    assert response.status_code == 200
+    assert db.scalar(select(func.count()).select_from(MarketCandle)) == 0
+    db.close()
+
+
 def test_ibkr_ingest_is_idempotent_and_isolated_from_crypto_candles():
     client, db = _client_and_db()
 
