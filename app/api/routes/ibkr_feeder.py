@@ -85,7 +85,7 @@ def logs(lines: int = Query(300, ge=1, le=5000)):
     return {"ok": True, "lines": path.read_text(errors="replace").splitlines()[-lines:] if path.exists() else []}
 
 class DiscoveryRequest(BaseModel):
-    universe: str; asset_type: str; source: str = "seed-file"; seed_file: str | None = None
+    universe: str; asset_type: str | None = None; source: str = "seed-file"; seed_file: str | None = None
     exchange_code: str | None = None; region: str | None = None; country: str | None = None; currency: str | None = None
     pea_eligible: bool | None = None; ucits: bool | None = None; max_assets: int = Field(50, ge=1, le=1000)
     dry_run: bool = True; refresh: bool = False; append: bool = True
@@ -119,7 +119,7 @@ def save_discovered_assets(body: SaveAssets):
     return {"ok": True, "saved": len(values), "configured": len(current)}
 
 class ResolveSymbol(BaseModel):
-    symbol: str; asset_type: str; exchange_code: str | None = None; region: str | None = None
+    symbol: str; asset_type: str | None = None; exchange_code: str | None = None; region: str | None = None
     country: str | None = None; currency: str | None = None; universe: str
     pea_eligible: bool | None = None; ucits: bool | None = None
 
