@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -13,31 +14,38 @@ from typing import Any
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-SEEDS = {
-    "Stocks US": "us_stocks.txt", "Stocks Europe": "euronext_paris_stocks.txt",
-    "Stocks Euronext Paris": "euronext_paris_stocks.txt", "ETF Europe UCITS": "etf_europe_ucits.txt",
-    "ETF PEA": "etf_pea.txt",
-}
+SEEDS = {"Europe Stocks": "europe_stocks.csv", "Europe ETF": "europe_etf.csv"}
 INTERNAL_EXCHANGE_TO_IBKR = {
     "PA": ["PA", "SBF", "XPAR", "ENEXT", "SMART"],
-    "US": ["SMART", "NASDAQ", "NYSE", "ARCA", "AMEX"],
-    "AMS": ["AEB", "AMS", "XAMS", "ENEXT"],
-    "XETRA": ["IBIS", "XETRA", "XETR"],
-    "LSE": ["LSE", "XLON"],
-    "SWX": ["SWX", "EBS", "XSWX"],
+    "AMS": ["AEB", "AMS", "XAMS", "ENEXT", "SMART"],
+    "XETRA": ["IBIS", "XETRA", "XETR", "SMART"],
+    "LSE": ["LSE", "XLON", "SMART"],
+    "SWX": ["SWX", "EBS", "XSWX", "SMART"],
 }
+EUROPE_EXCHANGES = ["PA", "SBF", "XPAR", "ENEXT", "AEB", "AMS", "XAMS", "IBIS", "XETRA", "XETR", "LSE", "XLON", "SWX", "EBS", "XSWX", "SMART"]
 UNIVERSE_DEFAULTS = {
-    "Stocks Euronext Paris": {"asset_type": "STOCK", "exchange_code": "PA", "region": "EU", "country": "FR", "currency": "EUR", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["PA", "SBF", "XPAR", "ENEXT", "SMART"]},
-    "Stocks US": {"asset_type": "STOCK", "exchange_code": "US", "region": "US", "country": "US", "currency": "USD", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["SMART", "NASDAQ", "NYSE", "ARCA", "AMEX"]},
-    "Stocks Europe": {"asset_type": "STOCK", "region": "EU", "currency": "EUR", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["SBF", "XPAR", "ENEXT", "AEB", "XAMS", "IBIS", "XETRA", "XETR", "SMART"]},
-    "ETF PEA": {"asset_type": "ETF", "exchange_code": "PA", "region": "EU", "country": "FR", "currency": "EUR", "pea_eligible": True, "ucits": True, "ibkr_sec_types": ["ETF", "STK"], "ibkr_exchanges": ["PA", "SBF", "XPAR", "ENEXT", "SMART"]},
-    "ETF Europe UCITS": {"asset_type": "ETF", "region": "EU", "currency": "EUR", "ucits": True, "ibkr_sec_types": ["ETF", "STK"], "ibkr_exchanges": ["SBF", "XPAR", "ENEXT", "AEB", "XAMS", "IBIS", "XETRA", "SMART"]},
+    "Europe Stocks": {"asset_type": "STOCK", "region": "EU", "ibkr_sec_types": ["STK"], "ibkr_exchanges": EUROPE_EXCHANGES},
+    "Europe ETF": {"asset_type": "ETF", "region": "EU", "ucits": True, "ibkr_sec_types": ["ETF", "STK"], "ibkr_exchanges": EUROPE_EXCHANGES},
 }
 
 def with_universe_defaults(options: dict) -> dict:
     """Fill internal metadata and IBKR candidate fields from a universe name."""
-    defaults = UNIVERSE_DEFAULTS.get(options.get("universe"), {})
-    return {**defaults, **{key: value for key, value in options.items() if value is not None}}
+    supplied = {key: value for key, value in options.items() if value is not None}
+    universe = supplied.get("universe")
+    if universe not in UNIVERSE_DEFAULTS:
+        raise ValueError(f"unsupported universe: {universe}")
+    return {**UNIVERSE_DEFAULTS[universe], **supplied}
+
+def read_seed_rows(path: Path) -> list[dict]:
+    """Read a metadata-rich CSV seed file."""
+    if path.suffix.lower() != ".csv":
+        raise ValueError(f"seed file must be CSV: {path}")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        for field in ("pea_eligible", "ucits"):
+            if row.get(field) not in (None, ""): row[field] = row[field].strip().lower() == "true"
+    return [{k: v for k, v in row.items() if v not in (None, "")} for row in rows]
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -107,31 +115,44 @@ class Resolver:
         if not (body.get("authenticated") or body.get("iserver", {}).get("authStatus", {}).get("authenticated")):
             raise RuntimeError("IBKR Gateway is not authenticated. Open https://localhost:5000 and login first.")
 
-    def search(self, symbol: str) -> list[dict]:
-        response = self.session.get(self.base + "/iserver/secdef/search", params={"symbol": raw_symbol(symbol)}, verify=self.verify, timeout=30)
+    def search(self, symbol: str, sec_type: str | None = None) -> list[dict]:
+        params = {"symbol": raw_symbol(symbol)}
+        if sec_type: params["secType"] = sec_type
+        response = self.session.get(self.base + "/iserver/secdef/search", params=params, verify=self.verify, timeout=30)
         if response.status_code in {404, 405}:
-            response = self.session.post(self.base + "/iserver/secdef/search", json={"symbol": raw_symbol(symbol)}, verify=self.verify, timeout=30)
+            response = self.session.post(self.base + "/iserver/secdef/search", json=params, verify=self.verify, timeout=30)
         response.raise_for_status(); return _contracts(response.json())
 
     def resolve(self, symbol: str, options: dict) -> dict:
         options = with_universe_defaults(options)
-        candidates = self.search(symbol)
         score = lambda row: score_contract(row, symbol, options["asset_type"], options.get("exchange_code"), options.get("currency"), options.get("ibkr_sec_types"), options.get("ibkr_exchanges"))
-        ranked = sorted(candidates, key=score, reverse=True)
+        ranked = []
+        for sec_type in (["STK"] if options["asset_type"] == "STOCK" else ["ETF", "STK"]):
+            ranked = sorted(self.search(symbol, sec_type), key=score, reverse=True)
+            if ranked and score(ranked[0]) >= 0: break
         if not ranked or score(ranked[0]) < 0:
             raise LookupError("no matching IBKR contract")
         row = ranked[0]; conid = _value(row, "conid", "conidEx", "contractId")
         if conid is None: raise LookupError("matching contract has no conid")
         exchange = _value(row, "listingExchange", "exchange", "primaryExchange")
         conid = str(conid).split("@")[0]
-        history = self.session.get(self.base + "/iserver/marketdata/history", params={"conid": conid, "period": "1d", "bar": "1d"}, verify=self.verify, timeout=30)
-        history.raise_for_status()
-        return {"enabled": True, "symbol": symbol, "provider_symbol": symbol, "conid": conid,
+        history = self.session.get(self.base + "/iserver/marketdata/history", params={"conid": conid, "period": "1w", "bar": "1d"}, verify=self.verify, timeout=30)
+        history_error = None
+        try:
+            history.raise_for_status()
+            payload = history.json()
+            bars = payload.get("data", []) if isinstance(payload, dict) else payload if isinstance(payload, list) else []
+            if not bars: raise RuntimeError("IBKR history returned no bars")
+        except Exception as exc:
+            history_error = str(exc)
+        return {"enabled": history_error is None, "symbol": symbol, "provider_symbol": symbol, "conid": conid,
                 "asset_type": options["asset_type"], "currency": _value(row, "currency") or options.get("currency"),
                 "exchange_code": options.get("exchange_code"), "region": options.get("region"), "country": options.get("country"),
                 "universe": options["universe"], "name": _value(row, "description", "companyName", "name") or raw_symbol(symbol),
                 "isin": _value(row, "isin"), "mic": _value(row, "listingExchange", "mic"),
                 "pea_eligible": bool(options.get("pea_eligible")), "ucits": bool(options.get("ucits")), "priority": 100,
+                "resolution_status": "RESOLVED" if history_error is None else "FAILED_HISTORY_VALIDATION",
+                "history_validation_status": "PASSED" if history_error is None else "FAILED", "last_error": history_error,
                 "ibkr": {"resolved_at": utcnow(), "raw_symbol": raw_symbol(symbol), "selected_exchange": exchange,
                          "primary_exchange": _value(row, "primaryExchange", "primary_exchange"), "sec_type": _value(row, "secType", "sec_type")}}
 
@@ -142,7 +163,7 @@ def seed_path(options: dict) -> Path:
 def discover(options: dict, resolver: Resolver | None = None, authenticate: bool = True) -> dict:
     options = with_universe_defaults(options)
     output = Path(options.get("output") or ROOT / "config/ibkr_assets.json"); output = output if output.is_absolute() else ROOT / output
-    existing = read_assets(output); by_symbol = {a.get("provider_symbol", "").upper(): a for a in existing}
+    existing = read_assets(output)
     resolver = resolver or Resolver()
     if authenticate: resolver.auth()
     source = options.get("source", "seed-file"); notices = []
@@ -154,23 +175,18 @@ def discover(options: dict, resolver: Resolver | None = None, authenticate: bool
         except Exception as exc: notices.append(f"IBKR scanner unavailable ({exc}); falling back to seed-file mode.")
     path = seed_path(options)
     if not path.is_file(): raise FileNotFoundError(f"seed file not found: {path}")
-    symbols = [line.strip() for line in path.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")][:options.get("max_assets", 50)]
+    rows = read_seed_rows(path)[:options.get("max_assets", 50)]
     assets, errors = [], []
-    for symbol in symbols:
-        old = by_symbol.get(symbol.upper())
-        if old and old.get("conid") and not options.get("refresh"):
-            assets.append(old); continue
+    for row in rows:
+        symbol = row["symbol"]
         try:
-            asset = resolver.resolve(symbol, options)
-            if old and old.get("enabled") is False: asset["enabled"] = False
+            asset = resolver.resolve(symbol, {**options, **row})
             assets.append(asset)
         except Exception as exc: errors.append({"input_symbol": symbol, "provider_symbol": symbol, "status": "failed", "error": str(exc)})
-    merged = dict(by_symbol)
-    for asset in assets: merged[asset["provider_symbol"].upper()] = asset
-    final = list(merged.values()) if options.get("append", True) else assets
-    if not options.get("dry_run"): write_assets(output, final)
-    return {"ok": True, "configured_assets_before": len(existing), "resolved": sum(bool(a.get("conid")) for a in assets),
-            "failed": len(errors), "dry_run": bool(options.get("dry_run")), "assets": assets, "errors": errors,
+    if not options.get("dry_run"): write_assets(output, assets)
+    history_failures = sum(a.get("history_validation_status") == "FAILED" for a in assets)
+    return {"ok": True, "configured_assets_before": len(existing), "resolved": sum(a.get("resolution_status") == "RESOLVED" for a in assets),
+            "failed": len(errors) + history_failures, "dry_run": bool(options.get("dry_run")), "assets": assets, "errors": errors,
             "notices": notices, "last_discovery_run": utcnow(), "output": str(output)}
 
 def parser() -> argparse.ArgumentParser:
@@ -178,7 +194,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--seed-file"); p.add_argument("--universe", required=True, choices=list(SEEDS)); p.add_argument("--asset-type", choices=["STOCK", "ETF"])
     for name in ("exchange-code", "region", "country", "currency"): p.add_argument("--" + name)
     p.add_argument("--pea-eligible", type=boolean); p.add_argument("--ucits", type=boolean); p.add_argument("--output", default="config/ibkr_assets.json")
-    p.add_argument("--append", action="store_true", default=True); p.add_argument("--refresh", action="store_true"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--max-assets", type=int, default=50)
+    p.add_argument("--dry-run", action="store_true"); p.add_argument("--max-assets", type=int, default=50)
     return p
 
 def main(argv: list[str] | None = None) -> int:
