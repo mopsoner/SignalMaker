@@ -4,15 +4,17 @@ import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
+import { confirmAndClearAllStockEtfData } from '../lib/clearAllStockEtfData'
 import { fmtDate } from '../lib/format'
 
 export default function MarketDataAdminPage() {
   const [message, setMessage] = useState('')
+  const [clearingAll, setClearingAll] = useState(false)
   const [universe, setUniverse] = useState('Europe Stocks')
   const [preview, setPreview] = useState(null)
   const { data, loading, error, refresh } = usePollingQuery(useCallback(() => api.marketDataSettings(), []), 30000)
   const { data: env, error: envError } = usePollingQuery(useCallback(() => api.envSettings(), []), 30000)
-  const { data: assetData, error: assetsError } = usePollingQuery(useCallback(() => api.stockEtfAssets('?limit=500'), []), 30000)
+  const { data: assetData, error: assetsError, refresh: refreshAssets } = usePollingQuery(useCallback(() => api.stockEtfAssets('?limit=500'), []), 30000)
   const assets = Array.isArray(assetData) ? assetData : Array.isArray(assetData?.assets) ? assetData.assets : []
   const errorText = (value) => value?.message || String(value || '')
 
@@ -23,6 +25,27 @@ export default function MarketDataAdminPage() {
 
   async function toggleAsset(row) {
     await action(`Update ${row.provider_symbol}`, () => api.updateMarketAsset(row.id, { enabled: !row.enabled }))
+  }
+
+  async function clearAllData() {
+    try {
+      const result = await confirmAndClearAllStockEtfData({
+        confirm: window.confirm,
+        request: api.clearAllStockEtfData,
+        refreshSettings: () => refresh?.(),
+        refreshAssets: () => refreshAssets?.(),
+        onConfirmed: () => {
+          setClearingAll(true)
+          setMessage('Clear all ETF/stock data…')
+        },
+      })
+      if (result === null) return
+      setMessage(`Clear all ETF/stock data: ${JSON.stringify(result)}`)
+    } catch (e) {
+      setMessage(`Clear all ETF/stock data failed: ${e.message}`)
+    } finally {
+      setClearingAll(false)
+    }
   }
 
   const columns = [
@@ -50,6 +73,7 @@ export default function MarketDataAdminPage() {
       <button className="button" onClick={() => action('Preview backfill', async () => { const r = await api.previewMarketAction({ action: 'backfill', universe, limit: 50 }); setPreview(r); return r })}>Preview backfill</button>
       <button className="button" onClick={() => action('Queue backfill', () => api.queueMarketJob({ job_type: 'backfill', universe, limit: 50 }))}>Queue backfill</button>
       <button className="button" onClick={() => action('Run both engines', () => api.runMarketAnalysis({ engine: 'both', universe, limit: 50 }))}>Run both</button>
+      <button className="button" style={{ borderColor: 'rgba(239, 68, 68, 0.45)', color: 'var(--red)' }} disabled={clearingAll} onClick={clearAllData}>{clearingAll ? 'Clearing all ETF/stock data…' : 'Clear all ETF/stock data'}</button>
     </div>{message ? <p className="stat-hint" style={{ marginTop: 12 }}>{message}</p> : null}{preview ? <pre className="stat-hint" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview, null, 2)}</pre> : null}</section>
     <section className="panel"><h2>Configuration</h2><div className="stats-grid" style={{ marginTop: 12 }}><StatCard label="Timeframe" value={data?.default_timeframe || '1d'} /><StatCard label="Exchange" value={data?.default_exchange || 'PA'} /><StatCard label="Concurrency" value={data?.max_concurrent ?? '—'} /><StatCard label="Sleep seconds" value={data?.request_sleep_seconds ?? '—'} /></div><p className="stat-hint">Start date: {data?.start_date || '—'} · Adjusted data: {data?.adjusted_data ? 'yes' : 'no'} · Last import: {fmtDate(data?.last_import_run?.started_at)} · Last analysis: {fmtDate(data?.last_analysis_run?.started_at)}</p></section>
     <section className="panel"><h2>Environment variables</h2>{env?.warnings?.length ? <ul>{env.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : <p className="stat-hint">No warnings.</p>}<p className="stat-hint">{env?.instructions}</p></section>
