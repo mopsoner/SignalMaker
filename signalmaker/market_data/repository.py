@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import weakref
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,11 +16,23 @@ def _row(row: Any) -> dict[str, Any]:
 
 
 class MarketDataRepository:
+    _schema_ready: weakref.WeakSet = weakref.WeakSet()
+    _schema_lock = threading.Lock()
+
     def __init__(self, db: Session):
         self.db = db
 
     def ensure_schema(self) -> None:
         bind = self.db.get_bind()
+        if bind in self._schema_ready:
+            return
+        with self._schema_lock:
+            if bind in self._schema_ready:
+                return
+            self._ensure_schema(bind)
+            self._schema_ready.add(bind)
+
+    def _ensure_schema(self, bind) -> None:
         dialect = bind.dialect.name
         if dialect == "sqlite":
             stmts = _SQLITE_SCHEMA

@@ -33,13 +33,16 @@ class CollectorService:
 
     def _stored_symbols(self, limit: int | None = None) -> list[str]:
         db = SessionLocal()
+        logger.debug("collector DB session opened")
         try:
             stmt = select(MarketCandle.symbol).distinct().order_by(MarketCandle.symbol)
             if limit:
                 stmt = stmt.limit(limit)
             return [str(symbol).upper() for symbol in db.scalars(stmt).all()]
         finally:
+            db.rollback()
             db.close()
+            logger.debug("collector DB session closed")
 
     def heartbeat(self) -> dict:
         return {
