@@ -21,11 +21,13 @@ if __name__ == "__main__":
         db = SessionLocal()
         try:
             result = MomentumBacktestService(db).process_next_queued()
+            db.commit()
             if result:
                 print(f"Momentum backtest completed: {result}", flush=True)
             else:
                 print("Momentum backtest worker idle", flush=True)
         except Exception as exc:
+            db.rollback()
             print(f"Momentum backtest worker error: {exc}", flush=True)
         finally:
             try:

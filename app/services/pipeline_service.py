@@ -196,6 +196,9 @@ class PipelineService:
         symbols = self.collector.discover_symbols(limit=limit)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
         self.live_runs.start_run(run_id=run_id, mode="paper", symbols_total=len(symbols))
+        # Persist the run marker before collection/analysis so no transaction is
+        # idle while external collectors or CPU-heavy engines execute.
+        self.db.commit()
 
         scanned = 0
         candidates = 0
@@ -205,6 +208,7 @@ class PipelineService:
         errors: list[dict] = []
         collected_symbols: set[str] = set()
         latest_close_times = self.market_data.get_latest_close_times(symbols)
+        self.db.rollback()
 
         pipeline_counts = Counter()
         planner_reason_counts = Counter()
@@ -275,6 +279,9 @@ class PipelineService:
         for symbol in analyzed_symbols:
             try:
                 candles = self.market_data.load_symbol_bundle(symbol, limits)
+                # All engine inputs are now detached dictionaries.  End the read
+                # transaction before validation and signal computation.
+                self.db.rollback()
                 execution_candles = candles.get(execution_interval, [])
                 quality_exec = self.market_data.validate_candle_series(execution_interval, execution_candles, min_count=30)
                 if not quality_exec["valid"]:
@@ -395,6 +402,8 @@ class PipelineService:
                     data_quality_counts['external_swings_flat'] += 1
 
                 scanned += 1
+                # Bound each symbol's writes to its own short transaction.
+                self.db.commit()
             except Exception as exc:
                 self.db.rollback()
                 record_error({"symbol": symbol, "phase": "analyze", "error": str(exc)})

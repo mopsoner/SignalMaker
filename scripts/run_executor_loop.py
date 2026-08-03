@@ -30,6 +30,8 @@ if __name__ == "__main__":
 
             if not bot.get("bot_executor_enabled", True):
                 print("Executor disabled — sleeping 30s", flush=True)
+                db.rollback()
+                db.close()
                 time.sleep(30)
                 continue
 
@@ -39,6 +41,7 @@ if __name__ == "__main__":
             mode = 'paper'
 
             result = ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode=mode)
+            db.commit()
             print(f"Executor tick ({mode}): {result}", flush=True)
 
         except Exception as exc:

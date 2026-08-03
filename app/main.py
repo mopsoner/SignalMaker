@@ -9,6 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api.router import api_router
 from app.core.config import settings
 from app.db.base import init_db
+from app.db.session import SessionLocal, rollback_and_close
+from signalmaker.market_data.repository import MarketDataRepository
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -17,6 +19,14 @@ _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 async def lifespan(_: FastAPI):
     if settings.create_tables_on_boot:
         init_db()
+    db = SessionLocal()
+    try:
+        MarketDataRepository(db).ensure_schema()
+    except Exception:
+        rollback_and_close(db)
+        raise
+    else:
+        db.close()
     yield
 
 

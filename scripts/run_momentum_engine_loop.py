@@ -47,6 +47,8 @@ if __name__ == "__main__":
             enabled = bot.get("bot_momentum_engine_enabled", momentum.get("momentum_engine_enabled", True))
             if not enabled:
                 print(f"Momentum engine disabled — cadence_hours={cadence_hours} sleeping 30s", flush=True)
+                db.rollback()
+                db.close()
                 time.sleep(30)
                 continue
 
@@ -60,6 +62,7 @@ if __name__ == "__main__":
                 starting_capital=starting_capital,
                 min_momentum_score=min_score,
             )
+            db.commit()
             position = result.get("open_position") or {}
             best_asset = result.get("best_asset") or {}
             print(

@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import logging
+from time import perf_counter
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Literal
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
+from app.db.session import SessionLocal, rollback_and_close
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
@@ -16,6 +19,7 @@ from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ExternalMarketCandleIn(BaseModel):
@@ -105,9 +109,9 @@ def _delete_table_rows(db: Session, table_name: str) -> int:
 
 
 def _repo(db: Session) -> MarketDataRepository:
-    repo = MarketDataRepository(db)
-    repo.ensure_schema()
-    return repo
+    # Schema DDL is initialized once in application lifespan.  Request paths are
+    # deliberately query-only unless the endpoint itself performs a write.
+    return MarketDataRepository(db)
 
 
 @router.get('/admin/env')
@@ -483,19 +487,60 @@ async def backfill(payload: dict | None = None):
 
 
 @router.post('/admin/market-data/analyze')
-async def analyze(payload: dict | None = None, db: Session = Depends(get_db)):
+async def analyze(payload: dict | None = None):
+    """Analyze snapshots in memory, never while a DB transaction is open."""
     payload = payload or {}
-    repo = _repo(db)
-    adapter = MarketAnalysisAdapter(repo)
-    assets = await repo.list_enabled_market_assets(universe_name=payload.get('universe'), asset_type=payload.get('asset_type'), limit=int(payload.get('limit') or 10))
+    started = perf_counter()
+    timeframe = (payload.get('timeframes') or [payload.get('timeframe', '1d')])[0]
+    symbols = payload.get('symbols') or None
+    db = SessionLocal()
+    try:
+        repo = _repo(db)
+        assets = await repo.list_enabled_market_assets(
+            universe_name=payload.get('universe'), asset_type=payload.get('asset_type'),
+            limit=int(payload.get('limit') or 10), symbols=symbols,
+        )
+        snapshots = {
+            asset['id']: await repo.load_stock_etf_candles_for_asset(asset['id'], timeframe)
+            for asset in assets
+        }
+        # End the read transaction before CPU work begins.
+        db.rollback()
+    except Exception:
+        rollback_and_close(db)
+        raise
+    else:
+        db.close()
+    loaded_at = perf_counter()
+    logger.info("market analyze loaded assets=%d seconds=%.3f", len(assets), loaded_at - started)
+
+    # Adapter conversion/engines are pure once their candle snapshot is loaded.
+    class SnapshotAdapter(MarketAnalysisAdapter):
+        async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
+            return snapshots.get(asset_id, [])
+
+    adapter = SnapshotAdapter(None)
     engines = ['momentum', 'wyckoff_smc'] if payload.get('engine', 'both') == 'both' else [payload.get('engine', 'momentum')]
-    run_id = await repo.create_analysis_run(payload.get('engine', 'both'), timeframe=payload.get('timeframe', '1d'), metadata=payload)
     results = []
     for asset in assets:
         for engine in engines:
-            res = await (adapter.run_momentum_analysis(asset['id']) if engine == 'momentum' else adapter.run_wyckoff_smc_analysis(asset['id']))
-            await repo.insert_analysis_result(run_id, asset['id'], res['engine_name'], payload.get('timeframe', '1d'), res)
+            res = await (adapter.run_momentum_analysis(asset['id'], timeframe) if engine == 'momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], timeframe))
             results.append({'symbol': asset['provider_symbol'], **res})
-    await repo.finish_analysis_run(run_id, 'SUCCESS', len(results), len(results), 0)
-    db.commit()
+    analyzed_at = perf_counter()
+    logger.info("market analyze computed results=%d seconds=%.3f", len(results), analyzed_at - loaded_at)
+
+    db = SessionLocal()
+    try:
+        repo = _repo(db)
+        run_id = await repo.create_analysis_run(payload.get('engine', 'both'), timeframe=timeframe, metadata=payload)
+        for asset, result in ((a, r) for a in assets for r in results if r['symbol'] == a['provider_symbol']):
+            await repo.insert_analysis_result(run_id, asset['id'], result['engine_name'], timeframe, result)
+        await repo.finish_analysis_run(run_id, 'SUCCESS', len(results), len(results), 0)
+        db.commit()
+    except Exception:
+        rollback_and_close(db)
+        raise
+    else:
+        db.close()
+    logger.info("market analyze persisted run_id=%s total_seconds=%.3f", run_id, perf_counter() - started)
     return {'results': results}

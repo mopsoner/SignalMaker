@@ -74,10 +74,13 @@ if __name__ == "__main__":
             print(f"Pipeline tick start: {settings_log}", flush=True)
             if not enabled:
                 print(f"Pipeline disabled: {settings_log} — sleeping 30s", flush=True)
+                db.rollback()
+                db.close()
                 time.sleep(30)
                 continue
 
             result = PipelineService(db).run_once(limit=limit)
+            db.commit()
             print(f"Pipeline tick complete: {result}", flush=True)
 
         except Exception as exc:
