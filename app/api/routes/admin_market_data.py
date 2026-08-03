@@ -5,7 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -78,18 +78,32 @@ def _symbol_suffix(*symbols: str | None) -> str | None:
 
 
 def _ibkr_universe_name(payload: ExternalMarketCandleIngestRequest) -> str:
-    if payload.universe:
-        return payload.universe
+    aliases = {
+        "Stocks Euronext Paris": "Europe Stocks",
+        "Stocks Europe": "Europe Stocks",
+        "ETF PEA": "Europe ETF",
+        "ETF Europe UCITS": "Europe ETF",
+    }
+    if payload.universe and payload.universe != "IBKR Imported":
+        return aliases.get(payload.universe, payload.universe)
 
-    asset_type = (payload.asset_type or "ETF").upper()
+    asset_type = (payload.asset_type or "").upper()
+    if payload.universe == "IBKR Imported" and not (asset_type and payload.region):
+        return "IBKR Imported"
+    if asset_type == "STOCK" and (payload.region or "").upper() == "EU":
+        return "Europe Stocks"
+    if asset_type == "ETF" and (payload.region or "").upper() == "EU":
+        return "Europe ETF"
+
+    asset_type = asset_type or "ETF"
     currency = (payload.currency or "").upper()
     suffix = _symbol_suffix(payload.symbol, payload.provider_symbol)
     if asset_type == "ETF" and currency == "EUR":
-        return "ETF Europe UCITS"
+        return "Europe ETF"
     if asset_type == "ETF" and suffix == "PA":
-        return "ETF PEA"
+        return "Europe ETF"
     if asset_type == "STOCK" and suffix == "PA":
-        return "Stocks Euronext Paris"
+        return "Europe Stocks"
     if asset_type == "STOCK" and (currency == "USD" or suffix == "US"):
         return "Stocks US"
     return "IBKR Imported"
@@ -112,6 +126,16 @@ def _repo(db: Session) -> MarketDataRepository:
     # Schema DDL is initialized once in application lifespan.  Request paths are
     # deliberately query-only unless the endpoint itself performs a write.
     return MarketDataRepository(db)
+
+
+def _asset_filter_params(
+    region: str | None = None, country: str | None = None,
+    exchange_code: str | None = None, provider: str | None = None,
+    pea_eligible: bool | None = Query(default=None),
+    ucits: bool | None = Query(default=None),
+):
+    return {"region": region, "country": country, "exchange_code": exchange_code,
+            "provider": provider, "pea_eligible": pea_eligible, "ucits": ucits}
 
 
 @router.get('/admin/env')
@@ -197,28 +221,28 @@ def market_data_schema_status(db: Session = Depends(get_db)):
 
 
 @router.get('/api/v1/stocks-etfs/dashboard')
-async def stocks_etfs_dashboard(universe: str | None = None, asset_type: str | None = None, db: Session = Depends(get_db)):
+async def stocks_etfs_dashboard(universe: str | None = None, asset_type: str | None = None, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
     repo = _repo(db)
-    assets = await repo.list_enabled_market_assets(universe_name=universe, asset_type=asset_type, limit=1000)
-    momentum = await repo.latest_analysis_results(engine_name='momentum', universe_name=universe, asset_type=asset_type, limit=500)
-    wyckoff = await repo.latest_analysis_results(engine_name='wyckoff_smc', universe_name=universe, asset_type=asset_type, limit=500)
+    assets = await repo.list_enabled_market_assets(universe_name=universe, asset_type=asset_type, limit=1000, **filters)
+    momentum = await repo.latest_analysis_results(engine_name='momentum', universe_name=universe, asset_type=asset_type, limit=500, **filters)
+    wyckoff = await repo.latest_analysis_results(engine_name='wyckoff_smc', universe_name=universe, asset_type=asset_type, limit=500, **filters)
     stats = repo.stats()
     return {'stats': stats, 'assets': assets, 'momentum': momentum, 'wyckoff_smc': wyckoff}
 
 
 @router.get('/api/v1/stocks-etfs/assets')
-async def stocks_etfs_assets(universe: str | None = None, asset_type: str | None = None, limit: int = 300, db: Session = Depends(get_db)):
-    return await _repo(db).list_enabled_market_assets(universe_name=universe, asset_type=asset_type, limit=limit)
+async def stocks_etfs_assets(universe: str | None = None, asset_type: str | None = None, limit: int = 300, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
+    return await _repo(db).list_enabled_market_assets(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
 @router.get('/api/v1/stocks-etfs/results')
-async def stocks_etfs_results(engine: str | None = None, universe: str | None = None, asset_type: str | None = None, limit: int = 200, db: Session = Depends(get_db)):
-    return await _repo(db).latest_analysis_results(engine_name=engine, universe_name=universe, asset_type=asset_type, limit=limit)
+async def stocks_etfs_results(engine: str | None = None, universe: str | None = None, asset_type: str | None = None, limit: int = 200, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
+    return await _repo(db).latest_analysis_results(engine_name=engine, universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
 @router.get('/api/v1/stocks-etfs/candidates')
-async def stocks_etfs_candidates(engine: str = 'wyckoff_smc', universe: str | None = None, asset_type: str | None = None, limit: int = 200, db: Session = Depends(get_db)):
-    rows = await _repo(db).latest_analysis_results(engine_name=engine, universe_name=universe, asset_type=asset_type, limit=limit)
+async def stocks_etfs_candidates(engine: str = 'wyckoff_smc', universe: str | None = None, asset_type: str | None = None, limit: int = 200, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
+    rows = await _repo(db).latest_analysis_results(engine_name=engine, universe_name=universe, asset_type=asset_type, limit=limit, **filters)
     return [r for r in rows if str(r.get('signal') or '').upper() in {'BUY', 'SELL'}]
 
 
@@ -229,21 +253,21 @@ async def stocks_etfs_positions(universe: str | None = None, asset_type: str | N
 
 
 @router.get('/api/v1/stocks-etfs/data-quality')
-async def stocks_etfs_data_quality(universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
+async def stocks_etfs_data_quality(universe: str | None = None, asset_type: str | None = None, limit: int = 500, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
     repo = _repo(db)
-    return await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
+    return await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
 @router.get('/api/v1/stocks-etfs/freshness')
-async def stocks_etfs_freshness(universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
+async def stocks_etfs_freshness(universe: str | None = None, asset_type: str | None = None, limit: int = 500, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
     repo = _repo(db)
-    return await repo.analysis_freshness(universe_name=universe, asset_type=asset_type, limit=limit)
+    return await repo.analysis_freshness(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
 @router.get('/api/v1/stocks-etfs/confluence')
-async def stocks_etfs_confluence(universe: str | None = None, asset_type: str | None = None, limit: int = 300, db: Session = Depends(get_db)):
+async def stocks_etfs_confluence(universe: str | None = None, asset_type: str | None = None, limit: int = 300, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
     repo = _repo(db)
-    return await repo.confluence_results(universe_name=universe, asset_type=asset_type, limit=limit)
+    return await repo.confluence_results(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
 def _csv(rows: list[dict]) -> Response:
@@ -329,12 +353,16 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             raise HTTPException(status_code=422, detail="symbol or provider_symbol is required to create a market asset")
 
         asset_type = (payload.asset_type or "ETF").upper()
+        universe_name = _ibkr_universe_name(payload)
+        legacy_pea = payload.universe in {"ETF PEA", "Stocks Euronext Paris"}
+        legacy_ucits = payload.universe in {"ETF PEA", "ETF Europe UCITS"}
+        region = payload.region or ("EU" if universe_name in {"Europe Stocks", "Europe ETF"} else None)
         suffix = _symbol_suffix(payload.symbol, payload.provider_symbol)
         currency = payload.currency or ("EUR" if suffix == "PA" else "USD" if suffix == "US" else None)
         universe_id = await step("create_or_update_universe", repo.create_or_update_universe(
-            _ibkr_universe_name(payload),
+            universe_name,
             description="Automatically created for IBKR candle ingestion",
-            region=payload.region,
+            region=region,
             asset_type=asset_type,
             currency=currency,
             provider="IBKR",
@@ -347,18 +375,47 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
             exchange_code=payload.exchange_code or suffix,
             name=payload.name or symbol,
             asset_type=asset_type,
-            region=payload.region,
-            country=payload.country,
+            region=region,
+            country=payload.country or ("FR" if payload.universe == "Stocks Euronext Paris" else None),
             currency=currency,
             isin=payload.isin,
             mic=payload.mic,
-            pea_eligible=payload.pea_eligible,
-            ucits=payload.ucits,
+            pea_eligible=True if legacy_pea else bool(payload.pea_eligible),
+            ucits=True if legacy_ucits else bool(payload.ucits),
             enabled=True,
             priority=payload.priority or 100,
+            provider=payload.provider,
         ))
         asset = await step("find_market_asset_for_ingest", repo.find_market_asset_for_ingest(asset_id=asset_id))
         asset_created = True
+    else:
+        # Newer executor versions are authoritative for classification attributes;
+        # refresh a previously discovered asset without replacing candle history.
+        universe_name = _ibkr_universe_name(payload)
+        asset_type = (payload.asset_type or asset.get("asset_type") or "ETF").upper()
+        region = payload.region or asset.get("region")
+        if payload.universe or payload.asset_type or payload.region:
+            universe_id = await step("create_or_update_universe", repo.create_or_update_universe(
+                universe_name, description="IBKR Europe asset universe", region=region,
+                asset_type=asset_type, currency=payload.currency or asset.get("currency"),
+                provider="IBKR", enabled=True,
+            ))
+            legacy_pea = payload.universe in {"ETF PEA", "Stocks Euronext Paris"}
+            legacy_ucits = payload.universe in {"ETF PEA", "ETF Europe UCITS"}
+            asset_id = await step("upsert_market_asset", repo.upsert_market_asset(
+                universe_id, symbol=payload.symbol or asset["symbol"],
+                provider_symbol=provider_symbol or asset["provider_symbol"],
+                exchange_code=payload.exchange_code or asset.get("exchange_code"),
+                name=payload.name or asset.get("name"), asset_type=asset_type,
+                region=region, country=payload.country or asset.get("country"),
+                currency=payload.currency or asset.get("currency"),
+                isin=payload.isin or asset.get("isin"), mic=payload.mic or asset.get("mic"),
+                pea_eligible=True if legacy_pea else (payload.pea_eligible if payload.pea_eligible is not None else asset.get("pea_eligible")),
+                ucits=True if legacy_ucits else (payload.ucits if payload.ucits is not None else asset.get("ucits")),
+                enabled=bool(asset.get("enabled", True)), priority=payload.priority or asset.get("priority") or 100,
+                provider="IBKR",
+            ))
+            asset = await step("find_market_asset_for_ingest", repo.find_market_asset_for_ingest(asset_id=asset_id))
 
     run_id = await step("create_import_run", repo.create_import_run(
         payload.provider.upper(),
@@ -499,6 +556,7 @@ async def analyze(payload: dict | None = None):
         assets = await repo.list_enabled_market_assets(
             universe_name=payload.get('universe'), asset_type=payload.get('asset_type'),
             limit=int(payload.get('limit') or 10), symbols=symbols,
+            **{key: payload.get(key) for key in ('region', 'country', 'exchange_code', 'provider', 'pea_eligible', 'ucits')},
         )
         snapshots = {
             asset['id']: await repo.load_stock_etf_candles_for_asset(asset['id'], timeframe)

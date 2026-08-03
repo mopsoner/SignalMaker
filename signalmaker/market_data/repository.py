@@ -22,6 +22,15 @@ class MarketDataRepository:
     def __init__(self, db: Session):
         self.db = db
 
+    @staticmethod
+    def _asset_filters(query: str, params: dict[str, Any], filters: dict[str, Any]):
+        for field in ("region", "country", "exchange_code", "provider", "pea_eligible", "ucits"):
+            value = filters.get(field)
+            if value is not None:
+                query += f" AND a.{field} = :{field}"
+                params[field] = value
+        return query
+
     def ensure_schema(self) -> None:
         bind = self.db.get_bind()
         if bind in self._schema_ready:
@@ -41,8 +50,54 @@ class MarketDataRepository:
         for stmt in stmts:
             self.db.execute(text(stmt))
         self._ensure_legacy_market_data_schema(dialect)
+        self._ensure_market_assets_schema(dialect)
+        self._normalize_ibkr_universes()
         self._ensure_stock_etf_candle_schema()
         self.db.commit()
+
+    def _ensure_market_assets_schema(self, dialect: str) -> None:
+        """Add Europe-universe attributes safely to legacy installations."""
+        definitions = {
+            "provider": "TEXT NOT NULL DEFAULT 'IBKR'",
+            "pea_eligible": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "ucits": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "metadata": "TEXT NULL" if dialect == "sqlite" else "JSONB NULL DEFAULT '{}'::jsonb",
+        }
+        if dialect == "sqlite":
+            existing = {row.name for row in self.db.execute(text("PRAGMA table_info(market_assets)"))}
+            for name, definition in definitions.items():
+                if name not in existing:
+                    self.db.execute(text(f"ALTER TABLE market_assets ADD COLUMN {name} {definition}"))
+        else:
+            for name, definition in definitions.items():
+                self.db.execute(text(f"ALTER TABLE market_assets ADD COLUMN IF NOT EXISTS {name} {definition}"))
+
+    def _normalize_ibkr_universes(self) -> None:
+        """Idempotently collapse legacy IBKR universes into the two primary views."""
+        rules = (
+            ("Stocks Euronext Paris", "Europe Stocks", "STOCK", True, False, "FR", "PA"),
+            ("Stocks Europe", "Europe Stocks", "STOCK", False, False, None, None),
+            ("ETF PEA", "Europe ETF", "ETF", True, True, None, None),
+            ("ETF Europe UCITS", "Europe ETF", "ETF", False, True, None, None),
+        )
+        for old, new, asset_type, pea, ucits, country, exchange in rules:
+            old_id = self.db.execute(text("SELECT id FROM market_universes WHERE name=:name"), {"name": old}).scalar()
+            if old_id is None:
+                continue
+            new_id = self.db.execute(text("SELECT id FROM market_universes WHERE name=:name"), {"name": new}).scalar()
+            if new_id is None:
+                new_id = self.db.execute(text("""
+                    INSERT INTO market_universes (name, region, asset_type, provider)
+                    VALUES (:name, 'EU', :asset_type, 'IBKR') RETURNING id
+                """), {"name": new, "asset_type": asset_type}).scalar_one()
+            self.db.execute(text("""
+                UPDATE market_assets SET universe_id=:new_id, region='EU', asset_type=:asset_type,
+                    pea_eligible=CASE WHEN :pea THEN TRUE ELSE COALESCE(pea_eligible, FALSE) END,
+                    ucits=CASE WHEN :ucits THEN TRUE ELSE COALESCE(ucits, FALSE) END,
+                    country=COALESCE(:country, country), exchange_code=COALESCE(:exchange, exchange_code),
+                    provider='IBKR', updated_at=CURRENT_TIMESTAMP
+                WHERE universe_id=:old_id AND (provider='IBKR' OR provider IS NULL)
+            """), locals())
 
     def _ensure_legacy_market_data_schema(self, dialect: str) -> None:
         """Bring pre-existing market-data tables forward without replacing data."""
@@ -253,23 +308,26 @@ class MarketDataRepository:
                                   name: str | None, asset_type: str, region: str | None, country: str | None,
                                   currency: str | None, isin: str | None = None, mic: str | None = None,
                                   pea_eligible: bool | None = None, ucits: bool | None = None,
-                                  enabled: bool = True, priority: int = 100):
+                                  enabled: bool = True, priority: int = 100, provider: str = "IBKR",
+                                  metadata: dict | None = None):
         q = text("""
-        INSERT INTO market_assets (universe_id,symbol,provider_symbol,exchange_code,name,asset_type,region,country,currency,isin,mic,pea_eligible,ucits,enabled,priority,updated_at)
-        VALUES (:universe_id,:symbol,:provider_symbol,:exchange_code,:name,:asset_type,:region,:country,:currency,:isin,:mic,:pea_eligible,:ucits,:enabled,:priority,CURRENT_TIMESTAMP)
-        ON CONFLICT(provider_symbol, asset_type) DO UPDATE SET universe_id=excluded.universe_id,symbol=excluded.symbol,exchange_code=excluded.exchange_code,name=excluded.name,region=excluded.region,country=excluded.country,currency=excluded.currency,isin=excluded.isin,mic=excluded.mic,pea_eligible=excluded.pea_eligible,ucits=excluded.ucits,enabled=excluded.enabled,priority=excluded.priority,updated_at=CURRENT_TIMESTAMP
+        INSERT INTO market_assets (universe_id,symbol,provider_symbol,exchange_code,name,asset_type,region,country,currency,isin,mic,pea_eligible,ucits,enabled,priority,provider,metadata,updated_at)
+        VALUES (:universe_id,:symbol,:provider_symbol,:exchange_code,:name,:asset_type,:region,:country,:currency,:isin,:mic,:pea_eligible,:ucits,:enabled,:priority,:provider,:metadata,CURRENT_TIMESTAMP)
+        ON CONFLICT(provider_symbol, asset_type) DO UPDATE SET universe_id=excluded.universe_id,symbol=excluded.symbol,exchange_code=excluded.exchange_code,name=excluded.name,region=excluded.region,country=excluded.country,currency=excluded.currency,isin=excluded.isin,mic=excluded.mic,pea_eligible=excluded.pea_eligible,ucits=excluded.ucits,enabled=excluded.enabled,priority=excluded.priority,provider=excluded.provider,metadata=excluded.metadata,updated_at=CURRENT_TIMESTAMP
         RETURNING id
         """)
-        return self.db.execute(q, locals()).scalar_one()
+        values = locals(); values["metadata"] = json.dumps(metadata or {})
+        return self.db.execute(q, values).scalar_one()
 
     async def list_enabled_market_assets(self, asset_type: str | None = None, universe_name: str | None = None,
-                                         limit: int | None = None, symbols: list[str] | None = None):
-        query = """SELECT a.*, u.name AS universe_name FROM market_assets a LEFT JOIN market_universes u ON u.id = a.universe_id WHERE a.enabled = true"""
+                                         limit: int | None = None, symbols: list[str] | None = None, **filters):
+        query = """SELECT a.*, u.name AS universe_name, u.name AS universe FROM market_assets a LEFT JOIN market_universes u ON u.id = a.universe_id WHERE a.enabled = true"""
         params: dict[str, Any] = {}
         if asset_type:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
         if universe_name:
             query += " AND u.name = :universe_name"; params["universe_name"] = universe_name
+        query = self._asset_filters(query, params, filters)
         query += " ORDER BY a.priority ASC, a.symbol ASC"
         if limit:
             query += " LIMIT :limit"; params["limit"] = limit
@@ -383,9 +441,11 @@ class MarketDataRepository:
         fields.append("updated_at=CURRENT_TIMESTAMP")
         self.db.execute(text(f"UPDATE market_assets SET {', '.join(fields)} WHERE id=:asset_id"), params)
 
-    async def latest_analysis_results(self, engine_name: str | None = None, universe_name: str | None = None, asset_type: str | None = None, limit: int = 200):
+    async def latest_analysis_results(self, engine_name: str | None = None, universe_name: str | None = None, asset_type: str | None = None, limit: int = 200, **filters):
         query = """
-        SELECT r.*, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency, a.enabled AS asset_enabled, u.name AS universe_name
+        SELECT r.*, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency,
+               a.country, a.exchange_code, a.region, a.pea_eligible, a.ucits, a.provider,
+               a.enabled AS asset_enabled, u.name AS universe_name, u.name AS universe
         FROM market_analysis_results r
         JOIN market_assets a ON a.id = r.asset_id
         LEFT JOIN market_universes u ON u.id = a.universe_id
@@ -400,6 +460,7 @@ class MarketDataRepository:
             query += " AND u.name = :universe_name"; params["universe_name"] = universe_name
         if asset_type:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
+        query = self._asset_filters(query, params, filters)
         query += " ORDER BY r.created_at DESC, a.priority ASC, a.symbol ASC LIMIT :limit"
         return [_row(r) for r in self.db.execute(text(query), params).all()]
 
@@ -411,7 +472,7 @@ class MarketDataRepository:
         row = self.db.execute(text("SELECT * FROM market_analysis_runs ORDER BY started_at DESC LIMIT 1")).first()
         return _row(row) if row else None
 
-    async def stock_etf_candle_quality(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500):
+    async def stock_etf_candle_quality(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500, **filters):
         query = """
         SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency,
                a.priority, u.name AS universe_name,
@@ -435,11 +496,12 @@ class MarketDataRepository:
             query += " AND u.name = :universe_name"; params["universe_name"] = universe_name
         if asset_type:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
+        query = self._asset_filters(query, params, filters)
         query += " GROUP BY a.id, a.symbol, a.provider_symbol, a.name, a.asset_type, a.currency, a.priority, u.name ORDER BY a.priority ASC, a.symbol ASC LIMIT :limit"
         return [_row(r) for r in self.db.execute(text(query), params).all()]
 
-    async def analysis_freshness(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500):
-        rows = await self.stock_etf_candle_quality(universe_name=universe_name, asset_type=asset_type, limit=limit)
+    async def analysis_freshness(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 500, **filters):
+        rows = await self.stock_etf_candle_quality(universe_name=universe_name, asset_type=asset_type, limit=limit, **filters)
         for row in rows:
             row["analysis_status"] = "MISSING_ANALYSIS" if row.get("last_analysis_at") is None else "OK"
             if row.get("last_candle_at") and row.get("last_analysis_at") and str(row["last_candle_at"]) > str(row["last_analysis_at"]):
@@ -452,13 +514,15 @@ class MarketDataRepository:
     async def analysis_runs(self, limit: int = 50):
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_analysis_runs ORDER BY started_at DESC LIMIT :limit"), {"limit": limit}).all()]
 
-    async def confluence_results(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 300):
+    async def confluence_results(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 300, **filters):
         query = """
         WITH latest AS (
           SELECT r.*, ROW_NUMBER() OVER (PARTITION BY r.asset_id, r.engine_name, r.timeframe ORDER BY r.created_at DESC, r.id DESC) AS rn
           FROM market_analysis_results r
         )
-        SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type, u.name AS universe_name,
+        SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type,
+               a.country, a.exchange_code, a.region, a.pea_eligible, a.ucits, a.provider,
+               u.name AS universe_name, u.name AS universe,
                m.signal AS momentum_signal, m.score AS momentum_score, m.trend AS momentum_trend, m.created_at AS momentum_at,
                w.signal AS wyckoff_signal, w.score AS wyckoff_score, w.trend AS wyckoff_trend, w.created_at AS wyckoff_at
         FROM market_assets a
@@ -472,6 +536,7 @@ class MarketDataRepository:
             query += " AND u.name = :universe_name"; params["universe_name"] = universe_name
         if asset_type:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
+        query = self._asset_filters(query, params, filters)
         query += " ORDER BY a.priority ASC, a.symbol ASC LIMIT :limit"
         rows = [_row(r) for r in self.db.execute(text(query), params).all()]
         for row in rows:
@@ -507,14 +572,14 @@ class MarketDataRepository:
 _POSTGRES_SCHEMA = [
 "CREATE EXTENSION IF NOT EXISTS pgcrypto",
 "CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
-"CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
+"CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NOT NULL DEFAULT FALSE, ucits BOOLEAN NOT NULL DEFAULT FALSE, provider TEXT NOT NULL DEFAULT 'IBKR', metadata JSONB NULL DEFAULT '{}'::jsonb, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id BIGSERIAL PRIMARY KEY, engine_name TEXT NOT NULL, universe_id UUID NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata JSONB NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now())",
 ]
 _SQLITE_SCHEMA = [
 "CREATE TABLE IF NOT EXISTS market_universes (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-"CREATE TABLE IF NOT EXISTS market_assets (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), universe_id TEXT NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NULL, ucits BOOLEAN NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(provider_symbol, asset_type))",
+"CREATE TABLE IF NOT EXISTS market_assets (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), universe_id TEXT NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NOT NULL DEFAULT FALSE, ucits BOOLEAN NOT NULL DEFAULT FALSE, provider TEXT NOT NULL DEFAULT 'IBKR', metadata TEXT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(provider_symbol, asset_type))",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, engine_name TEXT NOT NULL, universe_id TEXT NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata TEXT NULL, error_message TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_results (id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id TEXT NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",

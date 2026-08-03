@@ -14,7 +14,7 @@ const errorText = (error) => error?.message || String(error || '')
 function UniverseFilter({ universe, setUniverse, assetType, setAssetType }) {
   return <div className="page-actions" style={{ flexWrap: 'wrap' }}>
     <select value={universe} onChange={(e) => setUniverse(e.target.value)}>
-      <option value="">All universes</option><option>ETF PEA</option><option>ETF Europe UCITS</option><option>Stocks Euronext Paris</option><option>Stocks Europe</option><option>Benchmark Indices</option><option>US Benchmarks</option>
+      <option value="">All universes</option><option>Europe Stocks</option><option>Europe ETF</option>
     </select>
     <select value={assetType} onChange={(e) => setAssetType(e.target.value)}>
       <option value="">All asset types</option><option value="ETF">ETF</option><option value="STOCK">Stock</option><option value="INDEX">Index</option>
