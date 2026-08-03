@@ -94,6 +94,7 @@ export const api = {
   stockEtfConfluence: (params = '') => request(`/api/v1/stocks-etfs/confluence${params}`),
   stockEtfExportUrl: (params = '') => `${API_BASE}/api/v1/stocks-etfs/export.csv${params}`,
   clearStockEtfGeneratedData: () => request('/api/v1/stocks-etfs/cleanup', { method: 'DELETE' }),
+  clearAllStockEtfData: () => request('/admin/market-data', { method: 'DELETE' }),
   marketDataSettings: () => request('/admin/market-data'),
   envSettings: () => request('/admin/env'),
   syncMarketAssets: () => request('/admin/market-data/sync-assets', { method: 'POST' }),

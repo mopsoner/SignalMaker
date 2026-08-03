@@ -156,6 +156,31 @@ async def get_market_data(db: Session = Depends(get_db)):
     return payload
 
 
+@router.delete('/admin/market-data')
+def clear_all_stock_etf_data(db: Session = Depends(get_db)):
+    """Permanently remove the complete stock/ETF market-data dataset."""
+    tables = [
+        "market_analysis_results",
+        "market_analysis_runs",
+        "market_data_job_requests",
+        "market_data_import_runs",
+        "stock_etf_candles",
+        "market_assets",
+        "market_universes",
+    ]
+    try:
+        details = {}
+        for table in tables:
+            result = db.execute(text(f"DELETE FROM {table}"))
+            details[table] = result.rowcount or 0
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to clear all stock/ETF market data")
+        raise HTTPException(status_code=500, detail="Failed to clear all stock/ETF market data") from exc
+    return {"deleted": sum(details.values()), "details": details}
+
+
 @router.get('/admin/market-data/schema-status')
 def market_data_schema_status(db: Session = Depends(get_db)):
     """Expose read-only schema diagnostics for production troubleshooting."""
