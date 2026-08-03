@@ -88,7 +88,7 @@ class DiscoveryRequest(BaseModel):
     universe: str; asset_type: str | None = None; source: str = "seed-file"; seed_file: str | None = None
     exchange_code: str | None = None; region: str | None = None; country: str | None = None; currency: str | None = None
     pea_eligible: bool | None = None; ucits: bool | None = None; max_assets: int = Field(50, ge=1, le=1000)
-    dry_run: bool = True; refresh: bool = False; append: bool = True
+    dry_run: bool = True
 
 @router.get("/assets")
 def assets():
@@ -110,13 +110,8 @@ class SaveAssets(BaseModel): assets: list[dict] | None = None
 def save_discovered_assets(body: SaveAssets):
     values = body.assets if body.assets is not None else (_last_discovery or {}).get("assets")
     if values is None: return {"ok": False, "saved": 0, "message": "No discovery result is available to save"}
-    current = {a.get("provider_symbol", "").upper(): a for a in read_assets(_paths()[1])}
-    for asset in values:
-        old = current.get(asset.get("provider_symbol", "").upper())
-        if old and old.get("enabled") is False: asset = {**asset, "enabled": False}
-        current[asset.get("provider_symbol", "").upper()] = asset
-    write_assets(_paths()[1], list(current.values()))
-    return {"ok": True, "saved": len(values), "configured": len(current)}
+    write_assets(_paths()[1], values)
+    return {"ok": True, "saved": len(values), "configured": len(values)}
 
 class ResolveSymbol(BaseModel):
     symbol: str; asset_type: str | None = None; exchange_code: str | None = None; region: str | None = None

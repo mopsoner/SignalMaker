@@ -1,11 +1,7 @@
 {
-  "_note": "Example only. Generate config/ibkr_assets.json with scripts/ibkr_discover_assets.py; conids are resolved automatically through IBKR.",
+  "_note": "Example only. Generate config/ibkr_assets.json with scripts/ibkr_discover_assets.py; conids are resolved and history-validated automatically through IBKR.",
   "assets": [
-    {"enabled":true,"symbol":"AAPL.US","provider_symbol":"AAPL.US","conid":"265598","asset_type":"STOCK","currency":"USD","exchange_code":"US","region":"US","country":"US","universe":"Stocks US","name":"Apple Inc","isin":null,"mic":null,"pea_eligible":false,"ucits":false,"priority":100},
-    {"enabled":true,"symbol":"MSFT.US","provider_symbol":"MSFT.US","conid":"272093","asset_type":"STOCK","currency":"USD","exchange_code":"US","region":"US","country":"US","universe":"Stocks US","name":"Microsoft Corp","isin":null,"mic":null,"pea_eligible":false,"ucits":false,"priority":100},
-    {"enabled":true,"symbol":"SPY.US","provider_symbol":"SPY.US","conid":"756733","asset_type":"ETF","currency":"USD","exchange_code":"US","region":"US","country":"US","universe":"IBKR Imported","name":"SPDR S&P 500 ETF Trust","isin":null,"mic":null,"pea_eligible":false,"ucits":false,"priority":100},
-    {"enabled":true,"symbol":"CW8.PA","provider_symbol":"CW8.PA","conid":"REPLACE_WITH_IBKR_CONID","asset_type":"ETF","currency":"EUR","exchange_code":"PA","region":"EU","country":"FR","universe":"ETF Europe UCITS","name":"Amundi MSCI World UCITS ETF","isin":null,"mic":null,"pea_eligible":true,"ucits":true,"priority":100},
-    {"enabled":true,"symbol":"ESE.PA","provider_symbol":"ESE.PA","conid":"REPLACE_WITH_IBKR_CONID","asset_type":"ETF","currency":"EUR","exchange_code":"PA","region":"EU","country":"FR","universe":"ETF PEA","name":"BNP Paribas Easy S&P 500 UCITS ETF","isin":null,"mic":null,"pea_eligible":true,"ucits":true,"priority":100},
-    {"enabled":true,"symbol":"PUST.PA","provider_symbol":"PUST.PA","conid":"REPLACE_WITH_IBKR_CONID","asset_type":"ETF","currency":"EUR","exchange_code":"PA","region":"EU","country":"FR","universe":"ETF PEA","name":"Lyxor PEA Nasdaq-100 UCITS ETF","isin":null,"mic":null,"pea_eligible":true,"ucits":true,"priority":100}
+    {"enabled":true,"symbol":"AIR.PA","provider_symbol":"AIR.PA","conid":"REPLACE_WITH_IBKR_CONID","asset_type":"STOCK","currency":"EUR","exchange_code":"PA","region":"EU","country":"FR","universe":"Europe Stocks","name":"Airbus","pea_eligible":true,"ucits":false,"priority":100,"ibkr":{"selected_exchange":"SMART","primary_exchange":"SBF","sec_type":"STK"}},
+    {"enabled":true,"symbol":"CW8.PA","provider_symbol":"CW8.PA","conid":"REPLACE_WITH_IBKR_CONID","asset_type":"ETF","currency":"EUR","exchange_code":"PA","region":"EU","country":"FR","universe":"Europe ETF","name":"Amundi MSCI World UCITS ETF","pea_eligible":true,"ucits":true,"priority":100,"ibkr":{"selected_exchange":"SMART","primary_exchange":"SBF","sec_type":"ETF"}}
   ]
 }

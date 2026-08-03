@@ -7,9 +7,9 @@ from app.main import app
 from scripts.ibkr_feeder import build_payload, filter_assets, load_assets, main, normalize_timestamp, parse_ibkr_bars, write_status
 
 ASSETS=[
- {"enabled":True,"symbol":"AAPL.US","provider_symbol":"AAPL.US","asset_type":"STOCK","region":"US","currency":"USD","exchange_code":"US","universe":"Stocks US","pea_eligible":False,"ucits":False},
- {"enabled":True,"symbol":"ESE.PA","provider_symbol":"ESE.PA","asset_type":"ETF","region":"EU","currency":"EUR","exchange_code":"PA","universe":"ETF PEA","pea_eligible":True,"ucits":True},
- {"enabled":False,"symbol":"OFF.US","provider_symbol":"OFF.US","asset_type":"STOCK","region":"US","currency":"USD"},]
+ {"enabled":True,"symbol":"AIR.PA","provider_symbol":"AIR.PA","asset_type":"STOCK","region":"EU","country":"FR","currency":"EUR","exchange_code":"PA","universe":"Europe Stocks","pea_eligible":False,"ucits":False},
+ {"enabled":True,"symbol":"ESE.PA","provider_symbol":"ESE.PA","asset_type":"ETF","region":"EU","currency":"EUR","exchange_code":"PA","universe":"Europe ETF","pea_eligible":True,"ucits":True},
+ {"enabled":False,"symbol":"OFF.PA","provider_symbol":"OFF.PA","asset_type":"STOCK","region":"EU","currency":"EUR"},]
 def filt(**kw):
  d={"include_disabled":False,"symbols":[],"provider_symbols":[],"max_assets":None,"pea_eligible":None,"ucits":None};d.update(kw);return d
 
@@ -25,10 +25,10 @@ def test_bar_shapes():
  assert parse_ibkr_bars({"data":[long]})[0]["volume"]==9
 
 def test_filters():
- for key,value,symbol in [("asset_type","STOCK","AAPL.US"),("asset_type","ETF","ESE.PA"),("region","US","AAPL.US"),("region","EU","ESE.PA"),("currency","USD","AAPL.US"),("currency","EUR","ESE.PA"),("exchange_code","PA","ESE.PA"),("universe","ETF PEA","ESE.PA"),("pea_eligible",True,"ESE.PA"),("ucits",True,"ESE.PA")]: assert filter_assets(ASSETS,filt(**{key:value}))[0]["symbol"]==symbol
- assert [a["symbol"] for a in filter_assets(ASSETS,filt(symbols=["AAPL.US","ESE.PA"]))]==["AAPL.US","ESE.PA"]
+ for key,value,symbol in [("asset_type","STOCK","AIR.PA"),("asset_type","ETF","ESE.PA"),("region","EU","AIR.PA"),("currency","EUR","AIR.PA"),("exchange_code","PA","AIR.PA"),("universe","Europe ETF","ESE.PA"),("pea_eligible",True,"ESE.PA"),("ucits",True,"ESE.PA")]: assert filter_assets(ASSETS,filt(**{key:value}))[0]["symbol"]==symbol
+ assert [a["symbol"] for a in filter_assets(ASSETS,filt(symbols=["AIR.PA","ESE.PA"]))]==["AIR.PA","ESE.PA"]
  assert len(filter_assets(ASSETS,filt(max_assets=1)))==1
- assert "OFF.US" not in [a["symbol"] for a in filter_assets(ASSETS,filt())]
+ assert "OFF.PA" not in [a["symbol"] for a in filter_assets(ASSETS,filt())]
 
 def test_payload_and_atomic_status(tmp_path):
  candles=parse_ibkr_bars({"data":[{"t":1754006400,"o":1,"h":2,"l":0,"c":1,"v":5}]}); payload=build_payload(ASSETS[0],candles)

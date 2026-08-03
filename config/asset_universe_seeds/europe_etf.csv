@@ -1,0 +1,9 @@
+symbol,country,currency,exchange_code,pea_eligible,ucits
+CW8.PA,FR,EUR,PA,true,true
+WPEA.PA,FR,EUR,PA,true,true
+ESE.PA,FR,EUR,PA,true,true
+PUST.PA,FR,EUR,PA,true,true
+SPY5.PA,FR,EUR,PA,false,true
+WLD.PA,FR,EUR,PA,false,true
+WRD.PA,FR,EUR,PA,false,true
+IUES.AS,NL,EUR,AMS,false,true
