@@ -1,5 +1,5 @@
 {
-  "_note": "Copy to ibkr_assets.json and replace placeholder conids with values from IBKR contract search.",
+  "_note": "Example only. Generate config/ibkr_assets.json with scripts/ibkr_discover_assets.py; conids are resolved automatically through IBKR.",
   "assets": [
     {"enabled":true,"symbol":"AAPL.US","provider_symbol":"AAPL.US","conid":"265598","asset_type":"STOCK","currency":"USD","exchange_code":"US","region":"US","country":"US","universe":"Stocks US","name":"Apple Inc","isin":null,"mic":null,"pea_eligible":false,"ucits":false,"priority":100},
     {"enabled":true,"symbol":"MSFT.US","provider_symbol":"MSFT.US","conid":"272093","asset_type":"STOCK","currency":"USD","exchange_code":"US","region":"US","country":"US","universe":"Stocks US","name":"Microsoft Corp","isin":null,"mic":null,"pea_eligible":false,"ucits":false,"priority":100},
