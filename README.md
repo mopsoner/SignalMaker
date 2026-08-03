@@ -256,18 +256,27 @@ The local feeder is opt-in: it runs only from the wrapper, monitoring UI, or ins
 curl -k -i -X POST -H "Content-Type: application/json" -d '{}' https://localhost:5000/v1/api/iserver/auth/status
 ```
 
-Prepare the universe and replace placeholder contract IDs:
+The user does **not** need to know IBKR conids. After starting and logging into the Gateway, verify authentication, discover a symbol universe, let the resolver select contracts, inspect `config/ibkr_assets.json`, run the filtered candle feeder, and finally check SignalMaker main. For example:
 
 ```bash
-cp config/ibkr_assets.example.json config/ibkr_assets.json
-bash scripts/run_ibkr_feeder.sh
-bash scripts/run_ibkr_feeder.sh --asset-type STOCK --region US
-bash scripts/run_ibkr_feeder.sh --asset-type STOCK --region EU
+# Resolve Euronext Paris stocks, then fetch and post their candles.
+bash scripts/ibkr_discover_assets.py --source seed-file \
+  --seed-file config/asset_universe_seeds/euronext_paris_stocks.txt \
+  --universe "Stocks Euronext Paris" --asset-type STOCK --exchange-code PA \
+  --region EU --country FR --currency EUR --output config/ibkr_assets.json --max-assets 20
+bash scripts/run_ibkr_feeder.sh --asset-type STOCK --exchange-code PA --universe "Stocks Euronext Paris"
+
+# Resolve PEA/UCITS ETFs, then run only that universe.
+bash scripts/ibkr_discover_assets.py --source seed-file \
+  --seed-file config/asset_universe_seeds/etf_pea.txt --universe "ETF PEA" \
+  --asset-type ETF --exchange-code PA --region EU --country FR --currency EUR \
+  --pea-eligible true --ucits true --output config/ibkr_assets.json
 bash scripts/run_ibkr_feeder.sh --asset-type ETF --pea-eligible true --universe "ETF PEA"
-bash scripts/run_ibkr_feeder.sh --asset-type ETF --ucits true --universe "ETF Europe UCITS"
 ```
 
-Filters are cumulative; repeated `--symbol`/`--provider-symbol` arguments are OR sets. Disabled assets are omitted unless `--include-disabled` is supplied. Install the optional startup service/daily timer with `scripts/install_ibkr_feeder_service.sh`; pass `--hourly` and/or `--enable-timer` as needed. Monitor at **http://localhost:<executor_app_port>/ibkr-feeder.html** and inspect `data/ibkr_feeder.log` or `journalctl -u signalmaker-ibkr-feeder.service -n 200 -f`.
+Discovery supports `seed-file`, `ibkr-search`, and `ibkr-scanner` sources. Scanner failures clearly fall back to the selected universe's seed file. Existing conids are retained unless `--refresh` is used, manually disabled assets remain disabled, and `--dry-run` previews without saving. The monitoring page at **http://localhost:<executor_app_port>/ibkr-feeder.html** provides the same discovery, save, and run workflow.
+
+Feeder filters are cumulative; repeated `--symbol`/`--provider-symbol` arguments are OR sets. Disabled assets are omitted unless `--include-disabled` is supplied. The feeder posts normalized candles to `POST https://mysginalmaker.replit.app/api/v1/stocks-etfs/ibkr/candles`. Install the optional startup service/daily timer with `scripts/install_ibkr_feeder_service.sh`; pass `--hourly` and/or `--enable-timer` as needed. Inspect `data/ibkr_feeder.log` or `journalctl -u signalmaker-ibkr-feeder.service -n 200 -f`.
 
 Verify remote ingestion:
 

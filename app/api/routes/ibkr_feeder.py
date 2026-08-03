@@ -12,11 +12,13 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from scripts.ibkr_feeder import asset_config_error, default_status
+from scripts.ibkr_discover_assets import Resolver, discover, read_assets, write_assets
 
 router = APIRouter()
 ROOT = Path(__file__).resolve().parents[3]
 _lock = Lock()
 _process: subprocess.Popen | None = None
+_last_discovery: dict | None = None
 
 class RunFilters(BaseModel):
     asset_type: str | None = None; region: str | None = None; country: str | None = None
@@ -81,3 +83,47 @@ def run_asset(body: AssetRun): return _start(RunFilters(symbols=[body.symbol], m
 def logs(lines: int = Query(300, ge=1, le=5000)):
     path = _paths()[2]
     return {"ok": True, "lines": path.read_text(errors="replace").splitlines()[-lines:] if path.exists() else []}
+
+class DiscoveryRequest(BaseModel):
+    universe: str; asset_type: str; source: str = "seed-file"; seed_file: str | None = None
+    exchange_code: str | None = None; region: str | None = None; country: str | None = None; currency: str | None = None
+    pea_eligible: bool | None = None; ucits: bool | None = None; max_assets: int = Field(50, ge=1, le=1000)
+    dry_run: bool = True; refresh: bool = False; append: bool = True
+
+@router.get("/assets")
+def assets():
+    path = _paths()[1]
+    values = read_assets(path)
+    return {"ok": True, "assets": values, "configured": len(values), "resolved": sum(bool(a.get("conid")) for a in values),
+            "without_conid": sum(not bool(a.get("conid")) for a in values), "last_discovery_run": (_last_discovery or {}).get("last_discovery_run")}
+
+@router.post("/discover-assets")
+def discover_assets(body: DiscoveryRequest):
+    global _last_discovery
+    options = body.model_dump(); options["output"] = str(_paths()[1])
+    _last_discovery = discover(options)
+    return _last_discovery
+
+class SaveAssets(BaseModel): assets: list[dict] | None = None
+
+@router.post("/save-assets")
+def save_discovered_assets(body: SaveAssets):
+    values = body.assets if body.assets is not None else (_last_discovery or {}).get("assets")
+    if values is None: return {"ok": False, "saved": 0, "message": "No discovery result is available to save"}
+    current = {a.get("provider_symbol", "").upper(): a for a in read_assets(_paths()[1])}
+    for asset in values:
+        old = current.get(asset.get("provider_symbol", "").upper())
+        if old and old.get("enabled") is False: asset = {**asset, "enabled": False}
+        current[asset.get("provider_symbol", "").upper()] = asset
+    write_assets(_paths()[1], list(current.values()))
+    return {"ok": True, "saved": len(values), "configured": len(current)}
+
+class ResolveSymbol(BaseModel):
+    symbol: str; asset_type: str; exchange_code: str | None = None; region: str | None = None
+    country: str | None = None; currency: str | None = None; universe: str
+    pea_eligible: bool | None = None; ucits: bool | None = None
+
+@router.post("/resolve-symbol")
+def resolve_symbol(body: ResolveSymbol):
+    resolver = Resolver(); resolver.auth()
+    return {"ok": True, "asset": resolver.resolve(body.symbol, body.model_dump())}
