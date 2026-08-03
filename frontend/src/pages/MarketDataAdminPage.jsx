@@ -8,7 +8,7 @@ import { fmtDate } from '../lib/format'
 
 export default function MarketDataAdminPage() {
   const [message, setMessage] = useState('')
-  const [universe, setUniverse] = useState('ETF PEA')
+  const [universe, setUniverse] = useState('Europe Stocks')
   const [preview, setPreview] = useState(null)
   const { data, loading, error, refresh } = usePollingQuery(useCallback(() => api.marketDataSettings(), []), 30000)
   const { data: env, error: envError } = usePollingQuery(useCallback(() => api.envSettings(), []), 30000)
@@ -43,7 +43,7 @@ export default function MarketDataAdminPage() {
     {assetsError ? <div className="panel error" role="alert"><strong>Unable to load stock/ETF assets.</strong> {errorText(assetsError)}</div> : null}
     <div className="stats-grid"><StatCard label="Primary provider" value={data?.primary_provider || '—'} /><StatCard label="IBKR enabled" value={data?.ibkr_enabled ? 'Yes' : 'No'} /><StatCard label="IBKR auth" value={data?.ibkr_auth_method || '—'} /><StatCard label="Assets / candles" value={`${data?.total_assets || 0} / ${data?.total_candles || 0}`} /></div>
     <section className="panel"><h2>Actions</h2><div className="page-actions" style={{ flexWrap: 'wrap', marginTop: 12 }}>
-      <select value={universe} onChange={(e) => setUniverse(e.target.value)}><option>ETF PEA</option><option>ETF Europe UCITS</option><option>Stocks Euronext Paris</option><option>Stocks Europe</option><option>Benchmark Indices</option><option>US Benchmarks</option></select>
+      <select value={universe} onChange={(e) => setUniverse(e.target.value)}><option>Europe Stocks</option><option>Europe ETF</option></select>
       <button className="button" onClick={() => action('Sync assets', api.syncMarketAssets)}>Run asset sync</button>
       <button className="button" onClick={() => action('Run momentum', () => api.runMarketAnalysis({ engine: 'momentum', universe, limit: 50 }))}>Run Momentum</button>
       <button className="button" onClick={() => action('Run Wyckoff SMC', () => api.runMarketAnalysis({ engine: 'wyckoff_smc', universe, limit: 50 }))}>Run Wyckoff SMC</button>

@@ -1,5 +1,26 @@
 # SignalMaker
 
+## IBKR Europe stock/ETF model
+
+IBKR market data uses two primary universes: **Europe Stocks** and **Europe ETF**.
+PEA eligibility and UCITS status are asset attributes rather than universes. Assets
+also carry `provider`, `provider_symbol`, `asset_type`, `region`, `country`,
+`currency`, `exchange_code`, `pea_eligible`, `ucits`, and free-form `metadata`.
+
+Useful filter views are:
+
+* **PEA Eligible:** `region=EU&pea_eligible=true`
+* **ETF PEA:** `asset_type=ETF&region=EU&pea_eligible=true&ucits=true`
+* **France Stocks:** `asset_type=STOCK&region=EU&country=FR`
+* **Amsterdam**, **Xetra**, **London**, and **Switzerland:** select assets with
+  exchange codes `AMS`, `XETRA`, `LSE`, and `SWX`, respectively.
+
+The candle ingest endpoint continues to accept `Stocks Euronext Paris`, `Stocks
+Europe`, `ETF PEA`, and `ETF Europe UCITS` from older executor-app releases, but
+new integrations should send one of the two primary universe names. Legacy
+`IBKR Imported` records are retained only when the payload lacks enough asset type
+and region information to select a primary universe.
+
 Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
 
 ## Included

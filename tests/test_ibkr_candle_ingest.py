@@ -53,6 +53,50 @@ def _payload(close="213.50", volume="1000000"):
     }
 
 
+@pytest.mark.parametrize(
+    ("universe", "asset_type", "expected", "pea", "ucits"),
+    [
+        ("Europe Stocks", "STOCK", "Europe Stocks", True, False),
+        ("Europe ETF", "ETF", "Europe ETF", False, True),
+        ("Stocks Euronext Paris", "STOCK", "Europe Stocks", True, False),
+        ("ETF PEA", "ETF", "Europe ETF", True, True),
+    ],
+)
+def test_europe_universes_and_legacy_aliases(universe, asset_type, expected, pea, ucits):
+    client, db = _client_and_db()
+    payload = {**_payload(), "universe": universe, "asset_type": asset_type,
+               "region": "EU", "country": "FR", "exchange_code": "PA",
+               "pea_eligible": pea, "ucits": ucits}
+    response = client.post("/api/v1/stocks-etfs/ibkr/candles", json=payload)
+    assert response.status_code == 200
+    row = db.execute(text("""
+        SELECT u.name AS universe, a.* FROM market_assets a
+        JOIN market_universes u ON u.id=a.universe_id
+    """)).mappings().one()
+    assert row["universe"] == expected
+    assert bool(row["pea_eligible"]) is pea
+    assert bool(row["ucits"]) is ucits
+    assert row["provider"] == "IBKR"
+    db.close()
+
+
+def test_europe_attribute_filters_select_only_matching_assets():
+    client, db = _client_and_db()
+    for symbol, pea, ucits in (("CW8.PA", True, True), ("IUES.AS", False, True), ("AIR.PA", True, False)):
+        asset_type = "ETF" if ucits else "STOCK"
+        assert client.post("/api/v1/stocks-etfs/ibkr/candles", json={
+            **_payload(), "symbol": symbol, "provider_symbol": symbol,
+            "asset_type": asset_type, "universe": "Europe ETF" if ucits else "Europe Stocks",
+            "region": "EU", "pea_eligible": pea, "ucits": ucits,
+        }).status_code == 200
+    pea_rows = client.get("/api/v1/stocks-etfs/assets?provider=IBKR&region=EU&pea_eligible=true").json()
+    assert {row["symbol"] for row in pea_rows} == {"CW8.PA", "AIR.PA"}
+    ucits_rows = client.get("/api/v1/stocks-etfs/assets?asset_type=ETF&ucits=true").json()
+    assert {row["symbol"] for row in ucits_rows} == {"CW8.PA", "IUES.AS"}
+    assert db.scalar(select(func.count()).select_from(MarketCandle)) == 0
+    db.close()
+
+
 def test_run_tables_legacy_schema_upgrade_is_idempotent_and_allows_ingest():
     client, db = _client_and_db()
     db.execute(text("""
