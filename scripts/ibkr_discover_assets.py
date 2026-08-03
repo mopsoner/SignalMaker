@@ -18,10 +18,26 @@ SEEDS = {
     "Stocks Euronext Paris": "euronext_paris_stocks.txt", "ETF Europe UCITS": "etf_europe_ucits.txt",
     "ETF PEA": "etf_pea.txt",
 }
-EXCHANGES = {
-    "PA": {"PA", "XPAR", "SBF"}, "US": {"SMART", "NASDAQ", "NYSE", "ARCA", "AMEX"},
-    "AMS": {"AMS", "XAMS"}, "XETRA": {"XETRA", "IBIS", "XETR"}, "LSE": {"LSE", "XLON"},
+INTERNAL_EXCHANGE_TO_IBKR = {
+    "PA": ["PA", "SBF", "XPAR", "ENEXT", "SMART"],
+    "US": ["SMART", "NASDAQ", "NYSE", "ARCA", "AMEX"],
+    "AMS": ["AEB", "AMS", "XAMS", "ENEXT"],
+    "XETRA": ["IBIS", "XETRA", "XETR"],
+    "LSE": ["LSE", "XLON"],
+    "SWX": ["SWX", "EBS", "XSWX"],
 }
+UNIVERSE_DEFAULTS = {
+    "Stocks Euronext Paris": {"asset_type": "STOCK", "exchange_code": "PA", "region": "EU", "country": "FR", "currency": "EUR", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["PA", "SBF", "XPAR", "ENEXT", "SMART"]},
+    "Stocks US": {"asset_type": "STOCK", "exchange_code": "US", "region": "US", "country": "US", "currency": "USD", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["SMART", "NASDAQ", "NYSE", "ARCA", "AMEX"]},
+    "Stocks Europe": {"asset_type": "STOCK", "region": "EU", "currency": "EUR", "ibkr_sec_types": ["STK"], "ibkr_exchanges": ["SBF", "XPAR", "ENEXT", "AEB", "XAMS", "IBIS", "XETRA", "XETR", "SMART"]},
+    "ETF PEA": {"asset_type": "ETF", "exchange_code": "PA", "region": "EU", "country": "FR", "currency": "EUR", "pea_eligible": True, "ucits": True, "ibkr_sec_types": ["ETF", "STK"], "ibkr_exchanges": ["PA", "SBF", "XPAR", "ENEXT", "SMART"]},
+    "ETF Europe UCITS": {"asset_type": "ETF", "region": "EU", "currency": "EUR", "ucits": True, "ibkr_sec_types": ["ETF", "STK"], "ibkr_exchanges": ["SBF", "XPAR", "ENEXT", "AEB", "XAMS", "IBIS", "XETRA", "SMART"]},
+}
+
+def with_universe_defaults(options: dict) -> dict:
+    """Fill internal metadata and IBKR candidate fields from a universe name."""
+    defaults = UNIVERSE_DEFAULTS.get(options.get("universe"), {})
+    return {**defaults, **{key: value for key, value in options.items() if value is not None}}
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -61,17 +77,22 @@ def _value(row: dict, *keys: str) -> Any:
         if row.get(key) not in (None, ""): return row[key]
     return None
 
-def score_contract(row: dict, symbol: str, asset_type: str, exchange_code: str | None, currency: str | None) -> int:
+def score_contract(row: dict, symbol: str, asset_type: str, exchange_code: str | None, currency: str | None,
+                   ibkr_sec_types: list[str] | None = None, ibkr_exchanges: list[str] | None = None) -> int:
     sec = str(_value(row, "secType", "sec_type", "assetClass") or "").upper()
-    if asset_type == "STOCK" and sec and sec != "STK": return -1000
-    if asset_type == "ETF" and sec and sec not in {"ETF", "STK"}: return -1000
+    accepted_sec_types = {value.upper() for value in (ibkr_sec_types or (["STK"] if asset_type == "STOCK" else ["ETF", "STK"]))}
+    if sec and sec not in accepted_sec_types: return -1000
     score = 100 if str(row.get("symbol", "")).upper() == raw_symbol(symbol) else 0
     exchange = str(_value(row, "listingExchange", "exchange", "primaryExchange", "primary_exchange") or "").upper()
     primary = str(_value(row, "primaryExchange", "primary_exchange") or "").upper()
-    accepted = EXCHANGES.get((exchange_code or "").upper(), {(exchange_code or "").upper()})
-    if exchange in accepted or primary in accepted or (exchange == "SMART" and primary in accepted): score += 40
+    accepted = {value.upper() for value in (ibkr_exchanges or INTERNAL_EXCHANGE_TO_IBKR.get((exchange_code or "").upper(), [exchange_code or ""]))}
+    if exchange == "SMART" and primary and primary not in accepted:
+        return -1000
+    if accepted and (exchange or primary) and exchange not in accepted and primary not in accepted:
+        return -1000
+    if exchange in accepted or primary in accepted: score += 40
     if currency and str(row.get("currency", "")).upper() == currency.upper(): score += 20
-    if (asset_type == "STOCK" and sec == "STK") or (asset_type == "ETF" and sec in {"ETF", "STK"}): score += 10
+    if sec in accepted_sec_types: score += 10
     return score
 
 class Resolver:
@@ -93,14 +114,19 @@ class Resolver:
         response.raise_for_status(); return _contracts(response.json())
 
     def resolve(self, symbol: str, options: dict) -> dict:
+        options = with_universe_defaults(options)
         candidates = self.search(symbol)
-        ranked = sorted(candidates, key=lambda row: score_contract(row, symbol, options["asset_type"], options.get("exchange_code"), options.get("currency")), reverse=True)
-        if not ranked or score_contract(ranked[0], symbol, options["asset_type"], options.get("exchange_code"), options.get("currency")) < 0:
+        score = lambda row: score_contract(row, symbol, options["asset_type"], options.get("exchange_code"), options.get("currency"), options.get("ibkr_sec_types"), options.get("ibkr_exchanges"))
+        ranked = sorted(candidates, key=score, reverse=True)
+        if not ranked or score(ranked[0]) < 0:
             raise LookupError("no matching IBKR contract")
         row = ranked[0]; conid = _value(row, "conid", "conidEx", "contractId")
         if conid is None: raise LookupError("matching contract has no conid")
         exchange = _value(row, "listingExchange", "exchange", "primaryExchange")
-        return {"enabled": True, "symbol": symbol, "provider_symbol": symbol, "conid": str(conid).split("@")[0],
+        conid = str(conid).split("@")[0]
+        history = self.session.get(self.base + "/iserver/marketdata/history", params={"conid": conid, "period": "1d", "bar": "1d"}, verify=self.verify, timeout=30)
+        history.raise_for_status()
+        return {"enabled": True, "symbol": symbol, "provider_symbol": symbol, "conid": conid,
                 "asset_type": options["asset_type"], "currency": _value(row, "currency") or options.get("currency"),
                 "exchange_code": options.get("exchange_code"), "region": options.get("region"), "country": options.get("country"),
                 "universe": options["universe"], "name": _value(row, "description", "companyName", "name") or raw_symbol(symbol),
@@ -114,6 +140,7 @@ def seed_path(options: dict) -> Path:
     path = Path(requested); return path if path.is_absolute() else ROOT / path
 
 def discover(options: dict, resolver: Resolver | None = None, authenticate: bool = True) -> dict:
+    options = with_universe_defaults(options)
     output = Path(options.get("output") or ROOT / "config/ibkr_assets.json"); output = output if output.is_absolute() else ROOT / output
     existing = read_assets(output); by_symbol = {a.get("provider_symbol", "").upper(): a for a in existing}
     resolver = resolver or Resolver()
@@ -148,7 +175,7 @@ def discover(options: dict, resolver: Resolver | None = None, authenticate: bool
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); p.add_argument("--source", choices=["seed-file", "ibkr-search", "ibkr-scanner"], default="seed-file")
-    p.add_argument("--seed-file"); p.add_argument("--universe", required=True, choices=list(SEEDS)); p.add_argument("--asset-type", required=True, choices=["STOCK", "ETF"])
+    p.add_argument("--seed-file"); p.add_argument("--universe", required=True, choices=list(SEEDS)); p.add_argument("--asset-type", choices=["STOCK", "ETF"])
     for name in ("exchange-code", "region", "country", "currency"): p.add_argument("--" + name)
     p.add_argument("--pea-eligible", type=boolean); p.add_argument("--ucits", type=boolean); p.add_argument("--output", default="config/ibkr_assets.json")
     p.add_argument("--append", action="store_true", default=True); p.add_argument("--refresh", action="store_true"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--max-assets", type=int, default=50)
