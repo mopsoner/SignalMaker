@@ -270,15 +270,17 @@ python3 scripts/ibkr_discover_assets.py --source seed-file \
   --seed-file config/asset_universe_seeds/europe_etf.csv \
   --universe "Europe ETF" --output config/ibkr_assets.json --max-assets 20
 
-bash scripts/run_ibkr_feeder.sh --universe "Europe Stocks" --asset-type STOCK --region EU
-bash scripts/run_ibkr_feeder.sh --universe "Europe ETF" --asset-type ETF --region EU
-bash scripts/run_ibkr_feeder.sh --region EU --pea-eligible true
-bash scripts/run_ibkr_feeder.sh --asset-type ETF --pea-eligible true --ucits true
+bash scripts/run_ibkr_feeder.sh --universe "Europe Stocks"
+bash scripts/run_ibkr_feeder.sh --universe "Europe ETF"
 ```
 
 Discovery supports `seed-file`, `ibkr-search`, and `ibkr-scanner` sources. Scanner failures clearly fall back to the selected universe's seed file. Each saved discovery replaces the existing asset configuration, and `--dry-run` previews without saving. The monitoring page at **http://localhost:<executor_app_port>/ibkr-feeder.html** provides the same discovery, save, and run workflow.
 
-Feeder filters are cumulative; repeated `--symbol`/`--provider-symbol` arguments are OR sets. Disabled assets are omitted unless `--include-disabled` is supplied. The feeder posts normalized candles to `POST https://mysginalmaker.replit.app/api/v1/stocks-etfs/ibkr/candles`. Install the optional startup service/daily timer with `scripts/install_ibkr_feeder_service.sh`; pass `--hourly` and/or `--enable-timer` as needed. Inspect `data/ibkr_feeder.log` or `journalctl -u signalmaker-ibkr-feeder.service -n 200 -f`.
+`--universe` est obligatoire et n'accepte que **Europe Stocks** et **Europe ETF** (les anciens noms sont temporairement traduits). Les actifs et leurs métadonnées viennent exclusivement de `IBKR_FEEDER_ASSETS_FILE` (par défaut `config/ibkr_assets.json`). Le profil interne collecte les barres IBKR natives clôturées `15m`, `1h` et `4h`, hors séance étendue, sans option de timeframe opérateur. Chaque lot est envoyé à `POST /api/v1/stocks-etfs/ibkr/candles` avec `queue_analysis=false`; une seule analyse d'univers est demandée après un run sans erreur.
+
+Variables utiles : `FEED_UNIVERSE`, `IBKR_CP_BASE_URL`, `IBKR_FEEDER_ASSETS_FILE`, `IBKR_FEEDER_STATUS_FILE`, `IBKR_FEEDER_CHECKPOINT_FILE`, `SIGNALMAKER_BASE_URL`, `SIGNALMAKER_OPERATOR_KEY` et `SIGNALMAKER_ANALYSIS_PATH`. Les checkpoints sont écrits après confirmation de l'upsert ; un redémarrage reprend avec deux barres de recouvrement idempotent. Un verrou par univers refuse un doublon, tandis que deux univers peuvent fonctionner séparément (à activer seulement si les limites de pacing et de connexion IBKR le permettent).
+
+Sur Ubuntu, installer explicitement chaque univers avec `sudo scripts/install_ibkr_feeder_service.sh --universe "Europe Stocks" --enable-timer` (puis de même pour Europe ETF), ou utiliser `deploy/systemd/executor-feeder@.service` avec `/etc/signalmaker/ibkr-feeder-stocks.env` contenant `FEED_UNIVERSE="Europe Stocks"`. Consulter `journalctl -u executor-feeder-europe_stocks.service -n 200 -f` et `data/ibkr_feeder_europe_stocks_status.json`. Après interruption, relancer la même commande : le checkpoint reprend automatiquement. La page `/ibkr-feeder.html` lance un univers, bloque un doublon, affiche l'actif/timeframe courant et le résumé final.
 
 Verify remote ingestion:
 
