@@ -363,12 +363,6 @@ async def stocks_etfs_freshness(universe: str | None = None, asset_type: str | N
     return await repo.analysis_freshness(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
 
 
-@router.get('/api/v1/stocks-etfs/confluence')
-async def stocks_etfs_confluence(universe: str | None = None, asset_type: str | None = None, limit: int = 300, filters: dict = Depends(_asset_filter_params), db: Session = Depends(get_db)):
-    repo = _repo(db)
-    return await repo.confluence_results(universe_name=universe, asset_type=asset_type, limit=limit, **filters)
-
-
 def _csv(rows: list[dict]) -> Response:
     import csv
     import io
@@ -402,8 +396,6 @@ async def stocks_etfs_export_csv(kind: str = 'results', engine: str | None = Non
     repo = _repo(db)
     if kind == 'quality':
         rows = await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
-    elif kind == 'confluence':
-        rows = await repo.confluence_results(universe_name=universe, asset_type=asset_type, limit=limit)
     elif kind == 'assets':
         rows = await repo.list_enabled_market_assets(universe_name=universe, asset_type=asset_type, limit=limit)
     else:
