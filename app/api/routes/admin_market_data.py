@@ -11,6 +11,9 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models.app_setting import AppSetting
+from app.models.momentum_engine import MomentumEngineTrade
+from app.services.momentum_engine_service import MomentumEngineService
+from app.services.momentum_market import STOCK_ETF_CONTEXT
 from app.db.session import SessionLocal, rollback_and_close
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
@@ -292,6 +295,23 @@ def _stock_etf_cadence(db: Session) -> int:
     return int(row.value) if row else 24
 
 
+def _stock_etf_portfolio(db: Session) -> dict:
+    defaults = {'starting_capital': 1000.0, 'cadence_hours': 24, 'reference_currency': 'EUR', 'max_positions': 1}
+    rows = db.scalars(select(AppSetting).where(AppSetting.category == 'stock_etf_momentum')).all()
+    values = {row.key: row.value for row in rows}
+    return {**defaults, **values, 'cadence_hours': _stock_etf_cadence(db)}
+
+
+def _stock_etf_engine(db: Session, rankings: list[dict]) -> MomentumEngineService:
+    def price_loader(symbol: str):
+        row = next((item for item in rankings if item.get('symbol') == symbol), None)
+        return (float(row['price']), 'stock_etf_analysis') if row and row.get('price') else None
+    return MomentumEngineService(
+        db, context=STOCK_ETF_CONTEXT, ranking_loader=lambda _limit: rankings,
+        candle_loader=price_loader,
+    )
+
+
 @router.get('/api/v1/stocks-etfs/momentum/cadence')
 def stocks_etfs_momentum_cadence(db: Session = Depends(get_db)):
     return {'cadence_hours': _stock_etf_cadence(db), 'market_type': 'stock_etf'}
@@ -314,30 +334,29 @@ def update_stocks_etfs_momentum_cadence(payload: dict, db: Session = Depends(get
 @router.get('/api/v1/stocks-etfs/momentum/status')
 async def stocks_etfs_momentum_status(universe: str | None = None, asset_type: str | None = None, db: Session = Depends(get_db)):
     rows = await _repo(db).latest_analysis_results(engine_name='momentum', universe_name=universe, asset_type=asset_type, limit=500)
-    eligible = [row for row in rows if row.get('score') is not None]
-    best = max(eligible, key=lambda row: float(row['score']), default=None)
-    return {
-        'market_type': 'stock_etf', 'cadence_hours': _stock_etf_cadence(db),
-        'starting_capital': 1000, 'equity': 1000, 'cash': 1000, 'total_pnl': 0,
-        'total_pnl_pct': 0, 'open_position': None, 'trades': [], 'due_now': True,
-        'due_reason': 'manual_stock_etf_analysis', 'recommendation': 'ANALYZE',
-        'best_asset': ({'symbol': best.get('provider_symbol'), 'momentum_score': best.get('score'), 'rank': 1} if best else None),
-        'timeframe_mapping': {'15m': '15m', '1h': '1h', '4h': '4h', '1d': None},
-        'paper_trading': 'disabled_isolated_from_crypto',
-    }
+    rankings = [_stock_etf_momentum_payload(row, rank) for rank, row in enumerate(sorted(rows, key=lambda r: float(r.get('score') or -10_000), reverse=True), 1)]
+    config = _stock_etf_portfolio(db)
+    return _stock_etf_engine(db, rankings).status(cadence_hours=int(config['cadence_hours']), starting_capital=float(config['starting_capital']))
+
+
+@router.get('/api/v1/stocks-etfs/momentum/decision')
+def stocks_etfs_momentum_decision(db: Session = Depends(get_db)):
+    return _stock_etf_engine(db, []).current_decision()
 
 
 @router.post('/api/v1/stocks-etfs/momentum/run-once')
 async def stocks_etfs_momentum_run_once(payload: dict, db: Session = Depends(get_db)):
-    await analyze({'engine': 'momentum', 'timeframes': ['15m'], 'universe': payload.get('universe'),
-                   'asset_type': payload.get('asset_type'), 'limit': payload.get('limit', 300)})
-    return await stocks_etfs_momentum_status(payload.get('universe'), payload.get('asset_type'), db)
+    rows = await _repo(db).latest_analysis_results(engine_name='momentum', universe_name=payload.get('universe'), asset_type=payload.get('asset_type'), limit=payload.get('limit', 300))
+    rankings = [_stock_etf_momentum_payload(row, rank) for rank, row in enumerate(sorted(rows, key=lambda r: float(r.get('score') or -10_000), reverse=True), 1)]
+    config = _stock_etf_portfolio(db)
+    return _stock_etf_engine(db, rankings).run_once(force=bool(payload.get('force', True)), cadence_hours=int(config['cadence_hours']), starting_capital=float(config['starting_capital']), min_momentum_score=float(payload.get('min_momentum_score', 0)))
 
 
 @router.get('/api/v1/stocks-etfs/momentum/journal')
 async def stocks_etfs_momentum_journal(universe: str | None = None, asset_type: str | None = None, limit: int = 100, db: Session = Depends(get_db)):
-    rows = await _repo(db).latest_analysis_results(engine_name='momentum', universe_name=universe, asset_type=asset_type, limit=limit)
-    return [{**row, 'market_type': 'stock_etf'} for row in rows]
+    del universe, asset_type
+    rows = db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.market_scope == 'stock_etf').order_by(MomentumEngineTrade.created_at.desc()).limit(limit)).all()
+    return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
 
 
 @router.get('/api/v1/stocks-etfs/candidates')

@@ -9,12 +9,14 @@ from app.models.base import Base
 class MomentumEnginePosition(Base):
     __tablename__ = "momentum_engine_positions"
     __table_args__ = (
-        Index("ix_momentum_engine_positions_status", "status"),
+        Index("ix_momentum_engine_positions_scope_status", "market_scope", "status"),
         Index("ix_momentum_engine_positions_symbol", "symbol"),
-        Index("ix_momentum_engine_positions_strategy_status_opened", "strategy", "status", "opened_at"),
+        Index("ix_momentum_engine_positions_scope_strategy_status_opened", "market_scope", "strategy", "status", "opened_at"),
+        Index("ux_momentum_engine_positions_scope_id", "market_scope", "position_id", unique=True),
     )
 
     position_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    market_scope: Mapped[str] = mapped_column(String(32), default="crypto", nullable=False)
     strategy: Mapped[str] = mapped_column(String(64), default="momentum_rotation_v1", nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
@@ -36,11 +38,13 @@ class MomentumEngineTrade(Base):
         Index("ix_momentum_engine_trades_action", "action"),
         Index("ix_momentum_engine_trades_symbol", "symbol"),
         Index("ix_momentum_engine_trades_created_at", "created_at"),
-        Index("ix_momentum_engine_trades_strategy_created", "strategy", "created_at"),
+        Index("ix_momentum_engine_trades_scope_strategy_created", "market_scope", "strategy", "created_at"),
         Index("ix_momentum_engine_trades_strategy_action", "strategy", "action"),
+        Index("ux_momentum_engine_trades_scope_id", "market_scope", "trade_id", unique=True),
     )
 
     trade_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    market_scope: Mapped[str] = mapped_column(String(32), default="crypto", nullable=False)
     strategy: Mapped[str] = mapped_column(String(64), default="momentum_rotation_v1", nullable=False)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)

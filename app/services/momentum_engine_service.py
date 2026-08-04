@@ -12,6 +12,7 @@ from app.models.market_candle import MarketCandle
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
 from app.services.momentum_service import MomentumService
+from app.services.momentum_market import CandleLoader, CRYPTO_CONTEXT, MomentumMarketContext, RankingLoader
 
 
 class MomentumEngineService:
@@ -31,8 +32,19 @@ class MomentumEngineService:
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
 
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        context: MomentumMarketContext = CRYPTO_CONTEXT,
+        ranking_loader: RankingLoader | None = None,
+        candle_loader: CandleLoader | None = None,
+    ) -> None:
         self.db = db
+        self.context = context
+        self.market_scope = context.market_scope
+        self.ranking_loader = ranking_loader or (lambda limit: MomentumService(db).list_rankings(limit=limit))
+        self.candle_loader = candle_loader or self._latest_market_price
         self._active_event_key: str | None = None
         self._pending_event_key: str | None = None
 
@@ -57,7 +69,9 @@ class MomentumEngineService:
 
     def current_decision(self) -> dict[str, Any]:
         """Return the latest persisted momentum-engine decision payload."""
-        current = self.db.get(MomentumEngineCurrentDecision, 1)
+        current = self.db.scalar(select(MomentumEngineCurrentDecision).where(
+            MomentumEngineCurrentDecision.market_scope == self.market_scope
+        ))
         if current and isinstance(current.payload_json, dict) and current.payload_json:
             return current.payload_json
         return self._empty_current_decision()
@@ -242,7 +256,7 @@ class MomentumEngineService:
         return status
 
     def _rankings(self) -> list[dict[str, Any]]:
-        return MomentumService(self.db).list_rankings(limit=300)
+        return self.ranking_loader(300)
 
     def _build_status(self, *, rankings: list[dict[str, Any]], cadence_hours: int, starting_capital: float, min_momentum_score: float) -> dict[str, Any]:
         open_position = self._open_position()
@@ -269,7 +283,7 @@ class MomentumEngineService:
         if open_position and (cadence_anchor is None or self._as_utc(open_position.opened_at) > cadence_anchor):
             cadence_anchor = self._as_utc(open_position.opened_at)
         next_check_at = cadence_anchor + timedelta(hours=cadence_hours) if cadence_anchor else None
-        cadence_due = next_check_at is None or now >= next_check_at
+        cadence_due = (next_check_at is None or now >= next_check_at) and self.context.is_open_now()
         event_due, event_reason, _ = self._is_event_due(
             open_position=open_position,
             current_asset=current_asset,
@@ -284,6 +298,9 @@ class MomentumEngineService:
 
         return {
             "strategy": self.STRATEGY,
+            "market_scope": self.market_scope,
+            "reference_currency": self.context.reference_currency,
+            "max_positions": self.context.max_positions,
             "mode": self.MODE,
             "cadence_hours": cadence_hours,
             "starting_capital": starting_capital,
@@ -427,9 +444,12 @@ class MomentumEngineService:
         decision.setdefault("produced_at", now.isoformat())
         decision.setdefault("source", "persisted_current_decision")
 
-        row = self.db.get(MomentumEngineCurrentDecision, 1)
+        row = self.db.scalar(select(MomentumEngineCurrentDecision).where(
+            MomentumEngineCurrentDecision.market_scope == self.market_scope
+        ))
         if row is None:
-            row = MomentumEngineCurrentDecision(id=1)
+            next_id = int(self.db.scalar(select(func.coalesce(func.max(MomentumEngineCurrentDecision.id), 0))) or 0) + 1
+            row = MomentumEngineCurrentDecision(id=next_id, market_scope=self.market_scope)
             self.db.add(row)
 
         produced_at = decision.get("produced_at")
@@ -579,7 +599,7 @@ class MomentumEngineService:
     def _open_position(self) -> MomentumEnginePosition | None:
         stmt = (
             select(MomentumEnginePosition)
-            .where(MomentumEnginePosition.strategy == self.STRATEGY, MomentumEnginePosition.status == "open")
+            .where(MomentumEnginePosition.market_scope == self.market_scope, MomentumEnginePosition.strategy == self.STRATEGY, MomentumEnginePosition.status == "open")
             .order_by(MomentumEnginePosition.opened_at.desc())
             .limit(1)
         )
@@ -588,7 +608,7 @@ class MomentumEngineService:
     def _recent_trades(self, *, limit: int = 50) -> list[MomentumEngineTrade]:
         stmt = (
             select(MomentumEngineTrade)
-            .where(MomentumEngineTrade.strategy == self.STRATEGY)
+            .where(MomentumEngineTrade.market_scope == self.market_scope, MomentumEngineTrade.strategy == self.STRATEGY)
             .order_by(MomentumEngineTrade.created_at.desc())
             .limit(limit)
         )
@@ -597,7 +617,7 @@ class MomentumEngineService:
     def _last_check_trade(self) -> MomentumEngineTrade | None:
         stmt = (
             select(MomentumEngineTrade)
-            .where(MomentumEngineTrade.strategy == self.STRATEGY)
+            .where(MomentumEngineTrade.market_scope == self.market_scope, MomentumEngineTrade.strategy == self.STRATEGY)
             .order_by(MomentumEngineTrade.created_at.desc())
             .limit(1)
         )
@@ -610,10 +630,11 @@ class MomentumEngineService:
                     func.sum(case((MomentumEngineTrade.action.like("SELL%"), MomentumEngineTrade.pnl), else_=0.0)),
                     0.0,
                 )
-            ).where(MomentumEngineTrade.strategy == self.STRATEGY)
+            ).where(MomentumEngineTrade.market_scope == self.market_scope, MomentumEngineTrade.strategy == self.STRATEGY)
         )
         open_entry_value = self.db.scalar(
             select(func.coalesce(func.sum(MomentumEnginePosition.entry_value), 0.0)).where(
+                MomentumEnginePosition.market_scope == self.market_scope,
                 MomentumEnginePosition.strategy == self.STRATEGY,
                 MomentumEnginePosition.status == "open",
             )
@@ -680,7 +701,7 @@ class MomentumEngineService:
         # Momentum PnL must be marked with the freshest known market close, not
         # the entry-price fallback or an old ranking snapshot. Otherwise HOLD or
         # rotation events can show artificial 0-PnL while the market moved.
-        market_price = self._latest_market_price(symbol)
+        market_price = self.candle_loader(symbol)
         if market_price is not None:
             return market_price
         for row in rankings:
@@ -698,6 +719,7 @@ class MomentumEngineService:
         now = datetime.now(timezone.utc)
         position = MomentumEnginePosition(
             position_id=f"mompos-{uuid4().hex}",
+            market_scope=self.market_scope,
             strategy=self.STRATEGY,
             symbol=asset["symbol"],
             status="open",
@@ -767,6 +789,7 @@ class MomentumEngineService:
             trade_meta["event_key"] = self._active_event_key
         trade = MomentumEngineTrade(
             trade_id=f"momtrade-{uuid4().hex}",
+            market_scope=self.market_scope,
             strategy=self.STRATEGY,
             action=action,
             symbol=symbol,

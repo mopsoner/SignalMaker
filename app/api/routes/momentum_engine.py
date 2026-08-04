@@ -50,8 +50,8 @@ def momentum_engine_run_once(payload: MomentumEngineRunRequest, db: Session = De
 @router.delete("/cleanup")
 def clear_momentum_engine(db: Session = Depends(get_db)) -> dict:
     """Clear momentum paper-engine logs, chart events and positions."""
-    deleted_trades = db.execute(delete(MomentumEngineTrade)).rowcount or 0
-    deleted_positions = db.execute(delete(MomentumEnginePosition)).rowcount or 0
+    deleted_trades = db.execute(delete(MomentumEngineTrade).where(MomentumEngineTrade.market_scope == "crypto")).rowcount or 0
+    deleted_positions = db.execute(delete(MomentumEnginePosition).where(MomentumEnginePosition.market_scope == "crypto")).rowcount or 0
     db.commit()
     return {
         "deleted": deleted_trades + deleted_positions,

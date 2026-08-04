@@ -87,6 +87,12 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_engine_starting_capital": 1000.0,
         "momentum_engine_min_score": 0.0,
     },
+    "stock_etf_momentum": {
+        "starting_capital": 1000.0,
+        "cadence_hours": 24,
+        "reference_currency": "EUR",
+        "max_positions": 1,
+    },
     "live": {
         "live_spot_allow_shorts": base_settings.live_spot_allow_shorts,
         "live_max_open_positions": base_settings.live_max_open_positions,
