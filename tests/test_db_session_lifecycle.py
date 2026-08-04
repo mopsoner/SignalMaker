@@ -6,6 +6,7 @@ import pytest
 from app.api import deps
 from scripts import run_scheduler_loop
 from app.api.routes import admin_market_data
+from app.services.shared_market_analysis_service import SharedMarketAnalysisService
 
 
 def test_get_db_closes_session_on_success(monkeypatch):
@@ -72,15 +73,15 @@ def test_analyze_closes_read_transaction_before_engine_work(monkeypatch):
         async def finish_analysis_run(self, *args, **kwargs):
             pass
 
-    original_no_signal = admin_market_data.MarketAnalysisAdapter._no_signal
+    original_run = SharedMarketAnalysisService.run
 
-    def observed_no_signal(self, *args):
+    def observed_run(self, **kwargs):
         events.append("analyzed")
-        return original_no_signal(self, *args)
+        return original_run(self, **kwargs)
 
     monkeypatch.setattr(admin_market_data, "SessionLocal", factory)
     monkeypatch.setattr(admin_market_data, "MarketDataRepository", Repo)
-    monkeypatch.setattr(admin_market_data.MarketAnalysisAdapter, "_no_signal", observed_no_signal)
+    monkeypatch.setattr(SharedMarketAnalysisService, "run", observed_run)
 
     response = asyncio.run(admin_market_data.analyze({"symbols": ["MSFT.US"], "engine": "momentum"}))
 

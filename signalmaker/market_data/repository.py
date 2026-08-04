@@ -621,27 +621,60 @@ class MarketDataRepository:
         self._ensure_job_requests_table()
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_data_job_requests ORDER BY created_at DESC LIMIT :limit"), {"limit": limit}).all()]
 
-    async def next_queued_analysis_job(self):
+    async def claim_next_analysis_job(self, worker_id: str, *, max_attempts: int = 3):
+        """Atomically claim one job; concurrent workers cannot receive the same row."""
         self._ensure_job_requests_table()
-        row = self.db.execute(text("SELECT * FROM market_data_job_requests WHERE status='QUEUED' AND job_type='analysis' ORDER BY created_at ASC LIMIT 1")).first()
+        dialect = self.db.get_bind().dialect.name
+        suffix = " FOR UPDATE SKIP LOCKED" if dialect != "sqlite" else ""
+        candidate = self.db.execute(text(
+            "SELECT id FROM market_data_job_requests WHERE lower(status)='queued' AND job_type='analysis' "
+            "AND attempts < :max_attempts ORDER BY created_at ASC LIMIT 1" + suffix
+        ), {"max_attempts": max_attempts}).scalar()
+        if candidate is None:
+            return None
+        row = self.db.execute(text(
+            "UPDATE market_data_job_requests SET status='running', worker_id=:worker_id, attempts=attempts+1, "
+            "started_at=COALESCE(started_at,CURRENT_TIMESTAMP), heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=:id AND lower(status)='queued' RETURNING *"
+        ), {"id": candidate, "worker_id": worker_id}).first()
         value = _row(row) if row else None
         if value and isinstance(value.get("payload"), str):
             value["payload"] = json.loads(value["payload"] or "{}")
         return value
 
+    async def next_queued_analysis_job(self):
+        """Compatibility read-only lookup; workers must use ``claim_next_analysis_job``."""
+        self._ensure_job_requests_table()
+        row = self.db.execute(text("SELECT * FROM market_data_job_requests WHERE lower(status)='queued' AND job_type='analysis' ORDER BY created_at ASC LIMIT 1")).first()
+        value = _row(row) if row else None
+        if value and isinstance(value.get("payload"), str): value["payload"] = json.loads(value["payload"] or "{}")
+        return value
+
+    async def heartbeat_job(self, job_id, worker_id: str):
+        result = self.db.execute(text("UPDATE market_data_job_requests SET heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=:id AND status='running' AND worker_id=:worker"), {"id": job_id, "worker": worker_id})
+        return bool(result.rowcount)
+
     async def update_job_request(self, job_id, status: str, *, result: dict | None = None):
         self._ensure_job_requests_table()
-        self.db.execute(text("UPDATE market_data_job_requests SET status=:status,payload=:payload,updated_at=CURRENT_TIMESTAMP WHERE id=:job_id"), {
+        finished = ",finished_at=CURRENT_TIMESTAMP" if status.lower() in {"completed", "insufficient_data", "skipped", "failed"} else ""
+        self.db.execute(text("UPDATE market_data_job_requests SET status=:status,payload=:payload,last_error=:last_error,updated_at=CURRENT_TIMESTAMP" + finished + " WHERE id=:job_id"), {
             "job_id": job_id, "status": status, "payload": json.dumps(result or {}),
+            "last_error": (result or {}).get("last_error"),
         })
 
     def _ensure_job_requests_table(self):
         dialect = self.db.get_bind().dialect.name
         if dialect == "sqlite":
-            stmt = "CREATE TABLE IF NOT EXISTS market_data_job_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, job_type TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            stmt = "CREATE TABLE IF NOT EXISTS market_data_job_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, job_type TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NULL, attempts INTEGER NOT NULL DEFAULT 0, worker_id TEXT NULL, started_at TIMESTAMP NULL, heartbeat_at TIMESTAMP NULL, finished_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         else:
-            stmt = "CREATE TABLE IF NOT EXISTS market_data_job_requests (id BIGSERIAL PRIMARY KEY, job_type TEXT NOT NULL, status TEXT NOT NULL, payload JSONB NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())"
+            stmt = "CREATE TABLE IF NOT EXISTS market_data_job_requests (id BIGSERIAL PRIMARY KEY, job_type TEXT NOT NULL, status TEXT NOT NULL, payload JSONB NULL, attempts INTEGER NOT NULL DEFAULT 0, worker_id TEXT NULL, started_at TIMESTAMP NULL, heartbeat_at TIMESTAMP NULL, finished_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())"
         self.db.execute(text(stmt))
+        columns = {"attempts": "INTEGER NOT NULL DEFAULT 0", "worker_id": "TEXT NULL", "started_at": "TIMESTAMP NULL",
+                   "heartbeat_at": "TIMESTAMP NULL", "finished_at": "TIMESTAMP NULL", "last_error": "TEXT NULL"}
+        existing = {row[1] for row in self.db.execute(text("PRAGMA table_info(market_data_job_requests)"))} if dialect == "sqlite" else {
+            row[0] for row in self.db.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='market_data_job_requests'"))}
+        for name, definition in columns.items():
+            if name not in existing: self.db.execute(text(f"ALTER TABLE market_data_job_requests ADD COLUMN {name} {definition}"))
 
     def stats(self):
         def scalar(sql): return self.db.execute(text(sql)).scalar() or 0

@@ -5,9 +5,11 @@ import hashlib
 import json
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from app.services.momentum_service import MomentumService
+from app.services.shared_market_analysis_service import SharedMarketAnalysisService as SharedEngineService
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 
 
@@ -22,11 +24,12 @@ class MarketAnalysisService:
     WORKFLOW_VERSION = "stock-etf-shared-v1"
     ENGINES = ("momentum", "wyckoff_smc")
 
-    def __init__(self, repo, *, adapter=None, market_scope: str = "stock_etf"):
+    def __init__(self, repo, *, adapter=None, pipeline=None, market_scope: str = "stock_etf"):
         if market_scope != "stock_etf":
             raise ValueError(f"unsupported_market_scope:{market_scope}")
         self.repo = repo
         self.adapter = adapter or MarketAnalysisAdapter(repo)
+        self.pipeline = pipeline or SharedEngineService()
         self.market_scope = market_scope
 
     @classmethod
@@ -47,7 +50,7 @@ class MarketAnalysisService:
             if candles:
                 closed.append((tf, candles[-1]["close_time"]))
         identity = {
-            "asset_id": str(asset["id"]), "engine": engine,
+            "market_scope": self.market_scope, "asset_id": str(asset["id"]), "engine": engine,
             "last_closed_candles": closed, "timeframes": timeframes,
             "workflow_version": self.WORKFLOW_VERSION,
         }
@@ -63,6 +66,7 @@ class MarketAnalysisService:
             raise ValueError(f"unsupported_engine:{engine}")
         engines = list(self.ENGINES) if engine == "both" else [engine]
         run_token = str(uuid.uuid4())
+        started_at = datetime.now(timezone.utc).isoformat()
         metadata = {
             "run_identifier": run_token, "market_scope": self.market_scope,
             "workflow_version": self.WORKFLOW_VERSION, "universe": universe,
@@ -87,14 +91,20 @@ class MarketAnalysisService:
                     key = await self._idempotency_key(asset, selected_engine, timeframe)
                     if hasattr(self.repo, "analysis_result_exists") and await self.repo.analysis_result_exists(key):
                         counts["skipped"] += 1
-                        results.append({"asset_id": asset["id"], "symbol": symbol, "engine_name": selected_engine, "status": "skipped"})
+                        results.append({"asset_id": asset["id"], "symbol": symbol, "engine_name": selected_engine,
+                                        "status": "skipped", "phase": "idempotency_check", "missing_timeframes": [],
+                                        "status_history": ["queued", "running", "skipped"]})
                         continue
-                    result = await (
-                        self.adapter.run_momentum_analysis(asset["id"], timeframe)
-                        if selected_engine == "momentum"
-                        else self.adapter.run_wyckoff_smc_analysis(asset["id"], timeframe, asset=asset)
+                    required = self.required_timeframes(selected_engine, timeframe)
+                    raw = await self.adapter.load_stock_etf_candle_bundle(asset["id"], required)
+                    bundle = {tf: self.adapter.normalize_engine_candles(raw.get(tf, []), symbol=symbol, timeframe=tf) for tf in required}
+                    result = self.pipeline.run(
+                        market_scope="stock_etf", asset_id=str(asset["id"]), engine=selected_engine,
+                        universe=universe or asset.get("universe_name"), asset_type=asset_type or asset.get("asset_type"),
+                        timeframes=required, workflow_version=self.WORKFLOW_VERSION, candles=bundle,
+                        symbol=symbol, market_context=asset,
                     )
-                    status = "insufficient_data" if result.get("status") == "insufficient_data" else "analyzed"
+                    status = result["status"]
                     result.update({
                         "market_scope": self.market_scope, "asset_id": str(asset["id"]),
                         "workflow_version": self.WORKFLOW_VERSION, "idempotency_key": key,
@@ -108,18 +118,27 @@ class MarketAnalysisService:
                         await self.repo.insert_analysis_result(run_id, asset["id"], selected_engine, timeframe, result)
                     self._commit()
                     counts[status] += 1
-                    results.append({"asset_id": asset["id"], "symbol": symbol, "status": status, **result})
+                    results.append({"asset_id": asset["id"], "symbol": symbol,
+                                    "status_history": ["queued", "running", status], **result})
                 except Exception as exc:  # one bad instrument must not abort its universe
                     self._rollback()
-                    counts["error"] += 1
-                    results.append({"asset_id": asset.get("id"), "symbol": symbol, "engine_name": selected_engine, "status": "error", "error": str(exc)})
+                    counts["failed"] += 1
+                    results.append({"asset_id": asset.get("id"), "symbol": symbol, "engine_name": selected_engine,
+                                    "status": "failed", "phase": "analyzing", "missing_timeframes": [],
+                                    "status_history": ["queued", "running", "failed"],
+                                    "error": f"{type(exc).__name__}: {exc}"})
 
         total = len(assets) * len(engines)
-        status = "SUCCESS" if not counts["error"] else "PARTIAL"
-        await self.repo.finish_analysis_run(run_id, status, total, counts["analyzed"] + counts["insufficient_data"], counts["error"])
+        status = "SUCCESS" if not counts["failed"] else "PARTIAL"
+        processed = sum(counts[name] for name in ("completed", "insufficient_data", "skipped", "failed"))
+        await self.repo.finish_analysis_run(run_id, status, total, processed, counts["failed"])
         self._commit()
-        summary = {name: counts[name] for name in ("analyzed", "insufficient_data", "skipped", "error")}
-        return {"run_id": run_id, "run_identifier": run_token, "status": status, "summary": summary, "results": results}
+        summary = {"total": total, "processed": processed, **{name: counts[name] for name in ("completed", "insufficient_data", "skipped", "failed")}}
+        finished_at = datetime.now(timezone.utc).isoformat()
+        last_error = next((row.get("error") for row in reversed(results) if row.get("error")), None)
+        return {"run_id": run_id, "run_identifier": run_token, "status": status, "summary": summary,
+                **summary, "started_at": started_at, "heartbeat_at": finished_at, "finished_at": finished_at,
+                "worker_id": None, "last_error": last_error, "results": results}
 
     def _commit(self):
         db = getattr(self.repo, "db", None)
