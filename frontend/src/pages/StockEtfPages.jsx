@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
+import WyckoffSmcDashboard from '../components/WyckoffSmcDashboard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber } from '../lib/format'
@@ -68,7 +69,28 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   </div>
 }
 
-export function StockEtfWyckoffDashboardPage() { return <Dashboard engine="wyckoff_smc" title="ETF & Stocks · Wyckoff SMC Dashboard" subtitle="Daily IBKR stock/ETF candles adapted into the existing Wyckoff-SMC workflow without touching the crypto process." /> }
+const stockEtfWyckoffFilters = [
+  { key: 'universe', label: 'Universe', allLabel: 'All universes', options: ['Europe Stocks', 'Europe ETF'] },
+  { key: 'asset_type', label: 'Asset type', allLabel: 'All asset types', options: [{ value: 'ETF', label: 'ETF' }, { value: 'STOCK', label: 'Stock' }, { value: 'INDEX', label: 'Index' }] },
+]
+
+export function StockEtfWyckoffDashboardPage() {
+  const loadAssets = useCallback(async ({ universe, asset_type: assetType }) => {
+    const dashboard = await api.stockEtfDashboard(query(universe, assetType, 'engine=wyckoff_smc&limit=500'))
+    return asRows(dashboard, 'wyckoff_smc').map((row) => ({ ...row, updated_at: row.updated_at || row.created_at }))
+  }, [])
+  return <WyckoffSmcDashboard
+    loadAssets={loadAssets}
+    tradingViewLink={(row) => tradingViewUrl(row.provider_symbol || row.symbol, { market: 'stock-etf' })}
+    symbolFor={(row) => row.provider_symbol || row.symbol}
+    assetMeta={(row) => [row.name, row.asset_type, row.universe_name].filter(Boolean).join(' · ')}
+    title="ETF & Stocks · Wyckoff SMC Dashboard"
+    subtitle="4H context/target, 1H Wyckoff-SMC setup and 15m alignment for the ETF/Stock universe."
+    labels={{ symbol: 'ETF / Stock' }}
+    marketFilters={stockEtfWyckoffFilters}
+    pollingInterval={30000}
+  />
+}
 export function StockEtfTradeCandidatesPage() { return <Dashboard engine="wyckoff_smc" candidatesOnly title="ETF & Stocks · Trade Candidates" subtitle="BUY/SELL candidates generated from stock/ETF IBKR daily analysis results." /> }
 export function StockEtfPositionsPage() { return <Dashboard engine="wyckoff_smc" positionsOnly title="ETF & Stocks · Positions" subtitle="Phase-1 paper/watch positions inferred from BUY analysis results; no broker execution or IBKR dependency." /> }
 export function StockEtfMomentumDashboardPage() { return <Dashboard engine="momentum" title="ETF & Stocks · Momentum Dashboard" subtitle="Daily IBKR stock/ETF candles adapted for the momentum dashboard layer." /> }
