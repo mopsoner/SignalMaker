@@ -22,8 +22,6 @@ class Repo:
 
 
 class Adapter:
-    calls = []
-
     async def load_stock_etf_candle_bundle(self, asset_id, timeframes):
         if asset_id == "bad":
             raise RuntimeError("isolated")
@@ -31,9 +29,12 @@ class Adapter:
 
     def normalize_engine_candles(self, rows, **kwargs): return rows
 
-    async def run_momentum_analysis(self, asset_id, timeframe):
-        self.calls.append((asset_id, timeframe))
-        return {"engine_name": "momentum", "signal": "HOLD"}
+class Pipeline:
+    calls = []
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"engine_name": "momentum", "status": "completed", "phase": "persisting",
+                "missing_timeframes": [], "signal": "HOLD", "payload": {}}
 
 
 def test_cli_keeps_selection_filters():
@@ -43,12 +44,17 @@ def test_cli_keeps_selection_filters():
 
 def test_shared_orchestration_persists_run_and_isolates_asset_failure():
     repo = Repo()
-    report = asyncio.run(MarketAnalysisService(repo, adapter=Adapter()).run(
+    pipeline = Pipeline()
+    report = asyncio.run(MarketAnalysisService(repo, adapter=Adapter(), pipeline=pipeline).run(
         engine="momentum", universe="PEA", asset_type="ETF", limit=7
     ))
     assert repo.filters["universe_name"] == "PEA"
     assert report["run_id"] == 41
-    assert report["summary"] == {"analyzed": 1, "insufficient_data": 0, "skipped": 0, "error": 1}
+    assert report["summary"] == {"total": 2, "processed": 2, "completed": 1, "insufficient_data": 0, "skipped": 0, "failed": 1}
     assert len(repo.rows) == 1
-    assert Adapter.calls[-1] == ("good", "15m")
+    assert pipeline.calls[-1]["market_scope"] == "stock_etf"
+    assert pipeline.calls[-1]["asset_id"] == "good"
+    assert pipeline.calls[-1]["universe"] == "PEA"
+    assert pipeline.calls[-1]["asset_type"] == "ETF"
+    assert pipeline.calls[-1]["workflow_version"] == MarketAnalysisService.WORKFLOW_VERSION
     assert repo.finished[1] == "PARTIAL"

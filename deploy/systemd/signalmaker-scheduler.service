@@ -1,5 +1,5 @@
 [Unit]
-Description=SignalMaker Scheduler Worker
+Description=SignalMaker Scheduler Worker (consumer of market_data_job_requests)
 After=network.target
 
 [Service]
