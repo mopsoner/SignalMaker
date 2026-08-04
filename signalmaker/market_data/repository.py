@@ -78,6 +78,7 @@ class MarketDataRepository:
             "CREATE INDEX IF NOT EXISTS idx_market_analysis_results_latest ON market_analysis_results (asset_id, engine_name, timeframe, payload_version, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_market_analysis_results_filters ON market_analysis_results (engine_name, stage, signal, timeframe, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_market_analysis_results_run ON market_analysis_results (analysis_run_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_market_analysis_results_idempotency ON market_analysis_results (idempotency_key)",
         ):
             self.db.execute(text(statement))
 
@@ -440,9 +441,14 @@ class MarketDataRepository:
     async def finish_analysis_run(self, run_id, status: str, total_assets=0, success_count=0, failed_count=0, error_message=None):
         self.db.execute(text("UPDATE market_analysis_runs SET status=:status,finished_at=CURRENT_TIMESTAMP,total_assets=:total_assets,success_count=:success_count,failed_count=:failed_count,error_message=:error_message WHERE id=:run_id"), locals())
 
-    async def insert_analysis_result(self, analysis_run_id, asset_id, engine_name: str, timeframe: str, result: dict):
+    async def analysis_result_exists(self, idempotency_key: str) -> bool:
+        return self.db.execute(text(
+            "SELECT 1 FROM market_analysis_results WHERE idempotency_key=:key LIMIT 1"
+        ), {"key": idempotency_key}).first() is not None
+
+    async def insert_analysis_result(self, analysis_run_id, asset_id, engine_name: str, timeframe: str, result: dict, *, idempotency_key: str | None = None, workflow_version: str | None = None):
         payload = analysis_result_payload(result)
-        self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,stage,signal,score,trend,confidence,payload_version,payload) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:stage,:signal,:score,:trend,:confidence,:payload_version,:payload)"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"stage":result.get("stage") or payload.get("stage"),"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload_version":ANALYSIS_PAYLOAD_VERSION,"payload":json.dumps(payload, default=str)})
+        self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,stage,signal,score,trend,confidence,payload_version,payload,idempotency_key,workflow_version) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:stage,:signal,:score,:trend,:confidence,:payload_version,:payload,:idempotency_key,:workflow_version) ON CONFLICT (idempotency_key) DO NOTHING"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"stage":result.get("stage") or payload.get("stage"),"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload_version":ANALYSIS_PAYLOAD_VERSION,"payload":json.dumps(payload, default=str),"idempotency_key":idempotency_key,"workflow_version":workflow_version})
 
     async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
         """Load one real, closed interval (never substitute a daily series)."""
@@ -657,6 +663,20 @@ class MarketDataRepository:
         self._ensure_job_requests_table()
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_data_job_requests ORDER BY created_at DESC LIMIT :limit"), {"limit": limit}).all()]
 
+    async def next_queued_analysis_job(self):
+        self._ensure_job_requests_table()
+        row = self.db.execute(text("SELECT * FROM market_data_job_requests WHERE status='QUEUED' AND job_type='analysis' ORDER BY created_at ASC LIMIT 1")).first()
+        value = _row(row) if row else None
+        if value and isinstance(value.get("payload"), str):
+            value["payload"] = json.loads(value["payload"] or "{}")
+        return value
+
+    async def update_job_request(self, job_id, status: str, *, result: dict | None = None):
+        self._ensure_job_requests_table()
+        self.db.execute(text("UPDATE market_data_job_requests SET status=:status,payload=:payload,updated_at=CURRENT_TIMESTAMP WHERE id=:job_id"), {
+            "job_id": job_id, "status": status, "payload": json.dumps(result or {}),
+        })
+
     def _ensure_job_requests_table(self):
         dialect = self.db.get_bind().dialect.name
         if dialect == "sqlite":
@@ -675,14 +695,14 @@ _POSTGRES_SCHEMA = [
 "CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NOT NULL DEFAULT FALSE, ucits BOOLEAN NOT NULL DEFAULT FALSE, provider TEXT NOT NULL DEFAULT 'IBKR', metadata JSONB NULL DEFAULT '{}'::jsonb, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id BIGSERIAL PRIMARY KEY, engine_name TEXT NOT NULL, universe_id UUID NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata JSONB NULL, error_message TEXT NULL)",
-"CREATE TABLE IF NOT EXISTS market_analysis_results (id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, stage TEXT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload_version INTEGER NOT NULL DEFAULT 1, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now())",
+"CREATE TABLE IF NOT EXISTS market_analysis_results (id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, stage TEXT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload_version INTEGER NOT NULL DEFAULT 1, payload JSONB NOT NULL DEFAULT '{}'::jsonb, idempotency_key TEXT NULL UNIQUE, workflow_version TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now())",
 ]
 _SQLITE_SCHEMA = [
 "CREATE TABLE IF NOT EXISTS market_universes (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 "CREATE TABLE IF NOT EXISTS market_assets (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), universe_id TEXT NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NOT NULL DEFAULT FALSE, ucits BOOLEAN NOT NULL DEFAULT FALSE, provider TEXT NOT NULL DEFAULT 'IBKR', metadata TEXT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(provider_symbol, asset_type))",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata TEXT NULL)",
 "CREATE TABLE IF NOT EXISTS market_analysis_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, engine_name TEXT NOT NULL, universe_id TEXT NULL REFERENCES market_universes(id), timeframe TEXT NOT NULL DEFAULT '1d', status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, metadata TEXT NULL, error_message TEXT NULL)",
-"CREATE TABLE IF NOT EXISTS market_analysis_results (id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id TEXT NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, stage TEXT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload_version INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL DEFAULT '{}', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+"CREATE TABLE IF NOT EXISTS market_analysis_results (id INTEGER PRIMARY KEY AUTOINCREMENT, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id TEXT NOT NULL REFERENCES market_assets(id), engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, stage TEXT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL, payload_version INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL DEFAULT '{}', idempotency_key TEXT NULL UNIQUE, workflow_version TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 ]
 
 # Columns are deliberately nullable when upgrading legacy tables if no reliable
@@ -710,6 +730,7 @@ _POSTGRES_RUN_TABLE_COLUMNS = {
     },
     "market_analysis_results": {
         "analysis_run_id": "BIGINT NULL REFERENCES market_analysis_runs(id)",
+        "idempotency_key": "TEXT NULL", "workflow_version": "TEXT NULL",
         "asset_id": "UUID NULL REFERENCES market_assets(id)",
         "engine_name": "TEXT NULL",
         "timeframe": "TEXT NULL",
@@ -751,6 +772,7 @@ _SQLITE_RUN_TABLE_COLUMNS = {
     },
     "market_analysis_results": {
         "analysis_run_id": "BIGINT NULL REFERENCES market_analysis_runs(id)",
+        "idempotency_key": "TEXT NULL", "workflow_version": "TEXT NULL",
         "asset_id": "TEXT NULL REFERENCES market_assets(id)",
         "engine_name": "TEXT NULL",
         "timeframe": "TEXT NULL",

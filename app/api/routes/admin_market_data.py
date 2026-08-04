@@ -16,6 +16,7 @@ from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
 from signalmaker.market_data.repository import MarketDataRepository
+from signalmaker.market_data.analysis_service import MarketAnalysisService
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 from signalmaker.market_data.universe_service import MarketUniverseService
 
@@ -636,69 +637,39 @@ async def backfill(payload: dict | None = None):
 
 @router.post('/admin/market-data/analyze')
 async def analyze(payload: dict | None = None):
-    """Analyze snapshots in memory, never while a DB transaction is open."""
+    """Run the same scoped application workflow used by CLI and automation."""
     payload = payload or {}
-    started = perf_counter()
     timeframe = (payload.get('timeframes') or [payload.get('timeframe', '15m')])[0]
-    symbols = payload.get('symbols') or None
-    db = SessionLocal()
-    try:
-        repo = _repo(db)
-        assets = await repo.list_enabled_market_assets(
-            universe_name=payload.get('universe'), asset_type=payload.get('asset_type'),
-            limit=int(payload.get('limit') or 10), symbols=symbols,
-            **{key: payload.get(key) for key in ('region', 'country', 'exchange_code', 'provider', 'pea_eligible', 'ucits')},
-        )
-        if hasattr(repo, "load_stock_etf_candle_bundle"):
-            snapshots = {
-                asset['id']: await repo.load_stock_etf_candle_bundle(asset['id'], ("15m", "1h", "4h"))
-                for asset in assets
-            }
+    read_db = SessionLocal()
+    read_repo = _repo(read_db)
+    assets = await read_repo.list_enabled_market_assets(
+        universe_name=payload.get('universe'), asset_type=payload.get('asset_type'),
+        limit=int(payload.get('limit') or 10), symbols=payload.get('symbols') or None,
+        **{key: payload.get(key) for key in ('region', 'country', 'exchange_code', 'provider', 'pea_eligible', 'ucits') if payload.get(key) is not None},
+    )
+    required = set()
+    selected = MarketAnalysisService.ENGINES if payload.get('engine', 'both') == 'both' else (payload.get('engine', 'momentum'),)
+    for selected_engine in selected:
+        required.update(MarketAnalysisService.required_timeframes(selected_engine, timeframe))
+    snapshots = {}
+    for asset in assets:
+        if hasattr(read_repo, 'load_stock_etf_candle_bundle'):
+            snapshots[asset['id']] = await read_repo.load_stock_etf_candle_bundle(asset['id'], tuple(required))
         else:
-            snapshots = {
-                asset['id']: {timeframe: await repo.load_stock_etf_candles_for_asset(asset['id'], timeframe)}
-                for asset in assets
-            }
-        # End the read transaction before CPU work begins.
-        db.rollback()
-    except Exception:
-        rollback_and_close(db)
-        raise
-    else:
-        db.close()
-    loaded_at = perf_counter()
-    logger.info("market analyze loaded assets=%d seconds=%.3f", len(assets), loaded_at - started)
+            snapshots[asset['id']] = {tf: await read_repo.load_stock_etf_candles_for_asset(asset['id'], tf) for tf in required}
+    read_db.rollback()
+    read_db.close()
 
-    # Adapter conversion/engines are pure once their candle snapshot is loaded.
     class SnapshotAdapter(MarketAnalysisAdapter):
-        async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
-            return snapshots.get(asset_id, {}).get(timeframe, [])
-
-        async def load_stock_etf_candle_bundle(self, asset_id, timeframes=("15m", "1h", "4h")):
+        async def load_stock_etf_candle_bundle(self, asset_id, timeframes=('15m', '1h', '4h')):
             return {tf: snapshots.get(asset_id, {}).get(tf, []) for tf in timeframes}
 
-    adapter = SnapshotAdapter(None)
-    engines = ['momentum', 'wyckoff_smc'] if payload.get('engine', 'both') == 'both' else [payload.get('engine', 'momentum')]
-    results = []
-    for asset in assets:
-        for engine in engines:
-            res = await (adapter.run_momentum_analysis(asset['id'], timeframe) if engine == 'momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], timeframe, asset=asset))
-            results.append({'symbol': asset['provider_symbol'], **res})
-    analyzed_at = perf_counter()
-    logger.info("market analyze computed results=%d seconds=%.3f", len(results), analyzed_at - loaded_at)
-
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         repo = _repo(db)
-        run_id = await repo.create_analysis_run(payload.get('engine', 'both'), timeframe=timeframe, metadata=payload)
-        for asset, result in ((a, r) for a in assets for r in results if r['symbol'] == a['provider_symbol']):
-            await repo.insert_analysis_result(run_id, asset['id'], result['engine_name'], timeframe, result)
-        await repo.finish_analysis_run(run_id, 'SUCCESS', len(results), len(results), 0)
-        db.commit()
-    except Exception:
-        rollback_and_close(db)
-        raise
-    else:
-        db.close()
-    logger.info("market analyze persisted run_id=%s total_seconds=%.3f", run_id, perf_counter() - started)
-    return {'results': results}
+        return await MarketAnalysisService(repo, adapter=SnapshotAdapter(None), market_scope='stock_etf').run(
+            engine=payload.get('engine', 'both'), universe=payload.get('universe'),
+            asset_type=payload.get('asset_type'), limit=int(payload.get('limit') or 10),
+            timeframe=timeframe, symbols=payload.get('symbols') or None,
+            filters={key: payload.get(key) for key in ('region', 'country', 'exchange_code', 'provider', 'pea_eligible', 'ucits') if payload.get(key) is not None},
+            assets=assets,
+        )
