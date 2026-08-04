@@ -83,22 +83,28 @@ def clear_application_data(db: Session = Depends(get_db)) -> dict:
 
 
 @router.get('/admin/workers')
-def get_worker_status() -> dict:
-    return WorkerControlService().status()
+def get_worker_status(db: Session = Depends(get_db)) -> dict:
+    return WorkerControlService(db).status()
 
 
 @router.post('/admin/workers/{worker_name}/start')
 def start_worker(worker_name: str) -> dict:
-    return WorkerControlService().start(worker_name)
+    try:
+        return WorkerControlService().start(worker_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post('/admin/workers/{worker_name}/stop')
 def stop_worker(worker_name: str) -> dict:
-    return WorkerControlService().stop(worker_name)
+    try:
+        return WorkerControlService().stop(worker_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 
-_ALLOWED_WORKERS = {"pipeline", "executor", "scheduler", "momentum_engine", "momentum_backtest"}
+_ALLOWED_WORKERS = {"ibkr_ingestion", "stock_etf_analysis", "scheduler"}
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
