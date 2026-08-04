@@ -607,6 +607,29 @@ class MarketDataRepository:
                 row["analysis_status"] = "STALE_ANALYSIS"
         return rows
 
+    async def feeder_status(self):
+        """Return the compact coverage snapshot consumed by the admin page."""
+        last_sync = self.db.execute(text("SELECT max(last_synced_at) FROM market_assets")).scalar()
+        timeframes = [row[0] for row in self.db.execute(text(
+            "SELECT DISTINCT timeframe FROM stock_etf_candles ORDER BY timeframe"
+        )).all()]
+        freshness = {}
+        for row in self.db.execute(text("""
+            SELECT coalesce(u.name, 'Sans univers') universe_name,
+                   max(c.timestamp) last_candle_at, count(DISTINCT a.id) asset_count
+            FROM market_assets a
+            LEFT JOIN market_universes u ON u.id=a.universe_id
+            LEFT JOIN stock_etf_candles c ON c.asset_id=a.id
+            WHERE a.enabled=true
+            GROUP BY u.name
+        """)).mappings():
+            freshness[row["universe_name"]] = {
+                "last_candle_at": row["last_candle_at"], "asset_count": row["asset_count"],
+                "status": "available" if row["last_candle_at"] else "missing",
+            }
+        return {"last_asset_sync_at": last_sync, "available_timeframes": timeframes,
+                "freshness_by_universe": freshness}
+
     async def import_runs(self, limit: int = 50):
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_data_import_runs ORDER BY started_at DESC LIMIT :limit"), {"limit": limit}).all()]
 
