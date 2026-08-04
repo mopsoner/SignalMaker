@@ -158,6 +158,7 @@ async def get_market_data(db: Session = Depends(get_db)):
     payload['import_runs'] = await repo.import_runs(limit=10)
     payload['analysis_runs'] = await repo.analysis_runs(limit=10)
     payload['job_requests'] = await repo.job_requests(limit=10)
+    payload.update(await repo.feeder_status())
     return payload
 
 
@@ -633,7 +634,29 @@ async def preview_market_action(payload: dict | None = None, db: Session = Depen
     payload = payload or {}
     repo = _repo(db)
     assets = await repo.list_enabled_market_assets(universe_name=payload.get('universe'), asset_type=payload.get('asset_type'), limit=int(payload.get('limit') or 500), symbols=(payload.get('symbols') or None))
-    return {'ok': True, 'action': payload.get('action', 'backfill'), 'asset_count': len(assets), 'estimated_api_calls': len(assets) if payload.get('action', 'backfill') == 'backfill' else 0, 'symbols': [a.get('provider_symbol') for a in assets]}
+    response = {'ok': True, 'action': payload.get('action', 'backfill'), 'asset_count': len(assets), 'eligible': len(assets),
+                'ignored': 0, 'already_up_to_date': 0, 'incomplete': 0,
+                'estimated_api_calls': len(assets) if payload.get('action', 'backfill') == 'backfill' else 0,
+                'symbols': [a.get('provider_symbol') for a in assets]}
+    if payload.get('action') == 'analysis':
+        engine = payload.get('engine', 'both')
+        engines = MarketAnalysisService.ENGINES if engine == 'both' else (engine,)
+        requested = (payload.get('timeframes') or ['15m'])[0]
+        required = {tf for name in engines for tf in MarketAnalysisService.required_timeframes(name, requested)}
+        incomplete = current = 0
+        adapter = MarketAnalysisAdapter(repo)
+        service = MarketAnalysisService(repo, adapter=adapter)
+        for asset in assets:
+            bundle = await repo.load_stock_etf_candle_bundle(asset['id'], tuple(required))
+            if any(not bundle.get(tf) for tf in required):
+                incomplete += 1
+                continue
+            keys = [await service._idempotency_key(asset, name, requested) for name in engines]
+            if keys and all(await repo.analysis_result_exists(key) for key in keys):
+                current += 1
+        response.update(incomplete=incomplete, already_up_to_date=current,
+                        eligible=max(0, len(assets) - incomplete - current), estimated_api_calls=0)
+    return response
 
 
 @router.post('/admin/market-data/queue-job')

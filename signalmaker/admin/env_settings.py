@@ -34,4 +34,5 @@ def env_status():
         warnings.append("IBKR_START_DATE must use YYYY-MM-DD")
     if os.getenv("ADMIN_ENV_SETTINGS_ENABLED", "true").lower() == "false":
         warnings.append("ADMIN_ENV_SETTINGS_ENABLED=false")
-    return {"variables": [{"name": key, "configured": bool(os.getenv(key)), "value": "***" if key in SECRETS and os.getenv(key) else os.getenv(key, ""), "secret": key in SECRETS} for key in ENV_VARS], "warnings": warnings, "editing_supported": False, "instructions": "Update secrets in Replit Secrets or deployment environment; runtime writes are intentionally not performed."}
+    worker_control_supported = os.getenv("WORKER_CONTROL_ENABLED", "false").lower() in {"1", "true", "yes"}
+    return {"variables": [{"name": key, "configured": bool(os.getenv(key)), "value": "***" if key in SECRETS and os.getenv(key) else os.getenv(key, ""), "secret": key in SECRETS} for key in ENV_VARS], "warnings": warnings, "editing_supported": False, "worker_control_supported": worker_control_supported, "instructions": "Update secrets in Replit Secrets or deployment environment; runtime writes are intentionally not performed."}
