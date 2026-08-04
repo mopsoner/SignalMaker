@@ -58,11 +58,11 @@ async function fetchJson(path, options = {}) {
   return res.json()
 }
 
-function fetchMomentum(limit = 300) {
+export function fetchMomentum(limit = 300) {
   return fetchJson(`/api/v1/momentum?limit=${limit}`)
 }
 
-function fetchMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS) {
+export function fetchMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS) {
   const params = new URLSearchParams({
     cadence_hours: String(cadenceHours),
     starting_capital: String(STARTING_CAPITAL),
@@ -71,7 +71,7 @@ function fetchMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS) {
   return fetchJson(`/api/v1/momentum-engine/status?${params.toString()}`)
 }
 
-function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = true) {
+export function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = true) {
   return fetchJson('/api/v1/momentum-engine/run-once', {
     method: 'POST',
     body: JSON.stringify({
@@ -83,12 +83,12 @@ function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = true) {
   })
 }
 
-async function loadMomentumCadence() {
+export async function loadMomentumCadence() {
   const settings = await fetchJson('/api/v1/admin/settings')
   return Number(settings?.momentum?.momentum_engine_cadence_hours || DEFAULT_CADENCE_HOURS)
 }
 
-async function persistMomentumCadence(cadenceHours) {
+export async function persistMomentumCadence(cadenceHours) {
   const settings = await fetchJson('/api/v1/admin/settings')
   settings.momentum = {
     ...(settings.momentum || {}),
@@ -251,28 +251,45 @@ function MomentumTradeChart({ points, quoteCurrency = 'USD' }) {
   </div>
 }
 
-export default function MomentumPage() {
+export const cryptoMomentumApi = {
+  loadRanking: fetchMomentum,
+  loadStatus: fetchMomentumEngine,
+  run: runMomentumEngine,
+  loadCadence: loadMomentumCadence,
+  saveCadence: persistMomentumCadence,
+  tradingViewLink: (row) => tradingViewUrl(row.symbol),
+}
+
+export function MomentumView({
+  momentumApi = cryptoMomentumApi,
+  title = 'Momentum Ranking',
+  subtitle = 'Read-only ranking + dedicated backend paper engine for fast momentum rotation. No real exchange order is sent.',
+  marketFilters = null,
+}) {
   const [filter, setFilter] = useState('all')
+  const [universe, setUniverse] = useState('')
+  const [assetType, setAssetType] = useState('')
   const [cadenceHours, setCadenceHours] = useState(DEFAULT_CADENCE_HOURS)
   const [engineOverride, setEngineOverride] = useState(null)
   const [engineActionError, setEngineActionError] = useState(null)
-  const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => fetchMomentum(300), []), 30000)
-  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => fetchMomentumEngine(cadenceHours), [cadenceHours]), 30000)
+  const scope = useMemo(() => ({ universe, asset_type: assetType }), [universe, assetType])
+  const { data: rows = [], loading, error } = usePollingQuery(useCallback(() => momentumApi.loadRanking(300, scope), [momentumApi, scope]), 30000)
+  const { data: engineData, loading: engineLoading, error: engineError, refresh: refreshEngine } = usePollingQuery(useCallback(() => momentumApi.loadStatus(cadenceHours, scope), [momentumApi, cadenceHours, scope]), 30000)
   const engine = engineOverride || engineData
   const engineTimeline = useMemo(() => buildMomentumTimeline(engine), [engine])
   const quoteCurrency = useMemo(() => resolveMomentumQuote(engine, rows), [engine, rows])
 
   useEffect(() => {
-    loadMomentumCadence()
+    momentumApi.loadCadence(scope)
       .then(setCadenceHours)
       .catch((err) => setEngineActionError(err.message || String(err)))
-  }, [])
+  }, [momentumApi])
 
   async function onCadenceChange(value) {
     const cadence = Number(value)
     setEngineActionError(null)
     try {
-      await persistMomentumCadence(cadence)
+      await momentumApi.saveCadence(cadence, scope)
       setCadenceHours(cadence)
       setEngineOverride(null)
       refreshEngine()
@@ -302,7 +319,7 @@ export default function MomentumPage() {
   async function onRunEngine(force = true) {
     setEngineActionError(null)
     try {
-      const result = await runMomentumEngine(cadenceHours, force)
+      const result = await momentumApi.run(cadenceHours, force, scope)
       setEngineOverride(result)
       refreshEngine()
     } catch (err) {
@@ -320,7 +337,7 @@ export default function MomentumPage() {
 
   const columns = [
     { key: 'rank', title: 'Rank', render: (row) => row.rank, sortValue: (row) => row.rank, defaultSortDir: 'asc' },
-    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.symbol}</strong></Link><a href={tradingViewUrl(row.symbol)} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.symbol },
+    { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.provider_symbol || row.symbol}</strong></Link>{row.name ? <span className="stat-hint">{row.name} · {row.universe_name || '—'} · {row.currency || '—'} · {row.exchange_code || '—'}</span> : null}<a href={momentumApi.tradingViewLink(row)} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.provider_symbol || row.symbol },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 6), sortValue: (row) => Number(row.price ?? -1) },
     { key: 'score', title: 'Momentum score', render: (row) => <strong>{fmtNumber(row.momentum_score, 2)}</strong>, sortValue: (row) => Number(row.momentum_score ?? -999) },
     {
@@ -395,7 +412,11 @@ export default function MomentumPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Momentum Ranking" subtitle="Read-only ranking + dedicated backend paper engine for fast momentum rotation. No real exchange order is sent." />
+    <PageHeader title={title} subtitle={subtitle} />
+    {marketFilters ? <div className="page-actions" data-testid="momentum-market-filters">
+      <select aria-label="Universe" value={universe} onChange={(event) => setUniverse(event.target.value)}><option value="">All universes</option>{marketFilters.universes.map((value) => <option key={value}>{value}</option>)}</select>
+      <select aria-label="Asset type" value={assetType} onChange={(event) => setAssetType(event.target.value)}><option value="">All asset types</option>{marketFilters.assetTypes.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+    </div> : null}
     <div className="stats-grid">
       <StatCard label="Tracked assets" value={counts.all} hint={`${counts.complete} complete data sets`} />
       <StatCard label="Strong Bull" value={counts.strong_bull} />
@@ -453,4 +474,8 @@ export default function MomentumPage() {
       <FoldableTable title="All momentum rankings" columns={columns} rows={filteredRows} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" paginated initialPageSize={50} />
     </details>
   </div>
+}
+
+export default function MomentumPage() {
+  return <MomentumView />
 }

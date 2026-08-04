@@ -177,6 +177,26 @@ class MomentumService:
 
     def _build_symbol_row(self, symbol: str, previous: MomentumCurrent | None = None) -> dict[str, Any]:
         bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
+        return self._calculate_bundle(symbol, bundle, previous=previous)
+
+    @classmethod
+    def calculate_bundle(
+        cls,
+        symbol: str,
+        bundle: dict[str, list[dict[str, Any]]],
+        *,
+        previous: MomentumCurrent | None = None,
+    ) -> dict[str, Any]:
+        """Calculate one ranking row from normalized candles without database access.
+
+        Callers must provide the explicit 15m/1h/4h keys. Missing keys remain
+        unavailable; daily candles are deliberately not resampled into intraday
+        observations.
+        """
+        calculator = object.__new__(cls)
+        return calculator._calculate_bundle(symbol, bundle, previous=previous)
+
+    def _calculate_bundle(self, symbol: str, bundle: dict[str, list[dict[str, Any]]], previous: MomentumCurrent | None = None) -> dict[str, Any]:
         interval_payloads = {interval: self._interval_momentum(bundle.get(interval) or []) for interval in self.INTERVALS}
         structure_15m = self._structure_15m(bundle.get("15m") or [])
 

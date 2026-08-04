@@ -4,6 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import CandidatesPage from './pages/CandidatesPage'
 import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
+import StockEtfMomentumPage from './pages/StockEtfMomentumPage'
 import MomentumDecisionsPage from './pages/MomentumDecisionsPage'
 import MomentumBacktestV2Page from './pages/MomentumBacktestV2Page'
 import OpsPage from './pages/OpsPage'
@@ -11,7 +12,7 @@ import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import AssetDetailPage from './pages/AssetDetailPage'
 import MarketDataAdminPage from './pages/MarketDataAdminPage'
-import { StockEtfConfluencePage, StockEtfDataQualityPage, StockEtfMomentumDashboardPage, StockEtfPositionsPage, StockEtfTradeCandidatesPage, StockEtfWyckoffDashboardPage } from './pages/StockEtfPages'
+import { StockEtfConfluencePage, StockEtfDataQualityPage, StockEtfPositionsPage, StockEtfTradeCandidatesPage, StockEtfWyckoffDashboardPage } from './pages/StockEtfPages'
 
 const groupTitleStyle = {
   margin: '18px 0 8px',
@@ -79,7 +80,7 @@ export default function App() {
           <Route path="/stocks-etfs/wyckoff" element={<StockEtfWyckoffDashboardPage />} />
           <Route path="/stocks-etfs/candidates" element={<StockEtfTradeCandidatesPage />} />
           <Route path="/stocks-etfs/positions" element={<StockEtfPositionsPage />} />
-          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumDashboardPage />} />
+          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumPage />} />
           <Route path="/stocks-etfs/confluence" element={<StockEtfConfluencePage />} />
           <Route path="/stocks-etfs/data-quality" element={<StockEtfDataQualityPage />} />
           <Route path="/market-data-settings" element={<MarketDataAdminPage />} />
