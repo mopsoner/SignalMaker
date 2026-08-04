@@ -4,7 +4,9 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from app.main import app
-from scripts.ibkr_feeder import build_payload, filter_assets, load_assets, main, normalize_timestamp, parse_ibkr_bars, write_status
+from scripts.ibkr_feeder import (COLLECTION_PROFILE, build_payload, canonical_universe, filter_assets,
+                                 load_assets, main, normalize_timestamp, parse_ibkr_bars,
+                                 resolve_universe_assets, write_status)
 
 ASSETS=[
  {"enabled":True,"symbol":"AIR.PA","provider_symbol":"AIR.PA","asset_type":"STOCK","region":"EU","country":"FR","currency":"EUR","exchange_code":"PA","universe":"Europe Stocks","pea_eligible":False,"ucits":False},
@@ -44,7 +46,7 @@ def test_monitoring_missing_status_and_logs(monkeypatch,tmp_path):
 def test_missing_asset_config_is_actionable(monkeypatch,tmp_path,capsys):
  path=tmp_path/"missing.json"
  with patch.dict("os.environ",{"IBKR_FEEDER_ASSETS_FILE":str(path),"IBKR_FEEDER_STATUS_FILE":str(tmp_path/"status.json")}):
-  assert main([])==2
+  assert main(["--universe", "Europe Stocks"])==2
  assert "cp config/ibkr_assets.example.json" in capsys.readouterr().err
  assert json.loads((tmp_path/"status.json").read_text())["run"]["status"]=="configuration_error"
  try: load_assets(path)
@@ -54,9 +56,37 @@ def test_missing_asset_config_is_actionable(monkeypatch,tmp_path,capsys):
 def test_run_endpoint_rejects_missing_asset_config(monkeypatch,tmp_path):
  import app.api.routes.ibkr_feeder as route
  monkeypatch.setattr(route,"_paths",lambda:(tmp_path/"status.json",tmp_path/"assets.json",tmp_path/"log.txt"))
- body=TestClient(app).post('/api/ibkr-feeder/run-once',json={}).json()
+ response=TestClient(app).post('/api/ibkr-feeder/run-once',json={})
+ assert response.status_code == 422
+ body=TestClient(app).post('/api/ibkr-feeder/run-once',json={"universe":"Europe Stocks"}).json()
  assert body["ok"] is False and body["started"] is False
  assert "cp config/ibkr_assets.example.json" in body["message"]
+
+def test_universe_validation_aliases_and_resolution(tmp_path):
+ assert canonical_universe("Stocks Europe") == "Europe Stocks"
+ assert canonical_universe("Stocks Euronext Paris") == "Europe Stocks"
+ assert canonical_universe("ETF PEA") == "Europe ETF"
+ assert canonical_universe("ETF Europe UCITS") == "Europe ETF"
+ try: canonical_universe("Anything")
+ except ValueError: pass
+ else: raise AssertionError("unknown universe accepted")
+ path=tmp_path/"assets.json"; path.write_text(json.dumps({"assets":ASSETS}))
+ resolved=resolve_universe_assets(path,"Europe Stocks")
+ assert [a["provider_symbol"] for a in resolved] == ["AIR.PA"]
+ assert {"symbol","provider_symbol","asset_type","exchange_code","currency","region","country","isin","mic","pea_eligible","ucits"} <= resolved[0].keys()
+
+def test_collection_profile_and_open_bar_exclusion():
+ from datetime import datetime, timezone
+ assert COLLECTION_PROFILE["shared_workflows"] == ("15m", "1h", "4h")
+ response={"data":[{"t":1754006400,"o":1,"h":2,"l":0,"c":1,"v":5},{"t":1754007300,"o":1,"h":2,"l":0,"c":1,"v":5}]}
+ closed=parse_ibkr_bars(response,"15m",lambda:datetime.fromtimestamp(1754008000,timezone.utc))
+ assert len(closed)==1
+
+def test_payload_uses_canonical_universe_and_no_per_batch_analysis():
+ asset={**ASSETS[0],"universe":"Stocks Europe"}
+ payload=build_payload(asset,[],"15m")
+ assert payload["universe"] == "Europe Stocks" and payload["timeframe"] == "15m"
+ assert payload["run_type"] == "universe_feed" and payload["queue_analysis"] is False
 
 def test_auth_unavailable_and_unauthenticated():
  client=TestClient(app)

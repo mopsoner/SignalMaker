@@ -1,0 +1,17 @@
+[Unit]
+Description=SignalMaker IBKR universe feeder (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/executor-app
+EnvironmentFile=/opt/executor-app/.env
+# Put FEED_UNIVERSE="Europe Stocks" (or "Europe ETF") in this per-instance file.
+EnvironmentFile=/etc/signalmaker/ibkr-feeder-%i.env
+ExecStart=/opt/executor-app/.venv/bin/python scripts/ibkr_feeder.py
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

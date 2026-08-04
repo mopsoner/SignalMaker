@@ -9,30 +9,37 @@ from threading import Lock
 
 import requests
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from scripts.ibkr_feeder import asset_config_error, default_status
+from scripts.ibkr_feeder import CANONICAL_UNIVERSES, canonical_universe, asset_config_error, default_status
 from scripts.ibkr_discover_assets import Resolver, discover, read_assets, write_assets
 
 router = APIRouter()
 ROOT = Path(__file__).resolve().parents[3]
 _lock = Lock()
-_process: subprocess.Popen | None = None
+_processes: dict[str, subprocess.Popen] = {}
 _last_discovery: dict | None = None
 
-class RunFilters(BaseModel):
-    asset_type: str | None = None; region: str | None = None; country: str | None = None
-    currency: str | None = None; exchange_code: str | None = None; universe: str | None = None
-    pea_eligible: bool | None = None; ucits: bool | None = None
-    symbols: list[str] = Field(default_factory=list); provider_symbols: list[str] = Field(default_factory=list)
-    max_assets: int | None = None; include_disabled: bool = False
+class RunRequest(BaseModel):
+    universe: str
+
+    @field_validator("universe")
+    @classmethod
+    def validate_universe(cls, value: str) -> str:
+        return canonical_universe(value)
 
 def _paths() -> tuple[Path, Path, Path]:
     return (ROOT / os.getenv("IBKR_FEEDER_STATUS_FILE", "data/ibkr_feeder_status.json"), ROOT / os.getenv("IBKR_FEEDER_ASSETS_FILE", "config/ibkr_assets.json"), ROOT / "data/ibkr_feeder.log")
 
+@router.get("/universes")
+def universes(): return {"universes": list(CANONICAL_UNIVERSES)}
+
 @router.get("/status")
-def status():
+def status(universe: str | None = None):
     status_path, assets_path, _ = _paths()
+    if universe:
+        canonical = canonical_universe(universe)
+        status_path = ROOT / os.getenv("IBKR_FEEDER_STATUS_FILE", f"data/ibkr_feeder_{canonical.lower().replace(' ', '_')}_status.json")
     if status_path.exists():
         try: return json.loads(status_path.read_text())
         except (OSError, json.JSONDecodeError): pass
@@ -50,34 +57,22 @@ def check_auth():
         return {"ok": authenticated, "reachable": True, "authenticated": authenticated, "base_url": base, "checked_at": checked, "message": None if authenticated else "IBKR Gateway is not authenticated. Open https://localhost:5000 and login first."}
     except Exception as exc: return {"ok": False, "reachable": False, "authenticated": False, "base_url": base, "checked_at": checked, "message": str(exc)}
 
-def _start(filters: RunFilters):
-    global _process
+def _start(request: RunRequest):
+    universe = canonical_universe(request.universe)
     with _lock:
-        if _process and _process.poll() is None: return {"ok": False, "started": False, "message": "IBKR feeder is already running"}
+        process = _processes.get(universe)
+        if process and process.poll() is None: return {"ok": False, "started": False, "message": f"A feed is already active for {universe}"}
         assets_path = _paths()[1]
         if not assets_path.is_file():
             return {"ok": False, "started": False, "message": asset_config_error(assets_path)}
         args = [str(ROOT / ".venv/bin/python") if (ROOT / ".venv/bin/python").exists() else "python3", str(ROOT / "scripts/ibkr_feeder.py")]
-        values = filters.model_dump()
-        for key in ("asset_type", "region", "country", "currency", "exchange_code", "universe"):
-            if values[key]: args += ["--" + key.replace("_", "-"), str(values[key])]
-        for key in ("pea_eligible", "ucits"):
-            if values[key] is not None: args += ["--" + key.replace("_", "-"), str(values[key]).lower()]
-        for symbol in values["symbols"]: args += ["--symbol", symbol]
-        for symbol in values["provider_symbols"]: args += ["--provider-symbol", symbol]
-        if values["max_assets"]: args += ["--max-assets", str(values["max_assets"])]
-        if values["include_disabled"]: args.append("--include-disabled")
+        args += ["--universe", universe]
         log = _paths()[2]; log.parent.mkdir(parents=True, exist_ok=True); handle = log.open("a", encoding="utf-8")
-        _process = subprocess.Popen(args, cwd=ROOT, stdout=handle, stderr=subprocess.STDOUT)
-    return {"ok": True, "started": True, "message": "IBKR feeder started", "filters": values}
+        _processes[universe] = subprocess.Popen(args, cwd=ROOT, stdout=handle, stderr=subprocess.STDOUT)
+    return {"ok": True, "started": True, "message": "Universe feed started", "universe": universe}
 
 @router.post("/run-once")
-def run_once(filters: RunFilters): return _start(filters)
-
-class AssetRun(BaseModel): symbol: str
-
-@router.post("/run-asset")
-def run_asset(body: AssetRun): return _start(RunFilters(symbols=[body.symbol], max_assets=1))
+def run_once(request: RunRequest): return _start(request)
 
 @router.get("/logs")
 def logs(lines: int = Query(300, ge=1, le=5000)):
