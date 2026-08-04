@@ -91,7 +91,6 @@ export const api = {
   stockEtfPositions: (params = '') => request(`/api/v1/stocks-etfs/positions${params}`),
   stockEtfQuality: (params = '') => request(`/api/v1/stocks-etfs/data-quality${params}`),
   stockEtfFreshness: (params = '') => request(`/api/v1/stocks-etfs/freshness${params}`),
-  stockEtfConfluence: (params = '') => request(`/api/v1/stocks-etfs/confluence${params}`),
   stockEtfExportUrl: (params = '') => `${API_BASE}/api/v1/stocks-etfs/export.csv${params}`,
   clearStockEtfGeneratedData: () => request('/api/v1/stocks-etfs/cleanup', { method: 'DELETE' }),
   clearAllStockEtfData: () => request('/admin/market-data', { method: 'DELETE' }),

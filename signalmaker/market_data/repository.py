@@ -523,41 +523,6 @@ class MarketDataRepository:
     async def analysis_runs(self, limit: int = 50):
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_analysis_runs ORDER BY started_at DESC LIMIT :limit"), {"limit": limit}).all()]
 
-    async def confluence_results(self, universe_name: str | None = None, asset_type: str | None = None, limit: int = 300, **filters):
-        query = """
-        WITH latest AS (
-          SELECT r.*, ROW_NUMBER() OVER (PARTITION BY r.asset_id, r.engine_name, r.timeframe ORDER BY r.created_at DESC, r.id DESC) AS rn
-          FROM market_analysis_results r
-        )
-        SELECT a.id AS asset_id, a.symbol, a.provider_symbol, a.name, a.asset_type,
-               a.country, a.exchange_code, a.region, a.pea_eligible, a.ucits, a.provider,
-               u.name AS universe_name, u.name AS universe,
-               m.signal AS momentum_signal, m.score AS momentum_score, m.trend AS momentum_trend, m.created_at AS momentum_at,
-               w.signal AS wyckoff_signal, w.score AS wyckoff_score, w.trend AS wyckoff_trend, w.created_at AS wyckoff_at
-        FROM market_assets a
-        LEFT JOIN market_universes u ON u.id = a.universe_id
-        LEFT JOIN latest m ON m.asset_id = a.id AND m.engine_name = 'momentum' AND m.rn = 1
-        LEFT JOIN latest w ON w.asset_id = a.id AND w.engine_name = 'wyckoff_smc' AND w.rn = 1
-        WHERE a.enabled = true
-        """
-        params: dict[str, Any] = {"limit": limit}
-        if universe_name:
-            query += " AND u.name = :universe_name"; params["universe_name"] = universe_name
-        if asset_type:
-            query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
-        query = self._asset_filters(query, params, filters)
-        query += " ORDER BY a.priority ASC, a.symbol ASC LIMIT :limit"
-        rows = [_row(r) for r in self.db.execute(text(query), params).all()]
-        for row in rows:
-            ms = str(row.get("momentum_signal") or "").upper(); ws = str(row.get("wyckoff_signal") or "").upper()
-            if ms == "BUY" and ws == "BUY": label, rank = "STRONG_BUY", 1
-            elif "BUY" in {ms, ws}: label, rank = "WATCH", 2
-            elif ms == "SELL" and ws == "SELL": label, rank = "AVOID", 5
-            elif "SELL" in {ms, ws}: label, rank = "CONFLICT", 4
-            else: label, rank = "NEUTRAL", 3
-            row["confluence"] = label; row["confluence_rank"] = rank
-        return sorted(rows, key=lambda r: (r["confluence_rank"], r.get("provider_symbol") or ""))
-
     async def create_job_request(self, job_type: str, status: str = "QUEUED", payload: dict | None = None):
         self._ensure_job_requests_table()
         return self.db.execute(text("INSERT INTO market_data_job_requests (job_type,status,payload) VALUES (:job_type,:status,:payload) RETURNING id"), {"job_type": job_type, "status": status, "payload": json.dumps(payload or {})}).scalar_one()

@@ -124,25 +124,3 @@ export function StockEtfDataQualityPage() {
     <section className="panel"><QualityTable rows={rows} /></section>
   </div>
 }
-
-export function StockEtfConfluencePage() {
-  const [universe, setUniverse] = useState('')
-  const [assetType, setAssetType] = useState('')
-  const q = query(universe, assetType, 'limit=500')
-  const { data, loading, error } = usePollingQuery(useCallback(() => api.stockEtfConfluence(q), [q]), 30000)
-  const rows = asRows(data, 'confluence')
-  const columns = [
-    { key: 'symbol', title: 'Symbol', render: (r) => <strong>{r.provider_symbol}</strong>, sortValue: (r) => r.provider_symbol },
-    { key: 'confluence', title: 'Confluence', render: (r) => <span className={r.confluence === 'STRONG_BUY' ? 'badge green' : r.confluence === 'AVOID' ? 'badge orange' : 'badge gray'}>{r.confluence}</span>, sortValue: (r) => r.confluence_rank },
-    { key: 'momentum', title: 'Momentum', render: (r) => r.momentum_score == null ? 'Missing analysis' : `${r.momentum_signal || '—'} (${fmtNumber(r.momentum_score, 2)})`, sortValue: (r) => Number(r.momentum_score ?? -999) },
-    { key: 'wyckoff', title: 'Wyckoff SMC', render: (r) => r.wyckoff_score == null ? 'Missing analysis' : `${r.wyckoff_signal || '—'} (${fmtNumber(r.wyckoff_score, 2)})`, sortValue: (r) => Number(r.wyckoff_score ?? -999) },
-    { key: 'universe', title: 'Universe', render: (r) => r.universe_name || '—', sortValue: (r) => r.universe_name || '' },
-  ]
-  return <div className="page-stack">
-    <PageHeader title="ETF & Stocks · Confluence" subtitle="Momentum + Wyckoff SMC agreement layer; engines remain unchanged and results stay stock/ETF-scoped." />
-    <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
-    <div className="page-actions"><a className="button" href={api.stockEtfExportUrl(query(universe, assetType, 'kind=confluence&limit=500'))}>Export CSV</a></div>
-    {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error" role="alert"><strong>Unable to load confluence.</strong> {errorText(error)}</div> : null}
-    <section className="panel"><FoldableTable rows={rows} columns={columns} defaultSortKey="confluence" empty="No confluence rows yet. Run both engines first." /></section>
-  </div>
-}
