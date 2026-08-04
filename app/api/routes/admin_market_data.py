@@ -14,6 +14,7 @@ from app.models.app_setting import AppSetting
 from app.models.momentum_engine import MomentumEngineTrade
 from app.services.momentum_engine_service import MomentumEngineService
 from app.services.momentum_market import STOCK_ETF_CONTEXT
+from app.services.runtime_settings import load_runtime_settings
 from app.db.session import SessionLocal, rollback_and_close
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
@@ -151,7 +152,7 @@ def get_env():
 @router.get('/admin/market-data')
 async def get_market_data(db: Session = Depends(get_db)):
     repo = _repo(db)
-    payload = market_data_settings(repo)
+    payload = market_data_settings(repo, load_runtime_settings(db)["stock_etf"])
     payload['universes'] = await repo.list_market_universes()
     payload['last_import_run'] = await repo.last_import_run()
     payload['last_analysis_run'] = await repo.last_analysis_run()
