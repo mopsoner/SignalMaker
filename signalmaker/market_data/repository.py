@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import weakref
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -18,6 +18,20 @@ def _row(row: Any) -> dict[str, Any]:
 
 
 class MarketDataRepository:
+    # IBKR persists these bars verbatim.  In particular, there is deliberately no
+    # "1d" fallback: an intraday workflow may only consume the matching interval.
+    STOCK_ETF_TIMEFRAMES = {
+        "15m": "15m",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+    }
+    TIMEFRAME_DURATIONS = {
+        "15m": timedelta(minutes=15),
+        "1h": timedelta(hours=1),
+        "4h": timedelta(hours=4),
+        "1d": timedelta(days=1),
+    }
     _schema_ready: weakref.WeakSet = weakref.WeakSet()
     _schema_lock = threading.Lock()
 
@@ -431,10 +445,60 @@ class MarketDataRepository:
         self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,stage,signal,score,trend,confidence,payload_version,payload) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:stage,:signal,:score,:trend,:confidence,:payload_version,:payload)"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"stage":result.get("stage") or payload.get("stage"),"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload_version":ANALYSIS_PAYLOAD_VERSION,"payload":json.dumps(payload, default=str)})
 
     async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
-        return [_row(r) for r in self.db.execute(text("SELECT * FROM stock_etf_candles WHERE asset_id=:asset_id AND timeframe=:timeframe ORDER BY timestamp ASC"), {"asset_id": asset_id, "timeframe": timeframe}).all()]
+        """Load one real, closed interval (never substitute a daily series)."""
+        return (await self.load_stock_etf_candle_bundle(asset_id, (timeframe,)))[timeframe]
 
-    async def load_stock_etf_candle_bundle(self, asset_id, timeframes=("15m", "1h", "4h")):
-        return {tf: await self.load_stock_etf_candles_for_asset(asset_id, tf) for tf in timeframes}
+    async def load_stock_etf_candle_bundle(
+        self, asset_id, timeframes=("15m", "1h", "4h"), *, as_of: datetime | None = None
+    ):
+        """Read a workflow's intervals in one snapshot and return closed bars only.
+
+        The provider timestamps are UTC bar-open instants. Exchange holidays,
+        daylight-saving transitions, regular-session boundaries and overnight
+        gaps are therefore retained as gaps; this method never forward-fills or
+        synthesizes bars. Corporate-action adjustment is also left untouched for
+        the normalization layer to apply consistently.
+        """
+        requested = tuple(dict.fromkeys(timeframes))
+        unsupported = [tf for tf in requested if tf not in self.STOCK_ETF_TIMEFRAMES]
+        if unsupported:
+            raise ValueError(f"unsupported_stock_etf_timeframes:{','.join(unsupported)}")
+        if not requested:
+            return {}
+        storage = [self.STOCK_ETF_TIMEFRAMES[tf] for tf in requested]
+        placeholders = ", ".join(f":tf_{index}" for index in range(len(storage)))
+        params = {"asset_id": asset_id, **{f"tf_{i}": tf for i, tf in enumerate(storage)}}
+        rows = self.db.execute(text(f"""
+            SELECT * FROM stock_etf_candles
+            WHERE asset_id=:asset_id AND timeframe IN ({placeholders})
+            ORDER BY timeframe ASC, timestamp ASC, updated_at ASC, id ASC
+        """), params).all()
+
+        now = as_of or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+        bundle = {tf: [] for tf in requested}
+        deduplicated: dict[tuple[str, datetime], dict[str, Any]] = {}
+        reverse_mapping = {stored: requested_tf for requested_tf, stored in self.STOCK_ETF_TIMEFRAMES.items() if requested_tf in requested}
+        for result in rows:
+            candle = _row(result)
+            tf = reverse_mapping[candle["timeframe"]]
+            opened = candle["timestamp"]
+            if isinstance(opened, str):
+                opened = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+            opened_utc = opened.replace(tzinfo=timezone.utc) if opened.tzinfo is None else opened.astimezone(timezone.utc)
+            if opened_utc + self.TIMEFRAME_DURATIONS[tf] > now:
+                continue
+            candle["timestamp"] = opened_utc
+            # Last row wins if legacy data predates the current uniqueness rule.
+            deduplicated[(tf, opened_utc)] = candle
+        for (tf, _opened), candle in deduplicated.items():
+            bundle[tf].append(candle)
+        for candles in bundle.values():
+            candles.sort(key=lambda candle: candle["timestamp"])
+        return bundle
 
 
     async def list_market_universes(self):
