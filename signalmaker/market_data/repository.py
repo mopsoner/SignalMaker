@@ -70,7 +70,19 @@ class MarketDataRepository:
         self._normalize_ibkr_universes()
         self._ensure_stock_etf_candle_schema()
         self._ensure_analysis_result_indexes()
+        self._ensure_run_history_indexes()
         self.db.commit()
+
+    def _ensure_run_history_indexes(self) -> None:
+        """Keep bounded admin history/status polling on indexed columns."""
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_market_import_runs_status_started ON market_data_import_runs (status, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_market_analysis_runs_status_started ON market_analysis_runs (status, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_market_analysis_runs_engine_started ON market_analysis_runs (engine_name, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_market_jobs_status_created ON market_data_job_requests (status, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_market_jobs_type_status_created ON market_data_job_requests (job_type, status, created_at DESC)",
+        ):
+            self.db.execute(text(statement))
 
     def _ensure_analysis_result_indexes(self) -> None:
         """Index dashboard filters; history itself remains addressable by run."""
@@ -643,6 +655,131 @@ class MarketDataRepository:
     async def job_requests(self, limit: int = 50):
         self._ensure_job_requests_table()
         return [_row(r) for r in self.db.execute(text("SELECT * FROM market_data_job_requests ORDER BY created_at DESC LIMIT :limit"), {"limit": limit}).all()]
+
+    async def admin_runs(self, *, kind: str | None = None, status: str | None = None,
+                         engine: str | None = None, limit: int = 25, offset: int = 0):
+        """Return one cheap, normalized and bounded operational run history."""
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, min(int(offset), 10_000))
+        selections = []
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if kind in (None, "import"):
+            selections.append("""SELECT id, 'import' run_kind, run_type, provider engine,
+                NULL scope, metadata filters, status, total_assets, success_count, failed_count,
+                started_at created_at, started_at, finished_at, NULL heartbeat_at,
+                metadata, error_message error, NULL worker_id, 0 attempts
+                FROM market_data_import_runs""")
+        if kind in (None, "analysis"):
+            selections.append("""SELECT r.id, 'analysis' run_kind, 'analysis' run_type,
+                r.engine_name engine, u.name scope, r.metadata filters, r.status,
+                r.total_assets, r.success_count, r.failed_count, r.started_at created_at,
+                r.started_at, r.finished_at, NULL heartbeat_at, r.metadata,
+                r.error_message error, NULL worker_id, 0 attempts
+                FROM market_analysis_runs r LEFT JOIN market_universes u ON u.id=r.universe_id""")
+        if kind in (None, "job"):
+            selections.append("""SELECT id, 'job' run_kind, job_type run_type,
+                CASE WHEN job_type='analysis' THEN 'market_analysis' ELSE job_type END engine,
+                NULL scope, payload filters, status, 1 total_assets,
+                CASE WHEN lower(status)='completed' THEN 1 ELSE 0 END success_count,
+                CASE WHEN lower(status)='failed' THEN 1 ELSE 0 END failed_count,
+                created_at, started_at, finished_at, heartbeat_at, payload metadata,
+                last_error error, worker_id, attempts FROM market_data_job_requests""")
+        if not selections:
+            return [], 0
+        union = " UNION ALL ".join(selections)
+        conditions = []
+        if status:
+            conditions.append("lower(status)=lower(:status)"); params["status"] = status
+        if engine:
+            conditions.append("lower(engine)=lower(:engine)"); params["engine"] = engine
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        total = self.db.execute(text(f"SELECT count(*) FROM ({union}) runs{where}"), params).scalar() or 0
+        rows = self.db.execute(text(
+            f"SELECT * FROM ({union}) runs{where} ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset"
+        ), params).mappings().all()
+        return [self._normalize_admin_run(dict(row)) for row in rows], total
+
+    @staticmethod
+    def _normalize_admin_run(row: dict[str, Any]) -> dict[str, Any]:
+        metadata = row.pop("metadata", None) or {}
+        filters = row.pop("filters", None) or metadata
+        for name, value in (("metadata", metadata), ("filters", filters)):
+            if isinstance(value, str):
+                try: value = json.loads(value or "{}")
+                except (TypeError, ValueError): value = {}
+            if name == "metadata": metadata = value
+            else: filters = value
+        total = int(row.pop("total_assets", 0) or 0)
+        succeeded = int(row.pop("success_count", 0) or 0)
+        failed = int(row.pop("failed_count", 0) or 0)
+        processed = min(total, succeeded + failed) if total else succeeded + failed
+        error = row.pop("error", None)
+        return {
+            "id": str(row.pop("id")), "type": row.pop("run_type"),
+            "kind": row.pop("run_kind"), "engine": row.pop("engine"),
+            "scope": row.pop("scope") or filters.get("universe") or filters.get("asset_type"),
+            "filters": filters, "status": str(row.pop("status") or "unknown").lower(),
+            "counters": {"total": total, "processed": processed, "succeeded": succeeded, "failed": failed},
+            "progress": {"processed": processed, "total": total,
+                         "percent": round(processed * 100 / total, 1) if total else 0.0},
+            "timestamps": {"created_at": row.pop("created_at"), "started_at": row.pop("started_at"),
+                           "finished_at": row.pop("finished_at")},
+            "heartbeat": {"at": row.pop("heartbeat_at"), "worker_id": row.pop("worker_id")},
+            "workflow_version": metadata.get("workflow_version") or filters.get("workflow_version"),
+            "error": {"code": "run_failed", "message": error} if error else None,
+            "attempts": int(row.pop("attempts", 0) or 0),
+        }
+
+    async def admin_run(self, kind: str, run_id: str):
+        queries = {
+            "import": """SELECT id, 'import' run_kind, run_type, provider engine, NULL scope,
+                metadata filters, status, total_assets, success_count, failed_count, started_at created_at,
+                started_at, finished_at, NULL heartbeat_at, metadata, error_message error,
+                NULL worker_id, 0 attempts FROM market_data_import_runs WHERE id=:id""",
+            "analysis": """SELECT r.id, 'analysis' run_kind, 'analysis' run_type,
+                r.engine_name engine, u.name scope, r.metadata filters, r.status, r.total_assets,
+                r.success_count, r.failed_count, r.started_at created_at, r.started_at, r.finished_at,
+                NULL heartbeat_at, r.metadata, r.error_message error, NULL worker_id, 0 attempts
+                FROM market_analysis_runs r LEFT JOIN market_universes u ON u.id=r.universe_id
+                WHERE r.id=:id""",
+            "job": """SELECT id, 'job' run_kind, job_type run_type,
+                CASE WHEN job_type='analysis' THEN 'market_analysis' ELSE job_type END engine,
+                NULL scope, payload filters, status, 1 total_assets,
+                CASE WHEN lower(status)='completed' THEN 1 ELSE 0 END success_count,
+                CASE WHEN lower(status)='failed' THEN 1 ELSE 0 END failed_count,
+                created_at, started_at, finished_at, heartbeat_at, payload metadata,
+                last_error error, worker_id, attempts FROM market_data_job_requests WHERE id=:id""",
+        }
+        query = queries.get(kind)
+        row = self.db.execute(text(query), {"id": run_id}).mappings().first() if query else None
+        if not row:
+            return None
+        run = self._normalize_admin_run(dict(row))
+        if kind == "analysis":
+            failures = self.db.execute(text("""SELECT asset_id, stage, payload, created_at
+                FROM market_analysis_results WHERE analysis_run_id=:id
+                AND (lower(coalesce(stage,''))='failed' OR lower(coalesce(signal,''))='error')
+                ORDER BY created_at DESC LIMIT 100"""), {"id": run_id}).mappings().all()
+            run["failed_items"] = [dict(item) for item in failures]
+        return run
+
+    async def cancel_admin_run(self, kind: str, run_id: str) -> bool:
+        tables = {"import": "market_data_import_runs", "analysis": "market_analysis_runs",
+                  "job": "market_data_job_requests"}
+        table = tables.get(kind)
+        if not table: return False
+        result = self.db.execute(text(f"UPDATE {table} SET status='cancelled', finished_at=CURRENT_TIMESTAMP "
+            "WHERE id=:id AND lower(status) IN ('queued','pending','running')"), {"id": run_id})
+        return bool(result.rowcount)
+
+    async def retry_admin_run(self, kind: str, run_id: str, *, max_attempts: int = 3) -> bool:
+        if kind != "job":
+            return False
+        result = self.db.execute(text("""UPDATE market_data_job_requests SET status='queued',
+            worker_id=NULL, heartbeat_at=NULL, finished_at=NULL, updated_at=CURRENT_TIMESTAMP
+            WHERE id=:id AND lower(status) IN ('failed','cancelled') AND attempts < :max_attempts"""),
+            {"id": run_id, "max_attempts": max_attempts})
+        return bool(result.rowcount)
 
     async def claim_next_analysis_job(self, worker_id: str, *, max_attempts: int = 3):
         """Atomically claim one job; concurrent workers cannot receive the same row."""
