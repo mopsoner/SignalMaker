@@ -4,7 +4,7 @@ from signalmaker.market_data.repository import MarketDataRepository
 from signalmaker.market_data.analysis_service import MarketAnalysisService
 
 def build_parser():
- p=argparse.ArgumentParser(); p.add_argument('--engine', choices=['momentum','wyckoff_smc','both'], default='both'); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--limit', type=int, default=50); p.add_argument('--timeframe', default='15m')
+ p=argparse.ArgumentParser(description='Run the shared Stock/ETF analytical workflow (closed multi-timeframe candles required).'); p.add_argument('--engine', choices=['momentum','wyckoff_smc','both'], default='both'); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--limit', type=int, default=50); p.add_argument('--timeframe', choices=['15m','1h','4h'], default='15m', help='Execution timeframe; legacy daily/5m analysis is unsupported and requires migration.')
  return p
 
 async def main(argv=None):

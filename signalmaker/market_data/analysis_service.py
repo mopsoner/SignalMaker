@@ -23,6 +23,18 @@ class MarketAnalysisService:
 
     WORKFLOW_VERSION = "stock-etf-shared-v1"
     ENGINES = ("momentum", "wyckoff_smc")
+    SUPPORTED_EXECUTION_TIMEFRAMES = ("15m", "1h", "4h")
+
+    @classmethod
+    def validate_request(cls, engine: str, timeframe: str) -> None:
+        """Reject legacy requests instead of silently changing their meaning."""
+        if engine not in {*cls.ENGINES, "both"}:
+            raise ValueError(f"unsupported_engine:{engine}")
+        if timeframe not in cls.SUPPORTED_EXECUTION_TIMEFRAMES:
+            raise ValueError(
+                f"legacy_analysis_timeframe:{timeframe}; migration required: "
+                "use 15m, 1h, or 4h with complete 15m/1h/4h candle history"
+            )
 
     def __init__(self, repo, *, adapter=None, pipeline=None, market_scope: str = "stock_etf"):
         if market_scope != "stock_etf":
@@ -34,10 +46,10 @@ class MarketAnalysisService:
 
     @classmethod
     def required_timeframes(cls, engine: str, requested: str = "15m") -> tuple[str, ...]:
+        cls.validate_request(engine, requested)
         if engine == "momentum":
             return tuple(MomentumService.INTERVALS)
-        execution = "15m" if requested in {"1d", "5m", "15m"} else requested
-        return tuple(dict.fromkeys((execution, "1h", "4h")))
+        return tuple(dict.fromkeys((requested, "1h", "4h")))
 
     async def _idempotency_key(self, asset: dict, engine: str, timeframe: str) -> str:
         timeframes = self.required_timeframes(engine, timeframe)
@@ -62,8 +74,7 @@ class MarketAnalysisService:
         symbols: list[str] | None = None, filters: dict[str, Any] | None = None,
         assets: list[dict] | None = None,
     ) -> dict[str, Any]:
-        if engine not in {*self.ENGINES, "both"}:
-            raise ValueError(f"unsupported_engine:{engine}")
+        self.validate_request(engine, timeframe)
         engines = list(self.ENGINES) if engine == "both" else [engine]
         run_token = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc).isoformat()

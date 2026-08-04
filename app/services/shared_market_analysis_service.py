@@ -36,7 +36,7 @@ class SharedMarketAnalysisService:
         if missing:
             return self._insufficient(context, candles, minimums, missing)
         state, _ = WyckoffPipelineService().analyze(
-            symbol=symbol, candles=candles, market_context={**(market_context or {}), **context},
+            symbol=symbol, candles=candles, market_context=market_context or context,
             execution_interval=timeframes[0],
         )
         bias = str(state.get("bias") or "neutral")

@@ -42,7 +42,7 @@ function ResultsTable({ rows, engine, empty }) {
     { key: 'engine', title: 'Engine', render: (row) => row.engine_name || engine, sortValue: (row) => row.engine_name || engine },
     { key: 'updated', title: 'Updated', render: (row) => fmtDate(row.created_at), sortValue: (row) => row.created_at },
   ]
-  return <FoldableTable rows={rows} columns={columns} defaultSortKey="score" defaultSortDir="desc" empty={empty || 'No analysis results yet. Sync assets, backfill daily candles, then run analysis from Admin Market Data.'} />
+  return <FoldableTable rows={rows} columns={columns} defaultSortKey="score" defaultSortDir="desc" empty={empty || 'No analysis results yet. Load complete 15m/1h/4h history, then run the shared workflow from Admin Market Data.'} />
 }
 
 function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsOnly = false }) {
@@ -60,7 +60,7 @@ function Dashboard({ engine, title, subtitle, candidatesOnly = false, positionsO
   const counts = useMemo(() => ({ total: rows.length, buy: rows.filter((r) => r.signal === 'BUY').length, sell: rows.filter((r) => r.signal === 'SELL').length, hold: rows.filter((r) => ['HOLD', 'NO_SIGNAL'].includes(r.signal)).length }), [rows])
   return <div className="page-stack">
     <PageHeader title={title} subtitle={subtitle} />
-    <div className="panel"><strong>Phase 1 Stock/ETF mode:</strong> daily IBKR data · no realtime stream · no broker execution · isolated from crypto decision flows.</div>
+    <div className="panel"><strong>Shared Stock/ETF workflow:</strong> canonical Momentum and Wyckoff/SMC engines on closed 15m, 1h and 4h candles · no broker execution.</div>
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="stats-grid"><StatCard label="Results" value={counts.total} /><StatCard label="Buy" value={counts.buy} /><StatCard label="Sell" value={counts.sell} /><StatCard label="Hold / No signal" value={counts.hold} /></div>
     {loading ? <div className="panel">Loading…</div> : null}
@@ -91,9 +91,9 @@ export function StockEtfWyckoffDashboardPage() {
     pollingInterval={30000}
   />
 }
-export function StockEtfTradeCandidatesPage() { return <Dashboard engine="wyckoff_smc" candidatesOnly title="ETF & Stocks · Trade Candidates" subtitle="BUY/SELL candidates generated from stock/ETF IBKR daily analysis results." /> }
-export function StockEtfPositionsPage() { return <Dashboard engine="wyckoff_smc" positionsOnly title="ETF & Stocks · Positions" subtitle="Phase-1 paper/watch positions inferred from BUY analysis results; no broker execution or IBKR dependency." /> }
-export function StockEtfMomentumDashboardPage() { return <Dashboard engine="momentum" title="ETF & Stocks · Momentum Dashboard" subtitle="Daily IBKR stock/ETF candles adapted for the momentum dashboard layer." /> }
+export function StockEtfTradeCandidatesPage() { return <Dashboard engine="wyckoff_smc" candidatesOnly title="ETF & Stocks · Trade Candidates" subtitle="BUY/SELL candidates produced by the shared multi-timeframe analytical workflow." /> }
+export function StockEtfPositionsPage() { return <Dashboard engine="wyckoff_smc" positionsOnly title="ETF & Stocks · Positions" subtitle="Paper/watch positions inferred from shared workflow results; no broker execution." /> }
+export function StockEtfMomentumDashboardPage() { return <Dashboard engine="momentum" title="ETF & Stocks · Momentum Dashboard" subtitle="Canonical momentum analysis using closed 15m, 1h and 4h Stock/ETF candles." /> }
 
 
 function QualityTable({ rows }) {
@@ -117,7 +117,7 @@ export function StockEtfDataQualityPage() {
   const { data, loading, error } = usePollingQuery(useCallback(() => api.stockEtfFreshness(q), [q]), 30000)
   const rows = asRows(data, 'freshness')
   return <div className="page-stack">
-    <PageHeader title="ETF & Stocks · Data Quality" subtitle="Freshness, candle coverage and stale-analysis checks for isolated IBKR daily candles." />
+    <PageHeader title="ETF & Stocks · Data Quality" subtitle="Freshness, 15m/1h/4h candle coverage and stale shared-workflow checks." />
     <UniverseFilter universe={universe} setUniverse={setUniverse} assetType={assetType} setAssetType={setAssetType} />
     <div className="page-actions"><a className="button" href={api.stockEtfExportUrl(query(universe, assetType, 'kind=quality&limit=500'))}>Export CSV</a></div>
     {loading ? <div className="panel">Loading…</div> : null}{error ? <div className="panel error" role="alert"><strong>Unable to load data quality.</strong> {errorText(error)}</div> : null}

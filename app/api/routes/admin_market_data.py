@@ -716,8 +716,17 @@ async def preview_market_action(payload: dict | None = None, db: Session = Depen
 @router.post('/admin/market-data/queue-job')
 async def queue_market_job(payload: dict | None = None, db: Session = Depends(get_db)):
     payload = payload or {}
+    job_type = payload.get('job_type', 'backfill')
+    if job_type == 'analysis':
+        timeframe = (payload.get('timeframes') or [payload.get('timeframe', '15m')])[0]
+        try:
+            MarketAnalysisService.validate_request(payload.get('engine', 'both'), timeframe)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif job_type not in {'backfill', 'sync_assets'}:
+        raise HTTPException(status_code=422, detail=f'unsupported_market_data_job:{job_type}')
     repo = _repo(db)
-    job_id = await repo.create_job_request(payload.get('job_type', 'backfill'), payload=payload)
+    job_id = await repo.create_job_request(job_type, payload=payload)
     db.commit()
     return {'queued': True, 'job_id': job_id, 'message': 'Job request saved. Run the market-data worker/CLI to process queued requests.'}
 
@@ -732,6 +741,10 @@ async def analyze(payload: dict | None = None):
     """Run the same scoped application workflow used by CLI and automation."""
     payload = payload or {}
     timeframe = (payload.get('timeframes') or [payload.get('timeframe', '15m')])[0]
+    try:
+        MarketAnalysisService.validate_request(payload.get('engine', 'both'), timeframe)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     read_db = SessionLocal()
     read_repo = _repo(read_db)
     assets = await read_repo.list_enabled_market_assets(

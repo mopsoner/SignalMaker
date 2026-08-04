@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import asyncio
+import pytest
 
 from app.services.momentum_service import MomentumService
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
@@ -36,12 +37,10 @@ def test_stock_adapter_uses_shared_momentum_ranking_calculation():
     assert "ma50" not in result["payload"]
 
 
-def test_daily_only_feeder_does_not_fabricate_intraday_momentum():
+def test_daily_analysis_option_fails_with_migration_message():
     class DailyOnlyAdapter(MarketAnalysisAdapter):
         async def load_stock_etf_candle_bundle(self, asset_id, timeframes=MomentumService.INTERVALS):
             return {"1d": _candles()}
 
-    result = asyncio.run(DailyOnlyAdapter(None).run_momentum_analysis("asset-1", "1d"))
-    assert result["signal"] == "NO_SIGNAL"
-    assert result["payload"]["unavailable_timeframes"] == ["15m", "1h", "4h"]
-    assert result["payload"]["timeframe_mapping"] == {"15m": None, "1h": None, "4h": None}
+    with pytest.raises(ValueError, match="migration required"):
+        asyncio.run(DailyOnlyAdapter(None).run_momentum_analysis("asset-1", "1d"))
