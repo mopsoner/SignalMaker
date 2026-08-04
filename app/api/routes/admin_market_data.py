@@ -573,7 +573,7 @@ async def analyze(payload: dict | None = None):
     """Analyze snapshots in memory, never while a DB transaction is open."""
     payload = payload or {}
     started = perf_counter()
-    timeframe = (payload.get('timeframes') or [payload.get('timeframe', '1d')])[0]
+    timeframe = (payload.get('timeframes') or [payload.get('timeframe', '15m')])[0]
     symbols = payload.get('symbols') or None
     db = SessionLocal()
     try:
@@ -583,10 +583,16 @@ async def analyze(payload: dict | None = None):
             limit=int(payload.get('limit') or 10), symbols=symbols,
             **{key: payload.get(key) for key in ('region', 'country', 'exchange_code', 'provider', 'pea_eligible', 'ucits')},
         )
-        snapshots = {
-            asset['id']: await repo.load_stock_etf_candles_for_asset(asset['id'], timeframe)
-            for asset in assets
-        }
+        if hasattr(repo, "load_stock_etf_candle_bundle"):
+            snapshots = {
+                asset['id']: await repo.load_stock_etf_candle_bundle(asset['id'], ("15m", "1h", "4h"))
+                for asset in assets
+            }
+        else:
+            snapshots = {
+                asset['id']: {timeframe: await repo.load_stock_etf_candles_for_asset(asset['id'], timeframe)}
+                for asset in assets
+            }
         # End the read transaction before CPU work begins.
         db.rollback()
     except Exception:
@@ -600,14 +606,17 @@ async def analyze(payload: dict | None = None):
     # Adapter conversion/engines are pure once their candle snapshot is loaded.
     class SnapshotAdapter(MarketAnalysisAdapter):
         async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
-            return snapshots.get(asset_id, [])
+            return snapshots.get(asset_id, {}).get(timeframe, [])
+
+        async def load_stock_etf_candle_bundle(self, asset_id, timeframes=("15m", "1h", "4h")):
+            return {tf: snapshots.get(asset_id, {}).get(tf, []) for tf in timeframes}
 
     adapter = SnapshotAdapter(None)
     engines = ['momentum', 'wyckoff_smc'] if payload.get('engine', 'both') == 'both' else [payload.get('engine', 'momentum')]
     results = []
     for asset in assets:
         for engine in engines:
-            res = await (adapter.run_momentum_analysis(asset['id'], timeframe) if engine == 'momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], timeframe))
+            res = await (adapter.run_momentum_analysis(asset['id'], timeframe) if engine == 'momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], timeframe, asset=asset))
             results.append({'symbol': asset['provider_symbol'], **res})
     analyzed_at = perf_counter()
     logger.info("market analyze computed results=%d seconds=%.3f", len(results), analyzed_at - loaded_at)

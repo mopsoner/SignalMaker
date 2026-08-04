@@ -11,20 +11,17 @@ from sqlalchemy.orm import Session
 from app.models.asset_state import AssetStateCurrent
 from app.services.asset_state_service import AssetStateService
 from app.services.collector_service import CollectorService
-from app.services.hierarchical_gate_service import apply_hierarchical_stage_gates
 from app.services.live_run_service import LiveRunService
 from app.services.market_data_service import MarketDataService
 from app.services.momentum_service import MomentumService
 from app.services.planner_service import PlannerService
-from app.services.signal_context_service import apply_context_driven_progression
 from app.services.signal_engine_service import SignalEngineService
 from app.services.signal_score_service import SignalScoreService
 from app.services.trade_candidate_service import TradeCandidateService
+from app.services.wyckoff_pipeline_service import WyckoffPipelineService
 
 
 EXECUTION_INTERVAL = "15m"
-LEGACY_ENGINE_INTERVAL = "5m"
-
 logger = logging.getLogger(__name__)
 
 PUBLIC_STATUS_REPLACEMENTS = {
@@ -53,6 +50,9 @@ class PipelineService:
         self.market_data = MarketDataService(db)
         self.momentum = MomentumService(db)
         self.signal_score = SignalScoreService(db)
+        self.wyckoff_pipeline = WyckoffPipelineService(
+            engine=self.engine, planner=self.planner, score_signal=self.signal_score.apply
+        )
 
     def _execution_interval(self) -> str:
         return EXECUTION_INTERVAL
@@ -75,82 +75,10 @@ class PipelineService:
         return value
 
     def _public_signal(self, signal: dict) -> dict:
-        payload = self._clean_public_text(dict(signal))
-        legacy_trigger = payload.pop("execution_trigger_5m", None)
-        if legacy_trigger and "execution_trigger" not in payload:
-            payload["execution_trigger"] = {**legacy_trigger, "timeframe": EXECUTION_INTERVAL}
-        if isinstance(payload.get("execution_trigger"), dict):
-            payload["execution_trigger"]["timeframe"] = EXECUTION_INTERVAL
-        payload.pop("one_hour_confirmation_debug", None)
-        payload.pop("rsi_5m", None)
-        payload["rsi_15m"] = payload.get("rsi_main")
-        payload["rsi_main_timeframe"] = EXECUTION_INTERVAL
-        payload["signal_interval"] = EXECUTION_INTERVAL
-        payload["execution_timeframe"] = EXECUTION_INTERVAL
-        if payload.get("confirm_source") == "5m_bos":
-            payload["confirm_source"] = "15m_bos"
-        return payload
+        return self.wyckoff_pipeline.public_signal(signal, self._execution_interval())
 
     def _enforce_one_hour_decision_gate(self, signal: dict) -> dict:
-        decision = signal.get("one_hour_decision") or {}
-        if decision.get("valid"):
-            return signal
-
-        reason = decision.get("reason") or "waiting_1h_decision"
-        pipeline = signal.setdefault("pipeline", {})
-        pipeline["collect"] = True
-        pipeline["liquidity"] = True
-        pipeline["zone"] = True
-        pipeline["confirm"] = False
-        pipeline["trade"] = False
-
-        signal["stage"] = "waiting_1h_event"
-        signal["state"] = "waiting_1h_event"
-        signal["trigger"] = "wait"
-        signal["confirm_source"] = None
-        signal["trade"] = {"status": "watch", "side": "none", "entry": None, "stop": None, "target": None}
-        signal["planner_candidate_status"] = "not_created"
-        signal["planner_candidate_reason"] = f"blocked_before_planner:{reason}"
-        signal["planner_candidate_rr"] = None
-        signal["hierarchy_block_reason"] = reason
-        signal["confirm_blocked_by_hierarchy"] = True
-        signal["confirm_block_reason"] = reason
-
-        wyckoff = signal.get("wyckoff_requirement")
-        if isinstance(wyckoff, dict):
-            wyckoff.setdefault("legacy_status", wyckoff.get("status"))
-            wyckoff.setdefault("legacy_confirmed", wyckoff.get("confirmed"))
-            wyckoff["status"] = "waiting_1h_event"
-            wyckoff["confirmed"] = False
-            wyckoff["setup_ready"] = False
-            wyckoff["reason"] = reason
-            signal["wyckoff_requirement"] = wyckoff
-
-        model = signal.setdefault("confirmation_model", {})
-        model["confirmed_by_1h"] = False
-        model["entry_mode"] = "wait"
-        model["confirmation_source"] = decision.get("source")
-
-        execution_trigger = signal.get("execution_trigger")
-        if isinstance(execution_trigger, dict):
-            execution_trigger["valid"] = False
-            execution_trigger["accepted"] = False
-            execution_trigger["blocked"] = True
-            execution_trigger["blocked_by"] = "decision_1h"
-            execution_trigger["block_reason"] = reason
-            signal["execution_trigger"] = execution_trigger
-
-        gate = signal.setdefault("hierarchy_gate", {})
-        gate.update({
-            "accepted": False,
-            "stage": "waiting_1h_event",
-            "blocked_at": "decision_1h",
-            "block_reason": reason,
-            "one_hour_decision_ok": False,
-            "confirm_15m_accepted": False,
-            "confirmation_path": "waiting_1h_event",
-        })
-        return signal
+        return self.wyckoff_pipeline._enforce_one_hour_gate(signal)
 
     def _collect_interval_parallel(self, symbols: list[str], interval: str, latest_close_times: dict[str, dict[str, int]], worker_count: int) -> tuple[dict[str, list[dict]], list[dict]]:
         fetched: dict[str, list[dict]] = {}
@@ -304,41 +232,17 @@ class PipelineService:
                         for issue in quality_htf["issues"]:
                             data_quality_counts[f"{interval}:{issue}"] += 1
 
-                candles[LEGACY_ENGINE_INTERVAL] = execution_candles
                 try:
-                    raw_signal = self.engine.compute_signal(symbol, candles)
+                    signal, assessment = self.wyckoff_pipeline.analyze(
+                        symbol=symbol,
+                        candles=candles,
+                        market_context={"provider": "kraken", "provider_symbol": symbol, "asset_type": "crypto"},
+                        execution_interval=execution_interval,
+                    )
                 except Exception as exc:
                     record_error({"symbol": symbol, "phase": "compute_signal", "error": "compute_signal_error", "detail": str(exc)})
                     continue
-                raw_signal = apply_context_driven_progression(raw_signal)
-                raw_signal[f"candle_quality_{execution_interval}"] = quality_exec
-                raw_signal["execution_timeframe"] = execution_interval
-                raw_signal["signal_interval"] = execution_interval
-                raw_signal["rsi_main_timeframe"] = execution_interval
-                legacy_trigger = raw_signal.get("execution_trigger_5m")
-                if legacy_trigger:
-                    raw_signal["execution_trigger"] = {**legacy_trigger, "timeframe": execution_interval}
-                if raw_signal.get("confirm_source") == "5m_bos":
-                    raw_signal["confirm_source"] = "15m_bos"
-
-                raw_signal = apply_hierarchical_stage_gates(raw_signal)
-                raw_signal = apply_context_driven_progression(raw_signal)
-                raw_signal = self._enforce_one_hour_decision_gate(raw_signal)
-                raw_signal = self.signal_score.apply(raw_signal)
-
-                if raw_signal.get("confirm_blocked_by_hierarchy"):
-                    assessment = {
-                        "accepted": False,
-                        "reason": raw_signal.get("planner_candidate_reason") or raw_signal.get("confirm_block_reason") or "blocked_before_planner",
-                        "rr_ratio": None,
-                        "candidate": None,
-                    }
-                else:
-                    assessment = self.planner.assess_signal(raw_signal)
-                    raw_signal['planner_candidate_status'] = 'open_candidate' if assessment['accepted'] else 'rejected'
-                    raw_signal['planner_candidate_reason'] = self._clean_public_text(assessment['reason'])
-                    raw_signal['planner_candidate_rr'] = assessment.get('rr_ratio')
-                signal = self._public_signal(raw_signal)
+                signal[f"candle_quality_{execution_interval}"] = quality_exec
                 try:
                     self.asset_states.upsert_from_signal(signal)
                     asset_states_upserted += 1
