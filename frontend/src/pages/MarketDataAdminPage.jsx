@@ -71,7 +71,7 @@ export default function MarketDataAdminPage() {
       <button className="button" onClick={() => action('Run momentum', () => api.runMarketAnalysis({ engine: 'momentum', universe, limit: 50 }))}>Run Momentum</button>
       <button className="button" onClick={() => action('Run Wyckoff SMC', () => api.runMarketAnalysis({ engine: 'wyckoff_smc', universe, limit: 50 }))}>Run Wyckoff SMC</button>
       <button className="button" onClick={() => action('Preview backfill', async () => { const r = await api.previewMarketAction({ action: 'backfill', universe, limit: 50 }); setPreview(r); return r })}>Preview backfill</button>
-      <button className="button" onClick={() => action('Queue backfill', () => api.queueMarketJob({ job_type: 'backfill', universe, limit: 50 }))}>Queue backfill</button>
+      <button className="button" onClick={() => action('Queue analysis', () => api.queueMarketJob({ job_type: 'analysis', market_scope: 'stock_etf', engine: 'both', universe, limit: 50 }))}>Queue analysis</button>
       <button className="button" onClick={() => action('Run both engines', () => api.runMarketAnalysis({ engine: 'both', universe, limit: 50 }))}>Run both</button>
       <button className="button" style={{ borderColor: 'rgba(239, 68, 68, 0.45)', color: 'var(--red)' }} disabled={clearingAll} onClick={clearAllData}>{clearingAll ? 'Clearing all ETF/stock data…' : 'Clear all ETF/stock data'}</button>
     </div>{message ? <p className="stat-hint" style={{ marginTop: 12 }}>{message}</p> : null}{preview ? <pre className="stat-hint" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(preview, null, 2)}</pre> : null}</section>
