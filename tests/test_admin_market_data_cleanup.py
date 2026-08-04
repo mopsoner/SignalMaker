@@ -65,3 +65,11 @@ def test_clear_all_market_data_rolls_back_every_delete_on_failure():
     assert response.status_code == 500
     assert response.json()["detail"] == "Failed to clear all stock/ETF market data"
     assert all(db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 1 for table in TABLES)
+
+
+def test_csv_export_rejects_unknown_kind():
+    client, _ = _client_and_db()
+
+    response = client.get("/api/v1/stocks-etfs/export.csv?kind=unsupported")
+
+    assert response.status_code == 422

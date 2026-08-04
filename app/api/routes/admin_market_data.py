@@ -412,7 +412,7 @@ async def clear_stocks_etfs_generated_data(db: Session = Depends(get_db)):
 
 
 @router.get('/api/v1/stocks-etfs/export.csv')
-async def stocks_etfs_export_csv(kind: str = 'results', engine: str | None = None, universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
+async def stocks_etfs_export_csv(kind: Literal['results', 'quality', 'assets'] = 'results', engine: str | None = None, universe: str | None = None, asset_type: str | None = None, limit: int = 500, db: Session = Depends(get_db)):
     repo = _repo(db)
     if kind == 'quality':
         rows = await repo.stock_etf_candle_quality(universe_name=universe, asset_type=asset_type, limit=limit)
