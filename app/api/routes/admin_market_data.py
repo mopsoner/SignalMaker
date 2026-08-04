@@ -551,16 +551,12 @@ async def ingest_ibkr_candles(payload: ExternalMarketCandleIngestRequest, db: Se
     ))
     queued_job_id = None
     if payload.queue_analysis:
-        queued_job_id = await step("create_job_request", repo.create_job_request(
-            "analyze",
-            payload={
-                "provider": payload.provider.upper(),
-                "asset_id": str(asset["id"]),
-                "symbol": asset.get("symbol"),
-                "provider_symbol": asset.get("provider_symbol"),
-                "timeframe": payload.timeframe,
-            },
+        from app.services.runtime_settings import load_runtime_settings
+        from app.services.scheduler_service import SchedulerService
+        queued = await step("schedule_targeted_analysis", SchedulerService(repo).feeder_completed(
+            load_runtime_settings(db), [asset.get("provider_symbol") or asset.get("symbol")]
         ))
+        queued_job_id = queued[0] if queued else None
     await step("finish_import_run", repo.finish_import_run(
         run_id, "SUCCESS", total_assets=1, success_count=1, failed_count=0
     ))

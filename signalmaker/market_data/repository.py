@@ -654,6 +654,17 @@ class MarketDataRepository:
         result = self.db.execute(text("UPDATE market_data_job_requests SET heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=:id AND status='running' AND worker_id=:worker"), {"id": job_id, "worker": worker_id})
         return bool(result.rowcount)
 
+    async def recover_abandoned_analysis_jobs(self, *, timeout_seconds: int = 900, max_attempts: int = 3):
+        """Requeue stale claimed jobs, while preserving the bounded attempt count."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        result = self.db.execute(text("""
+            UPDATE market_data_job_requests SET status='queued', worker_id=NULL,
+              last_error='worker heartbeat expired; controlled retry', updated_at=CURRENT_TIMESTAMP
+            WHERE job_type='analysis' AND lower(status)='running' AND attempts < :max_attempts
+              AND (heartbeat_at IS NULL OR heartbeat_at < :cutoff)
+        """), {"cutoff": cutoff, "max_attempts": max_attempts})
+        return result.rowcount
+
     async def update_job_request(self, job_id, status: str, *, result: dict | None = None):
         self._ensure_job_requests_table()
         finished = ",finished_at=CURRENT_TIMESTAMP" if status.lower() in {"completed", "insufficient_data", "skipped", "failed"} else ""
