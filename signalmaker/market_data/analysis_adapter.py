@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from statistics import fmean
 from typing import Any
 
 from signalmaker.market_data.repository import MarketDataRepository
 from app.services.wyckoff_pipeline_service import WyckoffPipelineService
+from app.services.momentum_service import MomentumService
 
 
 class MarketAnalysisAdapter:
@@ -35,15 +35,27 @@ class MarketAnalysisAdapter:
         return normalized
 
     async def run_momentum_analysis(self, asset_id, timeframe="1d"):
-        candles = self.to_engine_input(await self.load_stock_etf_candles_for_asset(asset_id, timeframe))
-        if len(candles) < 200:
-            return self._no_signal("momentum", len(candles), 200)
-        closes = [c["close"] for c in candles]
-        ma50 = fmean(closes[-50:]); ma200 = fmean(closes[-200:]); last = closes[-1]
-        ret_20 = (last / closes[-21] - 1) * 100 if closes[-21] else 0
-        score = round((last / ma200 - 1) * 100 + ret_20, 4)
-        signal = "BUY" if last > ma50 > ma200 and score > 0 else "SELL" if last < ma200 else "HOLD"
-        return {"engine_name": "momentum", "signal": signal, "score": score, "trend": "UP" if last > ma200 else "DOWN", "confidence": min(1.0, abs(score) / 25), "payload": {"ma50": ma50, "ma200": ma200, "return_20d_pct": ret_20, "candles_count": len(candles)}}
+        timeframes = MomentumService.INTERVALS
+        raw_bundle = await self.load_stock_etf_candle_bundle(asset_id, timeframes)
+        bundle = {tf: self.to_engine_input(raw_bundle.get(tf, [])) for tf in timeframes}
+        row = MomentumService.calculate_bundle(str(asset_id), bundle)
+        available = [tf for tf in timeframes if row[f"momentum_{tf}"] is not None]
+        timeframe_metadata = {
+            "market_type": "stock_etf", "requested_timeframe": timeframe,
+            "timeframe_mapping": {tf: (tf if tf in available else None) for tf in timeframes},
+            "unavailable_timeframes": [tf for tf in timeframes if tf not in available],
+        }
+        if not available:
+            result = self._no_signal("momentum", 0, 2)
+            result["payload"].update({**row, **timeframe_metadata})
+            return result
+        signal = "NO_SIGNAL" if not available else "BUY" if row["momentum_score"] >= 10 else "SELL" if row["momentum_score"] < -10 else "HOLD"
+        return {
+            "engine_name": "momentum", "signal": signal, "score": row["momentum_score"] if available else None,
+            "trend": row["classification"] if available else None,
+            "confidence": min(1.0, abs(row["momentum_score"]) / 25) if available else None,
+            "payload": {**row, **timeframe_metadata},
+        }
 
     async def run_wyckoff_smc_analysis(self, asset_id, timeframe="15m", *, asset: dict | None = None):
         execution_timeframe = "15m" if timeframe in {"1d", "5m", "15m"} else timeframe
