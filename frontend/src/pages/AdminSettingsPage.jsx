@@ -8,6 +8,7 @@ const EMPTY_SETTINGS = {
   notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
   bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
   momentum: { momentum_engine_cadence_hours: 1 },
+  stock_etf: { feeder_enabled: false, momentum_enabled: false, wyckoff_smc_enabled: false, momentum_cadence_hours: 24, wyckoff_smc_cadence_hours: 1, universes: ['Europe Stocks', 'Europe ETF'], asset_types: ['STOCK', 'ETF'], timeframes: ['1d'], min_lot_size: 1, max_lot_size: 100, retry_max_attempts: 3, retry_delay_seconds: 30, paper_momentum: { enabled: false, starting_capital: 1000, reference_currency: 'EUR', max_positions: 1, max_position_pct: 10 } },
   live: { live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: false },
 }
 
@@ -49,6 +50,7 @@ export default function AdminSettingsPage() {
         notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
         momentum: { ...EMPTY_SETTINGS.momentum, ...(data.momentum || {}) },
+        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(data.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(data.stock_etf?.paper_momentum || {}) } },
         live: { ...EMPTY_SETTINGS.live, ...(data.live || {}) },
       }
       setSettings(merged)
@@ -84,6 +86,7 @@ export default function AdminSettingsPage() {
         notifications: { ...EMPTY_SETTINGS.notifications, ...(saved.notifications || {}) },
         bot: { ...EMPTY_SETTINGS.bot, ...(saved.bot || {}) },
         momentum: { ...EMPTY_SETTINGS.momentum, ...(saved.momentum || {}) },
+        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(saved.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(saved.stock_etf?.paper_momentum || {}) } },
         live: { ...EMPTY_SETTINGS.live, ...(saved.live || {}) },
       }
       setSettings(merged)
@@ -94,6 +97,15 @@ export default function AdminSettingsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function updateStockList(key, rawValue) {
+    updateField('stock_etf', key, rawValue.split(',').map((item) => item.trim()).filter(Boolean))
+  }
+
+  function updatePaperMomentum(key, rawValue, type = 'text') {
+    const value = type === 'number' ? Number(rawValue) : type === 'checkbox' ? Boolean(rawValue) : rawValue
+    setSettings((current) => ({ ...current, stock_etf: { ...current.stock_etf, paper_momentum: { ...current.stock_etf.paper_momentum, [key]: value } } }))
   }
 
   async function doAction(action) {
@@ -182,6 +194,25 @@ export default function AdminSettingsPage() {
       </Section>
 
 
+
+      <Section title="ETF & Stocks workflows" description="Dedicated IBKR stock/ETF feeder and analysis settings; these never inherit crypto Momentum values. Workflows run only during the configured exchange session and require every listed timeframe to be fed.">
+        <Field label="Feeder enabled — imports market bars"><input type="checkbox" checked={Boolean(settings.stock_etf.feeder_enabled)} onChange={(e) => updateField('stock_etf', 'feeder_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Momentum engine — needs 1d"><input type="checkbox" checked={Boolean(settings.stock_etf.momentum_enabled)} onChange={(e) => updateField('stock_etf', 'momentum_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Wyckoff / SMC — needs 15m, 1h, 4h"><input type="checkbox" checked={Boolean(settings.stock_etf.wyckoff_smc_enabled)} onChange={(e) => updateField('stock_etf', 'wyckoff_smc_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Momentum cadence (hours)"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.momentum_cadence_hours} onChange={(e) => updateField('stock_etf', 'momentum_cadence_hours', e.target.value, 'number')} /></Field>
+        <Field label="Wyckoff / SMC cadence (hours)"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.wyckoff_smc_cadence_hours} onChange={(e) => updateField('stock_etf', 'wyckoff_smc_cadence_hours', e.target.value, 'number')} /></Field>
+        <Field label="Universes — comma separated"><input style={inputStyle} value={settings.stock_etf.universes.join(', ')} onChange={(e) => updateStockList('universes', e.target.value)} /></Field>
+        <Field label="Asset types — STOCK, ETF"><input style={inputStyle} value={settings.stock_etf.asset_types.join(', ')} onChange={(e) => updateStockList('asset_types', e.target.value.toUpperCase())} /></Field>
+        <Field label="Fed timeframes — 15m, 1h, 4h, 1d"><input style={inputStyle} value={settings.stock_etf.timeframes.join(', ')} onChange={(e) => updateStockList('timeframes', e.target.value)} /></Field>
+        <Field label="Minimum lot"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.min_lot_size} onChange={(e) => updateField('stock_etf', 'min_lot_size', e.target.value, 'number')} /></Field>
+        <Field label="Maximum lot"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.max_lot_size} onChange={(e) => updateField('stock_etf', 'max_lot_size', e.target.value, 'number')} /></Field>
+        <Field label="Retry attempts"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.retry_max_attempts} onChange={(e) => updateField('stock_etf', 'retry_max_attempts', e.target.value, 'number')} /></Field>
+        <Field label="Retry delay (seconds)"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.retry_delay_seconds} onChange={(e) => updateField('stock_etf', 'retry_delay_seconds', e.target.value, 'number')} /></Field>
+        <Field label="Momentum paper portfolio"><input type="checkbox" checked={Boolean(settings.stock_etf.paper_momentum.enabled)} onChange={(e) => updatePaperMomentum('enabled', e.target.checked, 'checkbox')} /></Field>
+        <Field label="Paper starting capital"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.paper_momentum.starting_capital} onChange={(e) => updatePaperMomentum('starting_capital', e.target.value, 'number')} /></Field>
+        <Field label="Paper max positions"><input style={inputStyle} type="number" min="1" value={settings.stock_etf.paper_momentum.max_positions} onChange={(e) => updatePaperMomentum('max_positions', e.target.value, 'number')} /></Field>
+        <Field label="Paper max position (%)"><input style={inputStyle} type="number" min="0.1" max="100" step="0.1" value={settings.stock_etf.paper_momentum.max_position_pct} onChange={(e) => updatePaperMomentum('max_position_pct', e.target.value, 'number')} /></Field>
+      </Section>
 
       <Section title="Simulated execution" description="Paper execution limits used by SignalMaker main; real exchange execution is handled by the Raspberry Executor.">
         <Field label="Allow shorts"><input type="checkbox" checked={Boolean(settings.live.live_spot_allow_shorts)} onChange={(e) => updateField('live', 'live_spot_allow_shorts', e.target.checked, 'checkbox')} disabled={loading} /></Field>

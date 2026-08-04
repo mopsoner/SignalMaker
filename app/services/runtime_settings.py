@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import select
@@ -12,6 +13,8 @@ from app.models.app_setting import AppSetting
 
 MOMENTUM_CADENCE_KEY = "momentum_engine_cadence_hours"
 SUPPORTED_MOMENTUM_CADENCES = {1, 4, 8, 24}
+STOCK_ETF_TIMEFRAMES = {"15m", "1h", "4h", "1d"}
+STOCK_ETF_ASSET_TYPES = {"STOCK", "ETF"}
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -87,26 +90,31 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "momentum_engine_starting_capital": 1000.0,
         "momentum_engine_min_score": 0.0,
     },
-    "stock_etf_momentum": {
-        "enabled": True,
-        "engine": "momentum",
-        "starting_capital": 1000.0,
-        "cadence_hours": 24,
+    "stock_etf": {
+        # Opt-in defaults prevent a new installation from starting data imports or trades.
+        "feeder_enabled": False,
+        "momentum_enabled": False,
+        "wyckoff_smc_enabled": False,
+        "momentum_cadence_hours": 24,
+        "wyckoff_smc_cadence_hours": 1,
         "universes": ["Europe Stocks", "Europe ETF"],
         "asset_types": ["STOCK", "ETF"],
         "timeframes": ["1d"],
         "exchange_timezone": "Europe/Paris",
-        "market_open": "09:00", "market_close": "17:30",
-        "exchange_holidays": [], "timeout_seconds": 1800,
-        "reference_currency": "EUR",
-        "max_positions": 1,
-    },
-    "stock_etf_wyckoff_smc": {
-        "enabled": True, "engine": "wyckoff_smc", "cadence_hours": 1,
-        "universes": ["Europe Stocks", "Europe ETF"],
-        "asset_types": ["STOCK", "ETF"], "timeframes": ["15m", "1h", "4h"],
-        "exchange_timezone": "Europe/Paris", "market_open": "09:00", "market_close": "17:30",
-        "exchange_holidays": [], "timeout_seconds": 1800,
+        "market_open": "09:00",
+        "market_close": "17:30",
+        "min_lot_size": 1,
+        "max_lot_size": 100,
+        "retry_max_attempts": 3,
+        "retry_delay_seconds": 30,
+        "timeout_seconds": 1800,
+        "paper_momentum": {
+            "enabled": False,
+            "starting_capital": 1000.0,
+            "reference_currency": "EUR",
+            "max_positions": 1,
+            "max_position_pct": 10.0,
+        },
     },
     "scheduler": {"reconciliation_interval_seconds": 300, "abandoned_after_seconds": 900},
     "live": {
@@ -119,15 +127,94 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
 }
 
 
+def _migrate_stock_etf(rows: list[AppSetting], stock_etf: dict[str, Any]) -> None:
+    """Read legacy stock/ETF categories without borrowing any crypto setting."""
+    explicit = {(row.category, row.key) for row in rows}
+    legacy = {row.category: {} for row in rows if row.category.startswith("stock_etf_")}
+    for row in rows:
+        if row.category in legacy:
+            legacy[row.category][row.key] = row.value
+    momentum = legacy.get("stock_etf_momentum", {})
+    wyckoff = legacy.get("stock_etf_wyckoff_smc", {})
+    mappings = (
+        ("momentum_enabled", momentum, "enabled"),
+        ("momentum_cadence_hours", momentum, "cadence_hours"),
+        ("wyckoff_smc_enabled", wyckoff, "enabled"),
+        ("wyckoff_smc_cadence_hours", wyckoff, "cadence_hours"),
+    )
+    for target, source, old_key in mappings:
+        if ("stock_etf", target) not in explicit and old_key in source:
+            stock_etf[target] = source[old_key]
+    for key in ("universes", "asset_types", "exchange_timezone", "market_open", "market_close", "timeout_seconds"):
+        if ("stock_etf", key) not in explicit:
+            if key in momentum:
+                stock_etf[key] = momentum[key]
+            elif key in wyckoff:
+                stock_etf[key] = wyckoff[key]
+    if ("stock_etf", "timeframes") not in explicit:
+        migrated_timeframes = list(dict.fromkeys([
+            *momentum.get("timeframes", []),
+            *wyckoff.get("timeframes", []),
+        ]))
+        if migrated_timeframes:
+            stock_etf["timeframes"] = migrated_timeframes
+    paper = stock_etf.setdefault("paper_momentum", {})
+    for old_key, target in (("starting_capital", "starting_capital"), ("reference_currency", "reference_currency"), ("max_positions", "max_positions")):
+        if old_key in momentum and ("stock_etf", "paper_momentum") not in explicit:
+            paper[target] = momentum[old_key]
+
+
+def validate_stock_etf_settings(config: dict[str, Any]) -> None:
+    errors: list[str] = []
+    timeframes = config.get("timeframes")
+    if not isinstance(timeframes, list) or not timeframes or any(item not in STOCK_ETF_TIMEFRAMES for item in timeframes):
+        errors.append("timeframes must be a non-empty subset of 15m, 1h, 4h and 1d")
+        timeframes = []
+    if config.get("momentum_enabled") and "1d" not in timeframes:
+        errors.append("Momentum requires the feeder timeframe 1d")
+    if config.get("wyckoff_smc_enabled") and not {"15m", "1h", "4h"}.issubset(timeframes):
+        errors.append("Wyckoff/SMC requires feeder timeframes 15m, 1h and 4h")
+    if (config.get("momentum_enabled") or config.get("wyckoff_smc_enabled")) and not config.get("feeder_enabled"):
+        errors.append("an enabled stock/ETF workflow requires the feeder")
+    if not config.get("universes"):
+        errors.append("at least one stock/ETF universe is required")
+    asset_types = config.get("asset_types")
+    if not isinstance(asset_types, list) or not asset_types or not set(asset_types).issubset(STOCK_ETF_ASSET_TYPES):
+        errors.append("asset_types must contain STOCK and/or ETF")
+    for key in ("momentum_cadence_hours", "wyckoff_smc_cadence_hours", "min_lot_size", "max_lot_size", "retry_max_attempts", "retry_delay_seconds"):
+        try:
+            if float(config.get(key, 0)) <= 0:
+                errors.append(f"{key} must be greater than zero")
+        except (TypeError, ValueError):
+            errors.append(f"{key} must be numeric")
+    if isinstance(config.get("min_lot_size"), (int, float)) and isinstance(config.get("max_lot_size"), (int, float)) and config["min_lot_size"] > config["max_lot_size"]:
+        errors.append("min_lot_size cannot exceed max_lot_size")
+    paper = config.get("paper_momentum")
+    if not isinstance(paper, dict):
+        errors.append("paper_momentum must be an object")
+    elif paper.get("enabled"):
+        if not config.get("momentum_enabled"):
+            errors.append("the Momentum paper portfolio requires the Momentum engine")
+        if float(paper.get("starting_capital", 0) or 0) <= 0 or int(paper.get("max_positions", 0) or 0) <= 0:
+            errors.append("paper Momentum capital and max positions must be greater than zero")
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
 def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
     owns_session = db is None
     if db is None:
         db = SessionLocal()
     try:
         rows = db.execute(select(AppSetting)).scalars().all()
-        payload = {section: values.copy() for section, values in DEFAULT_SETTINGS.items()}
+        payload = deepcopy(DEFAULT_SETTINGS)
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
+        _migrate_stock_etf(rows, payload["stock_etf"])
+        # Legacy rows remain in the database for rollback compatibility, but the
+        # public schema exposes one unambiguous namespace.
+        payload.pop("stock_etf_momentum", None)
+        payload.pop("stock_etf_wyckoff_smc", None)
         strategy = payload.setdefault("strategy", {})
         strategy["signal_execution_interval"] = "15m"
         strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy.get("signal_entry_rsi_timeframe"))
@@ -164,6 +251,16 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
             momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
         if MOMENTUM_CADENCE_KEY in momentum:
             momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum[MOMENTUM_CADENCE_KEY])
+
+    stock_etf = payload.get("stock_etf")
+    if isinstance(stock_etf, dict):
+        merged_stock_etf = deepcopy(DEFAULT_SETTINGS["stock_etf"])
+        merged_stock_etf.update(stock_etf)
+        merged_paper = deepcopy(DEFAULT_SETTINGS["stock_etf"]["paper_momentum"])
+        merged_paper.update(stock_etf.get("paper_momentum", {}))
+        merged_stock_etf["paper_momentum"] = merged_paper
+        validate_stock_etf_settings(merged_stock_etf)
+        payload["stock_etf"] = merged_stock_etf
 
     for category, values in payload.items():
         if not isinstance(values, dict):

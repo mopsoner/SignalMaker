@@ -3,7 +3,7 @@ import os
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
 
 
-def market_data_settings(repo):
+def market_data_settings(repo, stock_etf: dict | None = None):
     ibkr = get_ibkr_config()
     return {
         "primary_provider": "IBKR",
@@ -19,5 +19,6 @@ def market_data_settings(repo):
         "ibkr_history_period": ibkr.history_period,
         "ibkr_history_bar": ibkr.history_bar,
         "ibkr_use_rth": ibkr.use_regular_trading_hours,
+        "stock_etf": stock_etf or {},
         **repo.stats(),
     }

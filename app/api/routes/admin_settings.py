@@ -22,6 +22,7 @@ class SettingsPayload(BaseModel):
     bot: dict[str, Any] = {}
     live: dict[str, Any] = {}
     momentum: dict[str, Any] = {}
+    stock_etf: dict[str, Any] = {}
 
 
 @router.get('/admin/settings')
@@ -31,7 +32,10 @@ def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, dict[str, Any
 
 @router.put('/admin/settings')
 def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
-    return persist_runtime_settings(db, payload.model_dump())
+    try:
+        return persist_runtime_settings(db, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 _PRESERVED_APP_DATA_TABLES = {"app_settings"}

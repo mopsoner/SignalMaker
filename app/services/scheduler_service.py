@@ -91,8 +91,8 @@ class SchedulerService:
     async def feeder_completed(self, settings: dict, symbols: list[str]) -> list:
         """Queue analysis only for symbols for which a feeder stored new bars."""
         jobs = []
-        for workflow in ("stock_etf_wyckoff_smc", "stock_etf_momentum"):
-            job = await self.schedule_workflow(workflow, settings.get(workflow, {}), cause="feeder", symbols=symbols)
+        for workflow, config in self._workflow_configs(settings).items():
+            job = await self.schedule_workflow(workflow, config, cause="feeder", symbols=symbols)
             if job is not None:
                 jobs.append(job)
         return jobs
@@ -101,22 +101,34 @@ class SchedulerService:
         timeout = max(int(settings.get("scheduler", {}).get("abandoned_after_seconds", 900)), 1)
         recovered = await self.repo.recover_abandoned_analysis_jobs(timeout_seconds=timeout)
         queued = []
-        for workflow in ("stock_etf_wyckoff_smc", "stock_etf_momentum"):
-            job = await self.schedule_workflow(workflow, settings.get(workflow, {}))
+        for workflow, config in self._workflow_configs(settings).items():
+            job = await self.schedule_workflow(workflow, config)
             if job is not None:
                 queued.append(job)
         return {"queued": queued, "recovered": recovered}
+
+    @staticmethod
+    def _workflow_configs(settings: dict) -> dict[str, dict]:
+        stock = settings.get("stock_etf")
+        if not isinstance(stock, dict):
+            return {name: settings.get(name, {}) for name in ("stock_etf_wyckoff_smc", "stock_etf_momentum")}
+        common = {key: stock.get(key) for key in ("universes", "asset_types", "timeframes", "exchange_timezone", "market_open", "market_close", "timeout_seconds")}
+        return {
+            "stock_etf_wyckoff_smc": {**common, "engine": "wyckoff_smc", "enabled": stock.get("wyckoff_smc_enabled", False), "cadence_hours": stock.get("wyckoff_smc_cadence_hours", 1)},
+            "stock_etf_momentum": {**common, "engine": "momentum", "enabled": stock.get("momentum_enabled", False), "cadence_hours": stock.get("momentum_cadence_hours", 24)},
+        }
 
     async def status(self, settings: dict | None = None) -> dict:
         now = self._now()
         rows = await self.repo.job_requests(limit=200) if self.repo else []
         jobs = []
+        workflow_configs = self._workflow_configs(settings or {})
         for row in rows:
             payload = row.get("payload") or {}
             if isinstance(payload, str): payload = json.loads(payload or "{}")
             if row.get("job_type") != "analysis": continue
             workflow = payload.get("workflow")
-            cadence = float((settings or {}).get(workflow, {}).get("cadence_hours", 0))
+            cadence = float(workflow_configs.get(workflow, {}).get("cadence_hours", 0))
             finished = self._dt(row.get("finished_at"))
             next_run = finished + timedelta(hours=cadence) if finished and cadence else None
             jobs.append({"workflow": workflow, "status": row.get("status"),
