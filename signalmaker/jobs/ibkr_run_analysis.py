@@ -4,7 +4,7 @@ from signalmaker.market_data.repository import MarketDataRepository
 from signalmaker.market_data.analysis_adapter import MarketAnalysisAdapter
 
 async def main():
- p=argparse.ArgumentParser(); p.add_argument('--engine', choices=['momentum','wyckoff_smc','both'], default='both'); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--limit', type=int, default=50); p.add_argument('--timeframe', default='1d')
+ p=argparse.ArgumentParser(); p.add_argument('--engine', choices=['momentum','wyckoff_smc','both'], default='both'); p.add_argument('--universe'); p.add_argument('--asset-type'); p.add_argument('--limit', type=int, default=50); p.add_argument('--timeframe', default='15m')
  args=p.parse_args(); ok=fail=0
  with SessionLocal() as db:
   repo=MarketDataRepository(db); repo.ensure_schema(); adapter=MarketAnalysisAdapter(repo)
@@ -14,7 +14,7 @@ async def main():
   for asset in assets:
    for engine in engines:
     try:
-     result = await (adapter.run_momentum_analysis(asset['id'], args.timeframe) if engine=='momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], args.timeframe))
+     result = await (adapter.run_momentum_analysis(asset['id'], args.timeframe) if engine=='momentum' else adapter.run_wyckoff_smc_analysis(asset['id'], args.timeframe, asset=asset))
      await repo.insert_analysis_result(run_id, asset['id'], result['engine_name'], args.timeframe, result)
      ok+=1; print(f"OK {asset['provider_symbol']} {engine} {result['signal']}")
     except Exception as e:

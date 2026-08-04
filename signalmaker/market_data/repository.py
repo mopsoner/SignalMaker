@@ -415,10 +415,14 @@ class MarketDataRepository:
         self.db.execute(text("UPDATE market_analysis_runs SET status=:status,finished_at=CURRENT_TIMESTAMP,total_assets=:total_assets,success_count=:success_count,failed_count=:failed_count,error_message=:error_message WHERE id=:run_id"), locals())
 
     async def insert_analysis_result(self, analysis_run_id, asset_id, engine_name: str, timeframe: str, result: dict):
-        self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,signal,score,trend,confidence,payload) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:signal,:score,:trend,:confidence,:payload)"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload":json.dumps(result.get("payload", {}))})
+        payload = result.get("state_payload") or result.get("payload") or result
+        self.db.execute(text("INSERT INTO market_analysis_results (analysis_run_id,asset_id,engine_name,timeframe,signal,score,trend,confidence,payload) VALUES (:analysis_run_id,:asset_id,:engine_name,:timeframe,:signal,:score,:trend,:confidence,:payload)"), {"analysis_run_id":analysis_run_id,"asset_id":asset_id,"engine_name":engine_name,"timeframe":timeframe,"signal":result.get("signal"),"score":result.get("score"),"trend":result.get("trend"),"confidence":result.get("confidence"),"payload":json.dumps(payload)})
 
     async def load_stock_etf_candles_for_asset(self, asset_id, timeframe="1d"):
         return [_row(r) for r in self.db.execute(text("SELECT * FROM stock_etf_candles WHERE asset_id=:asset_id AND timeframe=:timeframe ORDER BY timestamp ASC"), {"asset_id": asset_id, "timeframe": timeframe}).all()]
+
+    async def load_stock_etf_candle_bundle(self, asset_id, timeframes=("15m", "1h", "4h")):
+        return {tf: await self.load_stock_etf_candles_for_asset(asset_id, tf) for tf in timeframes}
 
 
     async def list_market_universes(self):
@@ -462,7 +466,12 @@ class MarketDataRepository:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
         query = self._asset_filters(query, params, filters)
         query += " ORDER BY r.created_at DESC, a.priority ASC, a.symbol ASC LIMIT :limit"
-        return [_row(r) for r in self.db.execute(text(query), params).all()]
+        rows = [_row(r) for r in self.db.execute(text(query), params).all()]
+        for row in rows:
+            if isinstance(row.get("payload"), str):
+                row["payload"] = json.loads(row["payload"])
+            row["state_payload"] = row.get("payload") or {}
+        return rows
 
     async def last_import_run(self):
         row = self.db.execute(text("SELECT * FROM market_data_import_runs ORDER BY started_at DESC LIMIT 1")).first()
