@@ -1,11 +1,11 @@
 [Unit]
-Description=SignalMaker Scheduler Worker
+Description=SignalMaker stock/ETF analysis queue worker
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/signalmaker
-ExecStart=/bin/bash /opt/signalmaker/scripts/start_scheduler_worker.sh
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_market_analysis_worker.sh
 Restart=always
 RestartSec=5
 

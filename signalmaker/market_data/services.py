@@ -36,6 +36,15 @@ class MarketAnalysisJobConsumer:
             await self.repo.update_job_request(job["id"], terminal, result={**payload, "analysis_report": report})
             self._commit()
             return report
+        except asyncio.CancelledError:
+            # A SIGTERM during a deployment must release the durable claim.  The
+            # next worker can resume it instead of waiting for stale recovery.
+            self._rollback()
+            await self.repo.update_job_request(
+                job["id"], "queued", result={**payload, "last_error": "worker stopped gracefully"}
+            )
+            self._commit()
+            raise
         except Exception as exc:
             self._rollback()
             attempts = int(job.get("attempts") or 1)

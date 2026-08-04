@@ -1,0 +1,61 @@
+import asyncio
+from unittest.mock import Mock
+
+import pytest
+
+from app.services import worker_control_service as control
+from signalmaker.market_data.services import MarketAnalysisJobConsumer
+
+
+def test_only_exact_stable_worker_names_are_allowed(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    service = control.WorkerControlService()
+    assert set(control.WORKERS) == {"ibkr_ingestion", "stock_etf_analysis", "scheduler"}
+    for neighboring_name in ("crypto_scheduler", "scheduler_crypto", "stock_etf_analysis_crypto", "stock"):
+        with pytest.raises(ValueError, match="Unknown worker"):
+            service.start(neighboring_name)
+
+
+def test_double_start_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    process = Mock(pid=4242)
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(control.subprocess, "Popen", popen)
+    service = control.WorkerControlService()
+    monkeypatch.setattr(service, "_owns_pid", lambda name, pid: pid == 4242)
+    first = service.start("scheduler")
+    second = service.start("scheduler")
+    assert first["action"] == "started"
+    assert second == {"worker": "scheduler", "process_state": "running", "pid": 4242, "action": "noop"}
+    popen.assert_called_once()
+
+
+def test_stopping_current_job_requeues_claim_cleanly():
+    class DB:
+        def commit(self): pass
+        def rollback(self): pass
+
+    class Repo:
+        db = DB()
+        updates = []
+        async def claim_next_analysis_job(self, *_args, **_kwargs):
+            return {"id": 7, "attempts": 1, "payload": {"engine": "momentum"}}
+        async def heartbeat_job(self, *_args): return True
+        async def update_job_request(self, job_id, status, *, result=None):
+            self.updates.append((job_id, status, result))
+
+    class Service:
+        async def run(self, **_kwargs):
+            await asyncio.Event().wait()
+
+    async def scenario():
+        repo = Repo()
+        task = asyncio.create_task(MarketAnalysisJobConsumer(repo, service_factory=lambda *_a, **_k: Service()).consume_one())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert repo.updates[-1][0:2] == (7, "queued")
+        assert repo.updates[-1][2]["last_error"] == "worker stopped gracefully"
+
+    asyncio.run(scenario())
