@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 import logging
+import secrets
 from time import perf_counter
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from app.services.momentum_engine_service import MomentumEngineService
 from app.services.momentum_market import STOCK_ETF_CONTEXT
 from app.services.runtime_settings import load_runtime_settings
 from app.db.session import SessionLocal, rollback_and_close
+from app.core.config import settings
 from signalmaker.admin.env_settings import env_status
 from signalmaker.admin.market_data_settings import market_data_settings
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
@@ -134,6 +136,12 @@ def _repo(db: Session) -> MarketDataRepository:
     return MarketDataRepository(db)
 
 
+def require_operator(x_operator_key: str | None = Header(default=None)) -> None:
+    """Authenticate state-changing operator actions without leaking key details."""
+    if not x_operator_key or not secrets.compare_digest(x_operator_key, settings.admin_token):
+        raise HTTPException(status_code=403, detail="Operator authentication required")
+
+
 def _asset_filter_params(
     region: str | None = None, country: str | None = None,
     exchange_code: str | None = None, provider: str | None = None,
@@ -151,16 +159,61 @@ def get_env():
 
 @router.get('/admin/market-data')
 async def get_market_data(db: Session = Depends(get_db)):
+    """Lightweight polling snapshot; run histories live under ``/runs``."""
     repo = _repo(db)
     payload = market_data_settings(repo, load_runtime_settings(db)["stock_etf"])
     payload['universes'] = await repo.list_market_universes()
     payload['last_import_run'] = await repo.last_import_run()
     payload['last_analysis_run'] = await repo.last_analysis_run()
-    payload['import_runs'] = await repo.import_runs(limit=10)
-    payload['analysis_runs'] = await repo.analysis_runs(limit=10)
-    payload['job_requests'] = await repo.job_requests(limit=10)
     payload.update(await repo.feeder_status())
+    runs, _ = await repo.admin_runs(limit=6)
+    payload['operations'] = {
+        'feeder': next((run for run in runs if run['kind'] == 'import'), None),
+        'analyses': next((run for run in runs if run['kind'] == 'analysis'), None),
+        'queues': next((run for run in runs if run['kind'] == 'job'), None),
+        'workers': [run['heartbeat'] for run in runs if run['kind'] == 'job' and run['heartbeat']['worker_id']],
+    }
     return payload
+
+
+@router.get('/admin/market-data/runs')
+async def market_data_runs(
+    kind: Literal['import', 'analysis', 'job'] | None = None,
+    status: str | None = None, engine: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0, le=10_000),
+    db: Session = Depends(get_db),
+):
+    items, total = await _repo(db).admin_runs(
+        kind=kind, status=status, engine=engine, limit=limit, offset=offset,
+    )
+    return {'items': items, 'pagination': {'limit': limit, 'offset': offset, 'total': total}}
+
+
+@router.get('/admin/market-data/runs/{kind}/{run_id}')
+async def market_data_run(kind: Literal['import', 'analysis', 'job'], run_id: str,
+                          db: Session = Depends(get_db)):
+    run = await _repo(db).admin_run(kind, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail='Run not found')
+    return run
+
+
+@router.post('/admin/market-data/runs/{kind}/{run_id}/cancel', dependencies=[Depends(require_operator)])
+async def cancel_market_data_run(kind: Literal['import', 'analysis', 'job'], run_id: str,
+                                 db: Session = Depends(get_db)):
+    if not await _repo(db).cancel_admin_run(kind, run_id):
+        raise HTTPException(status_code=409, detail='Run cannot be cancelled from its current status')
+    db.commit()
+    return await _repo(db).admin_run(kind, run_id)
+
+
+@router.post('/admin/market-data/runs/{kind}/{run_id}/retry', dependencies=[Depends(require_operator)])
+async def retry_market_data_run(kind: Literal['import', 'analysis', 'job'], run_id: str,
+                                db: Session = Depends(get_db)):
+    if not await _repo(db).retry_admin_run(kind, run_id):
+        raise HTTPException(status_code=409, detail='Only retryable failed queue items can be retried')
+    db.commit()
+    return await _repo(db).admin_run(kind, run_id)
 
 
 @router.delete('/admin/market-data')
