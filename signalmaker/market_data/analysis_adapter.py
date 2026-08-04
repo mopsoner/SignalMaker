@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from signalmaker.market_data.repository import MarketDataRepository
-from app.services.wyckoff_pipeline_service import WyckoffPipelineService
 from app.services.momentum_service import MomentumService
+from app.services.shared_market_analysis_service import SharedMarketAnalysisService
 
 
 class MarketAnalysisAdapter:
@@ -79,31 +79,17 @@ class MarketAnalysisAdapter:
             }
         return [normalized[key] for key in sorted(normalized)]
 
-    async def run_momentum_analysis(self, asset_id, timeframe="1d"):
+    async def run_momentum_analysis(self, asset_id, timeframe="15m"):
+        self._validate_legacy_timeframe(timeframe)
         timeframes = MomentumService.INTERVALS
         raw_bundle = await self.load_stock_etf_candle_bundle(asset_id, timeframes)
         symbol = str(asset_id)
         bundle = {tf: self.normalize_engine_candles(raw_bundle.get(tf, []), symbol=symbol, timeframe=tf) for tf in timeframes}
-        missing = [tf for tf in timeframes if len(bundle[tf]) < MomentumService.LOOKBACKS[tf]]
-        if missing:
-            return self._insufficient_data("momentum", bundle, MomentumService.LOOKBACKS, missing, timeframe)
-        row = MomentumService.calculate_bundle(str(asset_id), bundle)
-        available = [tf for tf in timeframes if row[f"momentum_{tf}"] is not None]
-        timeframe_metadata = {
-            "market_type": "stock_etf", "requested_timeframe": timeframe,
-            "timeframe_mapping": {tf: (tf if tf in available else None) for tf in timeframes},
-            "unavailable_timeframes": [tf for tf in timeframes if tf not in available],
-        }
-        signal = "NO_SIGNAL" if not available else "BUY" if row["momentum_score"] >= 10 else "SELL" if row["momentum_score"] < -10 else "HOLD"
-        return {
-            "engine_name": "momentum", "signal": signal, "score": row["momentum_score"] if available else None,
-            "trend": row["classification"] if available else None,
-            "confidence": min(1.0, abs(row["momentum_score"]) / 25) if available else None,
-            "payload": {**row, **timeframe_metadata},
-        }
+        return self._run_shared(asset_id, "momentum", timeframe, bundle, {})
 
     async def run_wyckoff_smc_analysis(self, asset_id, timeframe="15m", *, asset: dict | None = None):
-        execution_timeframe = "15m" if timeframe in {"1d", "5m", "15m"} else timeframe
+        self._validate_legacy_timeframe(timeframe)
+        execution_timeframe = timeframe
         timeframes = tuple(dict.fromkeys((execution_timeframe, "1h", "4h")))
         if any(tf not in self.TIMEFRAME_MAPPING for tf in timeframes):
             return self._insufficient_data("wyckoff_smc", {}, self.WYCKOFF_MINIMUM_HISTORY, list(timeframes), timeframe)
@@ -116,25 +102,39 @@ class MarketAnalysisAdapter:
         context["asset_id"] = context.get("asset_id") or identity.get("id") or asset_id
         symbol = identity.get("provider_symbol") or identity.get("symbol") or str(asset_id)
         bundle = {tf: self.normalize_engine_candles(raw_bundle.get(tf, []), symbol=symbol, timeframe=tf) for tf in timeframes}
-        minimums = {tf: self.WYCKOFF_MINIMUM_HISTORY[tf] for tf in timeframes}
-        missing = [tf for tf in timeframes if len(bundle[tf]) < minimums[tf]]
-        if missing:
-            return self._insufficient_data("wyckoff_smc", bundle, minimums, missing, timeframe)
-        state, _assessment = WyckoffPipelineService().analyze(
-            symbol=symbol, candles=bundle, market_context=context, execution_interval=execution_timeframe
+        result = self._run_shared(asset_id, "wyckoff_smc", timeframe, bundle, context, symbol=symbol)
+        state = result.get("payload", {})
+        result["state_payload"] = state
+        result.update({key: state.get(key) for key in (
+            "bias", "hierarchy_gate", "wyckoff_requirement", "one_hour_decision", "confirmation_model",
+            "execution_trigger", "liquidity_context", "macro_liquidity_context",
+            "entry_liquidity_context", "projected_target", "execution_target")})
+        return result
+
+    def _run_shared(self, asset_id, engine, timeframe, bundle, context, *, symbol=None):
+        result = SharedMarketAnalysisService().run(
+            market_scope="stock_etf", asset_id=str(asset_id), engine=engine,
+            universe=context.get("universe_name"), asset_type=context.get("asset_type"),
+            timeframes=tuple(bundle), workflow_version="stock-etf-shared-v1",
+            candles=bundle, symbol=symbol or str(asset_id), market_context=context,
         )
-        bias = str(state.get("bias") or "neutral")
-        decision = "BUY" if bias.startswith("bull") else "SELL" if bias.startswith("bear") else "HOLD"
-        return {
-            "engine_name": "wyckoff_smc", "signal": decision, "score": state.get("score"),
-            "trend": state.get("state"), "confidence": state.get("confidence"),
-            "stage": state.get("stage"), "bias": state.get("bias"),
-            "state_payload": state, "payload": state,
-            **{key: state.get(key) for key in (
-                "hierarchy_gate", "wyckoff_requirement", "one_hour_decision", "confirmation_model",
-                "execution_trigger", "liquidity_context", "macro_liquidity_context",
-                "entry_liquidity_context", "projected_target", "execution_target")},
-        }
+        payload = result.get("payload", {})
+        missing = result.get("missing_timeframes", [])
+        payload.update({
+            "market_type": "stock_etf", "requested_timeframe": timeframe,
+            "timeframe_mapping": {tf: (None if tf in missing else tf) for tf in bundle},
+            "unavailable_timeframes": missing, "price_policy": self.CLOSE_PRICE_POLICY,
+        })
+        result["payload"] = payload
+        return result
+
+    @staticmethod
+    def _validate_legacy_timeframe(timeframe):
+        if timeframe not in {"15m", "1h", "4h"}:
+            raise ValueError(
+                f"legacy_analysis_timeframe:{timeframe}; migration required: "
+                "daily and 5m analysis are no longer supported; use the shared 15m/1h/4h workflow"
+            )
 
     def _no_signal(self, engine, count, minimum):
         return {"engine_name": engine, "signal": "NO_SIGNAL", "score": None, "trend": None, "confidence": None, "payload": {"reason": "NOT_ENOUGH_CANDLES", "candles_count": count, "minimum_candles": minimum}}

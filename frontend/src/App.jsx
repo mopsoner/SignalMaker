@@ -79,7 +79,7 @@ export default function App() {
           <Route path="/stocks-etfs/wyckoff" element={<StockEtfWyckoffDashboardPage />} />
           <Route path="/stocks-etfs/candidates" element={<StockEtfTradeCandidatesPage />} />
           <Route path="/stocks-etfs/positions" element={<StockEtfPositionsPage />} />
-          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumDashboardPage />} />
+          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumPage />} />
           <Route path="/stocks-etfs/data-quality" element={<StockEtfDataQualityPage />} />
           <Route path="/market-data-settings" element={<MarketDataAdminPage />} />
           <Route path="/settings" element={<AdminSettingsPage />} />
