@@ -12,7 +12,7 @@ import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import AssetDetailPage from './pages/AssetDetailPage'
 import MarketDataAdminPage from './pages/MarketDataAdminPage'
-import { StockEtfConfluencePage, StockEtfDataQualityPage, StockEtfPositionsPage, StockEtfTradeCandidatesPage, StockEtfWyckoffDashboardPage } from './pages/StockEtfPages'
+import { StockEtfDataQualityPage, StockEtfMomentumDashboardPage, StockEtfPositionsPage, StockEtfTradeCandidatesPage, StockEtfWyckoffDashboardPage } from './pages/StockEtfPages'
 
 const groupTitleStyle = {
   margin: '18px 0 8px',
@@ -56,7 +56,6 @@ export default function App() {
           <NavLink to="/stocks-etfs/candidates" onClick={closeMenu}>Trade Candidates</NavLink>
           <NavLink to="/stocks-etfs/positions" onClick={closeMenu}>Positions</NavLink>
           <NavLink to="/stocks-etfs/momentum" onClick={closeMenu}>Momentum Dashboard</NavLink>
-          <NavLink to="/stocks-etfs/confluence" onClick={closeMenu}>Confluence</NavLink>
           <NavLink to="/stocks-etfs/data-quality" onClick={closeMenu}>Data Quality</NavLink>
 
           <div style={groupTitleStyle}>Ops / Admin</div>
@@ -80,8 +79,7 @@ export default function App() {
           <Route path="/stocks-etfs/wyckoff" element={<StockEtfWyckoffDashboardPage />} />
           <Route path="/stocks-etfs/candidates" element={<StockEtfTradeCandidatesPage />} />
           <Route path="/stocks-etfs/positions" element={<StockEtfPositionsPage />} />
-          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumPage />} />
-          <Route path="/stocks-etfs/confluence" element={<StockEtfConfluencePage />} />
+          <Route path="/stocks-etfs/momentum" element={<StockEtfMomentumDashboardPage />} />
           <Route path="/stocks-etfs/data-quality" element={<StockEtfDataQualityPage />} />
           <Route path="/market-data-settings" element={<MarketDataAdminPage />} />
           <Route path="/settings" element={<AdminSettingsPage />} />
