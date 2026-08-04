@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -8,8 +8,10 @@ from app.models.base import Base
 
 class MomentumEngineCurrentDecision(Base):
     __tablename__ = "momentum_engine_current_decision"
+    __table_args__ = (Index("ux_momentum_engine_decision_scope", "market_scope", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market_scope: Mapped[str] = mapped_column(String(32), default="crypto", nullable=False)
     decision_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
     strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
     action: Mapped[str | None] = mapped_column(String(32), nullable=True)

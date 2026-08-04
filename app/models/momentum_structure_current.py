@@ -12,9 +12,11 @@ class MomentumStructureCurrent(Base):
         Index("ix_momentum_structure_status", "structure_15m_status"),
         Index("ix_momentum_structure_bias", "structure_15m_bias"),
         Index("ix_momentum_structure_calculated_at", "calculated_at"),
+        Index("ux_momentum_structure_scope_symbol", "market_scope", "symbol", unique=True),
     )
 
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    market_scope: Mapped[str] = mapped_column(String(32), primary_key=True, default="crypto", nullable=False)
     structure_15m_status: Mapped[str] = mapped_column(String(32), default="insufficient_data", nullable=False)
     structure_15m_bias: Mapped[str] = mapped_column(String(32), default="neutral", nullable=False)
     mss_15m_bearish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
