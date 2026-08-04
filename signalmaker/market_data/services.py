@@ -1,6 +1,7 @@
 """Workers for durable market-data requests."""
 import os
 import socket
+import asyncio
 
 from signalmaker.market_data.analysis_service import MarketAnalysisService
 
@@ -23,12 +24,13 @@ class MarketAnalysisJobConsumer:
         await self.repo.heartbeat_job(job["id"], self.worker_id)
         self._commit()
         try:
-            report = await self.service_factory(self.repo, market_scope="stock_etf").run(
+            timeout = max(int(payload.get("timeout_seconds") or 1800), 1)
+            report = await asyncio.wait_for(self.service_factory(self.repo, market_scope="stock_etf").run(
                 engine=payload.get("engine", "both"), universe=payload.get("universe"),
                 asset_type=payload.get("asset_type"), limit=int(payload.get("limit") or 50),
                 timeframe=(payload.get("timeframes") or [payload.get("timeframe", "15m")])[0],
                 symbols=payload.get("symbols"),
-            )
+            ), timeout=timeout)
             report["worker_id"] = self.worker_id
             terminal = "failed" if report["summary"]["failed"] and not report["summary"]["completed"] else "completed"
             await self.repo.update_job_request(job["id"], terminal, result={**payload, "analysis_report": report})
