@@ -45,10 +45,13 @@ CREATE TABLE IF NOT EXISTS market_analysis_runs (
 
 CREATE TABLE IF NOT EXISTS market_analysis_results (
   id BIGSERIAL PRIMARY KEY, analysis_run_id BIGINT NULL REFERENCES market_analysis_runs(id), asset_id UUID NOT NULL REFERENCES market_assets(id),
-  engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL,
-  payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now()
+  engine_name TEXT NOT NULL, timeframe TEXT NOT NULL, stage TEXT NULL, signal TEXT NULL, score NUMERIC NULL, trend TEXT NULL, confidence NUMERIC NULL,
+  payload_version INTEGER NOT NULL DEFAULT 1, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_market_analysis_results_asset_engine_time_created ON market_analysis_results(asset_id, engine_name, timeframe, created_at);
+CREATE INDEX IF NOT EXISTS idx_market_analysis_results_latest ON market_analysis_results(asset_id, engine_name, timeframe, payload_version, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_analysis_results_filters ON market_analysis_results(engine_name, stage, signal, timeframe, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_analysis_results_run ON market_analysis_results(analysis_run_id);
 
 CREATE TABLE IF NOT EXISTS market_data_job_requests (
     id BIGSERIAL PRIMARY KEY,
