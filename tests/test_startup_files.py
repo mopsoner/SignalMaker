@@ -16,6 +16,7 @@ def test_deployment_entrypoint_and_required_files_are_tracked() -> None:
         "scripts/run_executor_loop.py",
         "scripts/run_scheduler_loop.py",
         "scripts/run_kraken_candle_feed_loop.py",
+        "scripts/start_kraken_candle_feed_worker.sh",
     )
 
     missing = [path for path in required_files if not (REPOSITORY_ROOT / path).is_file()]
