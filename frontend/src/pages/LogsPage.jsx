@@ -3,8 +3,9 @@ import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
+import { isWorkerRunning, MANAGED_WORKERS } from '../lib/workerStatus'
 
-const WORKERS = ['pipeline', 'executor', 'scheduler', 'momentum_engine', 'momentum_backtest']
+const WORKERS = MANAGED_WORKERS
 
 function dot(running) {
   return (
@@ -20,13 +21,20 @@ function dot(running) {
   )
 }
 
-function WorkerCard({ name, info, onAction }) {
-  const running = info?.running ?? false
+function WorkerCard({ name, info, onAction, onError }) {
+  const running = isWorkerRunning(info)
   const [busy, setBusy] = useState(false)
 
   async function act(fn) {
     setBusy(true)
-    try { await fn() } finally { setBusy(false) }
+    try {
+      await fn()
+      await onAction()
+    } catch (error) {
+      onError(error?.message || String(error))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -44,13 +52,13 @@ function WorkerCard({ name, info, onAction }) {
           className="button"
           style={{ flex: 1, padding: '8px 10px', fontSize: 13, background: running ? 'var(--line)' : 'var(--green)', color: 'white' }}
           disabled={busy || running}
-          onClick={() => act(() => api.startWorker(name)).then(onAction)}
+          onClick={() => act(() => api.startWorker(name))}
         >Start</button>
         <button
           className="button"
           style={{ flex: 1, padding: '8px 10px', fontSize: 13, background: running ? 'var(--red)' : 'var(--line)', color: 'white' }}
           disabled={busy || !running}
-          onClick={() => act(() => api.stopWorker(name)).then(onAction)}
+          onClick={() => act(() => api.stopWorker(name))}
         >Stop</button>
       </div>
     </div>
@@ -192,6 +200,7 @@ function LogViewer({ worker }) {
 export default function LogsPage() {
   const [activeLog, setActiveLog] = useState('pipeline')
   const [refreshKey, setRefreshKey] = useState(0)
+  const [actionError, setActionError] = useState('')
 
   const workersLoader = useCallback(() => api.workerStatus(), [refreshKey])
   const runsLoader = useCallback(() => api.liveRuns('?limit=20'), [])
@@ -201,12 +210,13 @@ export default function LogsPage() {
 
   const workers = workersRaw || {}
 
-  function handleWorkerAction() {
+  async function handleWorkerAction() {
+    setActionError('')
     setRefreshKey((k) => k + 1)
-    setTimeout(refreshWorkers, 1000)
+    await refreshWorkers()
   }
 
-  const runningCount = WORKERS.filter((w) => workers[w]?.running).length
+  const runningCount = WORKERS.filter((w) => isWorkerRunning(workers[w])).length
 
   const tabStyle = (active) => ({
     padding: '8px 18px',
@@ -227,9 +237,17 @@ export default function LogsPage() {
         subtitle="Worker status, pipeline run history and live log tails."
       />
 
+      {actionError ? <div className="panel error" role="alert">{actionError}</div> : null}
+
       <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))' }}>
         {WORKERS.map((name) => (
-          <WorkerCard key={name} name={name} info={workers[name]} onAction={handleWorkerAction} />
+          <WorkerCard
+            key={name}
+            name={name}
+            info={workers[name]}
+            onAction={handleWorkerAction}
+            onError={setActionError}
+          />
         ))}
       </div>
 
@@ -246,7 +264,7 @@ export default function LogsPage() {
         <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
           {WORKERS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {dot(workers[w]?.running)}{w.replace('_', ' ')}
+              {dot(isWorkerRunning(workers[w]))}{w.replaceAll('_', ' ')}
             </button>
           ))}
         </div>

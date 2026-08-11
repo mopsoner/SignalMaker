@@ -92,7 +92,8 @@ class WorkerControlService:
             state, heartbeat = self._json(state_path), self._json(heartbeat_path)
             result[name] = {
                 "worker_id": name, "command": [sys.executable, "-m", definition["module"]],
-                "pid": pid if owned else None, "process_state": "running" if owned else "stopped",
+                "pid": pid if owned else None, "running": owned,
+                "process_state": "running" if owned else "stopped",
                 "heartbeat_at": heartbeat.get("at"), "started_at": state.get("started_at"),
                 "last_stopped_at": state.get("last_stopped_at"), "queue": self._queue_status(name),
             }
