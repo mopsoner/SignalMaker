@@ -2,7 +2,7 @@ import os
 from collections import deque
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -108,13 +108,24 @@ def stop_worker(worker_name: str) -> dict:
 
 
 
-_ALLOWED_WORKERS = {"ibkr_ingestion", "stock_etf_analysis", "scheduler"}
+# Log names are intentionally kept separate from the workers managed by
+# WorkerControlService.  The VM launcher owns these long-running application
+# processes, but the operations UI still needs to be able to tail their logs.
+_ALLOWED_LOG_WORKERS = {
+    "pipeline",
+    "executor",
+    "scheduler",
+    "momentum_engine",
+    "momentum_backtest",
+    "ibkr_ingestion",
+    "stock_etf_analysis",
+}
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 @router.get('/admin/logs/{worker_name}')
-def get_worker_logs(worker_name: str, lines: int = 200) -> dict:
-    if worker_name not in _ALLOWED_WORKERS:
+def get_worker_logs(worker_name: str, lines: int = Query(default=200, ge=1, le=2_000)) -> dict:
+    if worker_name not in _ALLOWED_LOG_WORKERS:
         raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
     candidates = [
         os.path.join(_ROOT, "logs", f"{worker_name}.log"),
