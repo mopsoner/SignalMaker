@@ -127,7 +127,7 @@ function LogViewer({ worker }) {
   const termRef = useRef(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const loader = useCallback(() => api.workerLogs(worker, 300), [worker])
-  const { data, loading, error, refresh } = usePollingQuery(loader, 5000)
+  const { data, loading, error, refresh } = usePollingQuery(loader, 15000)
 
   const lines = data?.lines || []
   const sizeKb = data?.size_bytes ? (data.size_bytes / 1024).toFixed(1) : null
@@ -205,8 +205,8 @@ export default function LogsPage() {
   const workersLoader = useCallback(() => api.workerStatus(), [refreshKey])
   const runsLoader = useCallback(() => api.liveRuns('?limit=20'), [])
 
-  const { data: workersRaw, refresh: refreshWorkers } = usePollingQuery(workersLoader, 6000)
-  const { data: runs = [] } = usePollingQuery(runsLoader, 10000)
+  const { data: workersRaw, refresh: refreshWorkers } = usePollingQuery(workersLoader, 15000)
+  const { data: runs = [] } = usePollingQuery(runsLoader, 30000)
 
   const workers = workersRaw || {}
 

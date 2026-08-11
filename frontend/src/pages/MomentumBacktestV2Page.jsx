@@ -33,11 +33,11 @@ function Chart({ data }) {
 }
 export default function MomentumBacktestV2Page() {
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [settings, setSettings] = useState(JSON.stringify(p3(), null, 2))
-  const { data: runs = [], refresh } = usePollingQuery(useCallback(() => bt.runs(), []), 6000)
+  const { data: runs = [], refresh } = usePollingQuery(useCallback(() => bt.runs(), []), 10000)
   const completed = runs.filter((r) => r.status === 'completed')
   const ids = completed.slice(0, 5).map((r) => r.run_id)
-  const { data: curves = [], refresh: refreshCurves } = usePollingQuery(useCallback(() => bt.compare(ids), [ids.join(',')]), 10000)
-  const { data: workers = {}, refresh: refreshWorkers } = usePollingQuery(useCallback(() => api.workerStatus(), []), 6000)
+  const { data: curves = [], refresh: refreshCurves } = usePollingQuery(useCallback(() => bt.compare(ids), [ids.join(',')]), 30000)
+  const { data: workers = {}, refresh: refreshWorkers } = usePollingQuery(useCallback(() => api.workerStatus(), []), 15000)
   const latest = runs[0]
   async function action(fn, ok) { setBusy(true); setMsg(''); try { await fn(); await refresh(); await refreshCurves(); setMsg(ok) } catch (e) { setMsg(e.message || String(e)) } finally { setBusy(false) } }
   const cols = [{ key: 'name', title: 'Name', render: (r) => r.settings?.name || r.run_id }, { key: 'status', title: 'Status' }, { key: 'total_pnl_pct', title: 'PnL %', render: (r) => r.total_pnl_pct == null ? '—' : n(r.total_pnl_pct) + '%' }, { key: 'max_drawdown_pct', title: 'DD %', render: (r) => r.max_drawdown_pct == null ? '—' : n(r.max_drawdown_pct) + '%' }, { key: 'trade_count', title: 'Trades' }, { key: 'winrate', title: 'Winrate', render: (r) => r.winrate == null ? '—' : n(r.winrate, 1) + '%' }, { key: 'profit_factor', title: 'PF', render: (r) => n(r.profit_factor) }]
