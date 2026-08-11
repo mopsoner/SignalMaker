@@ -10,7 +10,16 @@ from signalmaker.market_data.services import MarketAnalysisJobConsumer
 def test_only_exact_stable_worker_names_are_allowed(tmp_path, monkeypatch):
     monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
     service = control.WorkerControlService()
-    assert set(control.WORKERS) == {"ibkr_ingestion", "stock_etf_analysis", "scheduler"}
+    assert set(control.WORKERS) == {
+        "pipeline",
+        "executor",
+        "kraken_candle_feed",
+        "momentum_engine",
+        "momentum_backtest",
+        "ibkr_ingestion",
+        "stock_etf_analysis",
+        "scheduler",
+    }
     for neighboring_name in ("crypto_scheduler", "scheduler_crypto", "stock_etf_analysis_crypto", "stock"):
         with pytest.raises(ValueError, match="Unknown worker"):
             service.start(neighboring_name)

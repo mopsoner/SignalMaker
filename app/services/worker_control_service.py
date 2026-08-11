@@ -18,6 +18,11 @@ RUNTIME_DIR.mkdir(exist_ok=True)
 # Public, stable identifiers.  In particular none of these aliases resolve by
 # prefix, so an operation on a stock/ETF worker can never hit a crypto process.
 WORKERS = {
+    "pipeline": {"module": "scripts.run_pipeline_loop"},
+    "executor": {"module": "scripts.run_executor_loop"},
+    "kraken_candle_feed": {"module": "scripts.run_kraken_candle_feed_loop"},
+    "momentum_engine": {"module": "scripts.run_momentum_engine_loop"},
+    "momentum_backtest": {"module": "scripts.run_momentum_backtest_worker"},
     "ibkr_ingestion": {"module": "scripts.run_ibkr_ingestion_loop"},
     "stock_etf_analysis": {"module": "scripts.run_market_analysis_worker"},
     "scheduler": {"module": "scripts.run_scheduler_loop"},

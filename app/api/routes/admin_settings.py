@@ -117,6 +117,7 @@ _ALLOWED_LOG_WORKERS = {
     "scheduler",
     "momentum_engine",
     "momentum_backtest",
+    "kraken_candle_feed",
     "ibkr_ingestion",
     "stock_etf_analysis",
 }
