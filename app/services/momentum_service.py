@@ -28,6 +28,7 @@ class MomentumService:
     ACCELERATION_WEIGHT = 0.30
     ACCELERATION_CAP = 30.0
     ACCELERATION_WEIGHTS = {"15m": 0.20, "1h": 0.45, "4h": 0.35}
+    MARKET_SCOPE = "crypto"
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -78,7 +79,12 @@ class MomentumService:
     def _structure_map(self, symbols: list[str]) -> dict[str, MomentumStructureCurrent]:
         if not symbols:
             return {}
-        rows = self.db.scalars(select(MomentumStructureCurrent).where(MomentumStructureCurrent.symbol.in_(symbols))).all()
+        rows = self.db.scalars(
+            select(MomentumStructureCurrent).where(
+                MomentumStructureCurrent.symbol.in_(symbols),
+                MomentumStructureCurrent.market_scope == self.MARKET_SCOPE,
+            )
+        ).all()
         return {row.symbol: row for row in rows}
 
     def _row_to_payload(self, row: MomentumCurrent, rank: int, structure: MomentumStructureCurrent | None = None) -> dict[str, Any]:
@@ -160,9 +166,12 @@ class MomentumService:
         row.calculated_at = calculated_at
 
     def _upsert_structure(self, symbol: str, payload: dict[str, Any], *, calculated_at: datetime) -> None:
-        row = self.db.get(MomentumStructureCurrent, symbol)
+        # MomentumStructureCurrent is scoped by both symbol and market. Passing
+        # only the symbol makes SQLAlchemy reject the lookup before any candle
+        # analysis can be persisted.
+        row = self.db.get(MomentumStructureCurrent, (symbol, self.MARKET_SCOPE))
         if row is None:
-            row = MomentumStructureCurrent(symbol=symbol)
+            row = MomentumStructureCurrent(symbol=symbol, market_scope=self.MARKET_SCOPE)
             self.db.add(row)
         row.structure_15m_status = payload["structure_15m_status"]
         row.structure_15m_bias = payload["structure_15m_bias"]
@@ -219,6 +228,8 @@ class MomentumService:
             current_value = interval_payloads[interval]["momentum"]
             current_candle_time = interval_payloads[interval]["candle_time"]
             previous_candle_time = getattr(previous, f"momentum_candle_time_{interval}") if previous else None
+            current_candle_time = self._utc_datetime(current_candle_time)
+            previous_candle_time = self._utc_datetime(previous_candle_time)
             has_new_candle = (
                 current_candle_time is not None
                 and (previous_candle_time is None or current_candle_time > previous_candle_time)
@@ -441,19 +452,33 @@ class MomentumService:
         }
 
     def _closed_candles(self, candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now = datetime.now(timezone.utc)
+        now_ms = int(now.timestamp() * 1000)
         closed: list[dict[str, Any]] = []
         for candle in candles:
             close_time = candle.get("close_time")
             if close_time is None:
                 continue
             if isinstance(close_time, datetime):
-                if close_time <= datetime.now(timezone.utc):
+                if self._utc_datetime(close_time) <= now:
                     closed.append(candle)
                 continue
             if float(close_time) <= now_ms:
                 closed.append(candle)
         return closed
+
+    def _utc_datetime(self, value: datetime | None) -> datetime | None:
+        """Return comparable UTC timestamps from either DB or engine values.
+
+        Some database drivers return a naive value for a timezone-aware column.
+        Momentum must not abort its entire refresh when comparing that persisted
+        candle time with the aware timestamp calculated from the next candle.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _candle_time(self, candle: dict[str, Any]) -> datetime | None:
         value = candle.get("open_time") or candle.get("close_time")
