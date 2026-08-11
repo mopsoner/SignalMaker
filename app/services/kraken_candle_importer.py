@@ -91,6 +91,7 @@ def discover_kraken_pairs(
     *,
     quote_assets: list[str],
     margin_only: bool = True,
+    require_margin_sell: bool = False,
     max_symbols: int = 0,
     base_url: str = KRAKEN_BASE_URL,
 ) -> list[KrakenPair]:
@@ -111,7 +112,12 @@ def discover_kraken_pairs(
 
         leverage_buy = [int(x) for x in (pair.get("leverage_buy") or [])]
         leverage_sell = [int(x) for x in (pair.get("leverage_sell") or [])]
-        if margin_only and (not leverage_buy or not leverage_sell):
+        # Kraken can expose pairs that support leveraged buys but not leveraged
+        # sells.  The executor feed treated those as margin pairs by default and
+        # only excluded them when CANDLE_FEED_REQUIRE_MARGIN_SELL was enabled.
+        if margin_only and not leverage_buy:
+            continue
+        if margin_only and require_margin_sell and not leverage_sell:
             continue
 
         symbol = kraken_symbol_from_pair(pair_key, pair)
@@ -197,6 +203,8 @@ def fetch_kraken_ohlc(
         rows = rows[-limit:]
 
     candles = [candle_from_kraken_row(row, interval_minutes) for row in rows]
+    for candle in candles:
+        candle["provider_symbol"] = pair.altname or pair.pair_key
     if since_ms is not None:
         candles = [candle for candle in candles if int(candle["open_time"]) >= int(since_ms)]
     return candles
@@ -210,6 +218,7 @@ def import_kraken_candles(
     limit: int = 120,
     max_symbols: int = 0,
     margin_only: bool = True,
+    require_margin_sell: bool = False,
     base_url: str = KRAKEN_BASE_URL,
     requests_per_minute: int = 60,
 ) -> dict[str, Any]:
@@ -219,6 +228,7 @@ def import_kraken_candles(
     pairs = discover_kraken_pairs(
         quote_assets=quote_assets,
         margin_only=margin_only,
+        require_margin_sell=require_margin_sell,
         max_symbols=max_symbols,
         base_url=base_url,
     )
@@ -268,6 +278,7 @@ def import_kraken_candles(
         "quote_assets": quote_assets,
         "intervals": intervals,
         "margin_only": margin_only,
+        "require_margin_sell": require_margin_sell,
         "symbol_count": len(pairs),
         "pushed_count": len(pushed),
         "skipped_count": len(skipped),
