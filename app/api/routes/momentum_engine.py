@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
@@ -8,6 +8,7 @@ from app.api.deps import get_db
 from app.schemas.momentum_engine import MomentumEngineDecision, MomentumEngineRunRequest, MomentumEngineStatus
 from app.services.momentum_engine_service import MomentumEngineService
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
+from app.models.momentum_engine_current_decision import MomentumEngineDecisionHistory
 
 router = APIRouter()
 
@@ -37,6 +38,14 @@ def momentum_engine_decision(
     return MomentumEngineService(db).current_decision()
 
 
+@router.get("/decisions", response_model=list[MomentumEngineDecision])
+def momentum_engine_decisions(
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> list[MomentumEngineDecision]:
+    return MomentumEngineService(db).decision_history(limit=limit)
+
+
 @router.post("/run-once", response_model=MomentumEngineStatus)
 def momentum_engine_run_once(payload: MomentumEngineRunRequest, db: Session = Depends(get_db)) -> MomentumEngineStatus:
     return MomentumEngineService(db).run_once(
@@ -52,11 +61,13 @@ def clear_momentum_engine(db: Session = Depends(get_db)) -> dict:
     """Clear momentum paper-engine logs, chart events and positions."""
     deleted_trades = db.execute(delete(MomentumEngineTrade).where(MomentumEngineTrade.market_scope == "crypto")).rowcount or 0
     deleted_positions = db.execute(delete(MomentumEnginePosition).where(MomentumEnginePosition.market_scope == "crypto")).rowcount or 0
+    deleted_decisions = db.execute(delete(MomentumEngineDecisionHistory).where(MomentumEngineDecisionHistory.market_scope == "crypto")).rowcount or 0
     db.commit()
     return {
-        "deleted": deleted_trades + deleted_positions,
+        "deleted": deleted_trades + deleted_positions + deleted_decisions,
         "details": {
             "momentum_engine_trades": deleted_trades,
             "momentum_engine_positions": deleted_positions,
+            "momentum_engine_decisions": deleted_decisions,
         },
     }

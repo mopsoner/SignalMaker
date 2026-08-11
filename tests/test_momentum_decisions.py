@@ -12,6 +12,16 @@ def test_momentum_engine_decision_route_is_registered() -> None:
     assert "GET" in route.methods
 
 
+def test_momentum_engine_decision_history_route_is_registered() -> None:
+    route = next(
+        route
+        for route in momentum_engine_route.router.routes
+        if getattr(route, "path", None) == "/decisions"
+    )
+
+    assert "GET" in route.methods
+
+
 def test_momentum_candidates_route_is_not_registered() -> None:
     paths = {getattr(route, "path", "") for route in api_router.routes}
 
