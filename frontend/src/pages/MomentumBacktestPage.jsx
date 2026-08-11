@@ -47,13 +47,13 @@ export default function MomentumBacktestPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const latestLoader = useCallback(() => api.momentumBacktestLatest(), [])
-  const { data: run, error, refresh } = usePollingQuery(latestLoader, 5000)
+  const { data: run, error, refresh } = usePollingQuery(latestLoader, 10000)
   const runId = run?.run_id
   const tradesLoader = useCallback(() => runId ? api.momentumBacktestTrades(runId, 300) : Promise.resolve([]), [runId])
   const equityLoader = useCallback(() => runId ? api.momentumBacktestEquity(runId, 1000) : Promise.resolve([]), [runId])
-  const { data: trades = [], refresh: refreshTrades } = usePollingQuery(tradesLoader, 8000)
-  const { data: equity = [], refresh: refreshEquity } = usePollingQuery(equityLoader, 8000)
-  const { data: workers = {}, refresh: refreshWorkers } = usePollingQuery(useCallback(() => api.workerStatus(), []), 6000)
+  const { data: trades = [], refresh: refreshTrades } = usePollingQuery(tradesLoader, 30000)
+  const { data: equity = [], refresh: refreshEquity } = usePollingQuery(equityLoader, 30000)
+  const { data: workers = {}, refresh: refreshWorkers } = usePollingQuery(useCallback(() => api.workerStatus(), []), 15000)
 
   useEffect(() => {
     if (runId) {

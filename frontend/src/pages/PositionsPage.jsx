@@ -110,9 +110,9 @@ function PnlMetricCard({ label, value, hint, toneValue, suffix = '', decimals = 
 export default function PositionsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=1000'), []), 10000)
-  const { data: pnlSummary = EMPTY_PNL_SUMMARY, loading: summaryLoading, error: summaryError } = usePollingQuery(useCallback(() => api.positionsSummary(), []), 10000)
-  const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 10000)
+  const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=1000'), []), 15000)
+  const { data: pnlSummary = EMPTY_PNL_SUMMARY, loading: summaryLoading, error: summaryError } = usePollingQuery(useCallback(() => api.positionsSummary(), []), 30000)
+  const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 15000)
 
   async function runExecutor() {
     setBusy(true); setMessage('')

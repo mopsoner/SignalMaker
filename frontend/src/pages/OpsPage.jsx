@@ -18,13 +18,13 @@ function objectToRows(obj) {
 }
 
 export default function OpsPage() {
-  const { data: health, error: healthError } = usePollingQuery(useCallback(() => api.health(), []), 10000)
-  const { data: services } = usePollingQuery(useCallback(() => api.services(), []), 10000)
-  const { data: fills = [] } = usePollingQuery(useCallback(() => api.fills('?limit=50'), []), 10000)
-  const { data: candles = [] } = usePollingQuery(useCallback(() => api.candles('?latest=true&limit=200'), []), 10000)
+  const { data: health, error: healthError } = usePollingQuery(useCallback(() => api.health(), []), 15000)
+  const { data: services } = usePollingQuery(useCallback(() => api.services(), []), 15000)
+  const { data: fills = [] } = usePollingQuery(useCallback(() => api.fills('?limit=50'), []), 30000)
+  const { data: candles = [] } = usePollingQuery(useCallback(() => api.candles('?latest=true&limit=200'), []), 30000)
   const { data: summary = [] } = usePollingQuery(useCallback(() => api.candleSummary(), []), 30000)
   const { data: liveRuns = [] } = usePollingQuery(useCallback(() => api.liveRuns('?limit=10'), []), 15000)
-  const { data: workers = {} } = usePollingQuery(useCallback(() => api.workerStatus(), []), 10000)
+  const { data: workers = {} } = usePollingQuery(useCallback(() => api.workerStatus(), []), 15000)
 
   const serviceRows = services ? Object.entries(services).map(([name, meta]) => ({ id: name, name, ...meta })) : []
   const workerRows = Object.entries(workers || {}).map(([name, meta]) => ({ id: name, name, ...meta }))
