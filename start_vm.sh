@@ -17,18 +17,21 @@ elif [ -n "${PGHOST:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ] &&
   export DATABASE_URL="postgresql+psycopg://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT:-5432}/${PGDATABASE}?sslmode=${_SSLMODE}"
 fi
 
-mkdir -p .runtime logs
+RUNTIME_DIR="$PWD/.runtime"
+export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$PWD/logs}"
+LOG_DIR="$SIGNALMAKER_LOG_DIR"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 python -m scripts.init_db
 
-python -m scripts.run_pipeline_loop >> logs/pipeline.log 2>&1 &
-echo $! > .runtime/pipeline.pid
+python -m scripts.run_pipeline_loop >> "$LOG_DIR/pipeline.log" 2>&1 &
+echo $! > "$RUNTIME_DIR/pipeline.pid"
 
-python -m scripts.run_executor_loop >> logs/executor.log 2>&1 &
-echo $! > .runtime/executor.pid
+python -m scripts.run_executor_loop >> "$LOG_DIR/executor.log" 2>&1 &
+echo $! > "$RUNTIME_DIR/executor.pid"
 
-python -m scripts.run_scheduler_loop >> logs/scheduler.log 2>&1 &
-echo $! > .runtime/scheduler.pid
+python -m scripts.run_scheduler_loop >> "$LOG_DIR/scheduler.log" 2>&1 &
+echo $! > "$RUNTIME_DIR/scheduler.pid"
 
 echo "Workers started — launching API on port ${APP_PORT:-5000}"
 exec uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT:-5000}
