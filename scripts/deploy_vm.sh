@@ -20,7 +20,8 @@ fi
 source .venv/bin/activate
 .venv/bin/pip install -q -r requirements.txt
 
-mkdir -p logs data
+LOG_DIR="${SIGNALMAKER_LOG_DIR:-$APP_DIR/logs}"
+mkdir -p "$LOG_DIR" data
 
 if [ -n "${PGHOST:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ] && [ -n "${PGDATABASE:-}" ]; then
   _SSLMODE="${PGSSLMODE:-disable}"

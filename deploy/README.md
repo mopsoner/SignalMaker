@@ -11,6 +11,10 @@ Copy `.env.production.example` to `.env` and edit the database credentials.
 ## systemd templates
 Files are provided under `deploy/systemd/`.
 Adjust the working directory if needed, then copy them to `/etc/systemd/system/`.
+The units use `/opt/signalmaker/logs` for both worker output streams and configure
+the API to read that same directory. Run `scripts/deploy_vm.sh` as the systemd
+service user (root by default) first so the directory exists and is writable; if
+you add a custom `User=`, change the directory ownership to that user.
 
 Example:
 ```bash

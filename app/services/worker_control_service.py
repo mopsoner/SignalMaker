@@ -11,6 +11,8 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from app.core.logging import get_log_dir
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = ROOT_DIR / ".runtime"
 RUNTIME_DIR.mkdir(exist_ok=True)
@@ -34,6 +36,8 @@ def _utc_now() -> str:
 
 
 class WorkerControlService:
+    WORKERS = WORKERS
+
     def __init__(self, db=None, *, stop_timeout: float = 10.0):
         self.db = db
         self.stop_timeout = stop_timeout
@@ -101,7 +105,10 @@ class WorkerControlService:
 
     def start(self, name: str) -> dict:
         definition = self._definition(name)
-        pid_file, log_file, state_file, _ = self._paths(name)
+        pid_file, _, state_file, _ = self._paths(name)
+        log_dir = get_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{name}.log"
         pid = self._read_pid(name)
         if self._owns_pid(name, pid):
             return {"worker": name, "process_state": "running", "pid": pid, "action": "noop"}
