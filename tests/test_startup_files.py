@@ -32,6 +32,22 @@ def test_run_script_exposes_kraken_candle_feed_modes() -> None:
     assert "python -m scripts.run_kraken_candle_feed_loop" in run_script
 
 
+def test_example_env_configures_kraken_candle_feed() -> None:
+    example_env = (REPOSITORY_ROOT / ".env.example").read_text(encoding="utf-8")
+
+    expected_settings = (
+        "KRAKEN_CANDLE_FEED_ENABLED=true",
+        "KRAKEN_CANDLE_FEED_POLL_SECONDS=600",
+        "KRAKEN_CANDLE_FEED_INTERVALS=15m,1h,4h",
+        "KRAKEN_CANDLE_FEED_QUOTE_ASSETS=USD,USDC",
+        "KRAKEN_CANDLE_FEED_LIMIT=120",
+        "KRAKEN_CANDLE_FEED_MAX_SYMBOLS=20",
+        "KRAKEN_CANDLE_FEED_MARGIN_ONLY=false",
+    )
+
+    assert all(setting in example_env.splitlines() for setting in expected_settings)
+
+
 def test_replit_deployment_uses_the_reserved_vm_entrypoint() -> None:
     replit_config = (REPOSITORY_ROOT / ".replit").read_text(encoding="utf-8")
 
