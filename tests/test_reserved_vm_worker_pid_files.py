@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 WORKER_CONTROL_SERVICE = ROOT_DIR / "app/services/worker_control_service.py"
 RESERVED_VM_SCRIPT = ROOT_DIR / "scripts/start_reserved_vm.sh"
+LEGACY_VM_SCRIPT = ROOT_DIR / "start_vm.sh"
 
 
 def _configured_worker_names() -> set[str]:
@@ -60,3 +61,11 @@ def test_reserved_vm_redirects_both_streams_to_configured_log_directory() -> Non
 
     assert 'export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$APP_DIR/logs}"' in script
     assert 'bash "$script" >> "$LOG_DIR/$name.log" 2>&1 &' in script
+
+
+def test_legacy_vm_entrypoint_uses_the_shared_log_directory_configuration() -> None:
+    script = LEGACY_VM_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$PWD/logs}"' in script
+    for worker in ("pipeline", "executor", "scheduler"):
+        assert f'>> "$LOG_DIR/{worker}.log" 2>&1 &' in script
