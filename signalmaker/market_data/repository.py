@@ -62,6 +62,10 @@ class MarketDataRepository:
         if dialect == "sqlite":
             stmts = _SQLITE_SCHEMA
         else:
+            # CREATE EXTENSION IF NOT EXISTS is not concurrency-safe internally:
+            # two fresh PostgreSQL sessions can race while inserting pg_extension.
+            # Keep the transaction-level lock until the schema transaction commits.
+            self._ensure_pgcrypto()
             stmts = _POSTGRES_SCHEMA
         for stmt in stmts:
             self.db.execute(text(stmt))
@@ -72,6 +76,13 @@ class MarketDataRepository:
         self._ensure_analysis_result_indexes()
         self._ensure_run_history_indexes()
         self.db.commit()
+
+    def _ensure_pgcrypto(self) -> None:
+        """Serialize pgcrypto installation across API and worker processes."""
+        self.db.execute(text(
+            "SELECT pg_advisory_xact_lock(hashtext('signalmaker.pgcrypto'))"
+        ))
+        self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
 
     def _ensure_run_history_indexes(self) -> None:
         """Keep bounded admin history/status polling on indexed columns."""
@@ -168,13 +179,13 @@ class MarketDataRepository:
         types = {str(column["data_type"]).lower(), str(column["udt_name"]).lower()}
         qualified_column = f'"{table_name}"."{id_column}"'
         if types & {"varchar", "text", "character varying"}:
-            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            self._ensure_pgcrypto()
             self.db.execute(text(
                 f'ALTER TABLE "{table_name}" ALTER COLUMN "{id_column}" '
                 "SET DEFAULT gen_random_uuid()::text"
             ))
         elif "uuid" in types:
-            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            self._ensure_pgcrypto()
             self.db.execute(text(
                 f'ALTER TABLE "{table_name}" ALTER COLUMN "{id_column}" '
                 "SET DEFAULT gen_random_uuid()"
@@ -852,7 +863,6 @@ class MarketDataRepository:
         return {"total_universes": scalar("SELECT COUNT(*) FROM market_universes"), "total_assets": scalar("SELECT COUNT(*) FROM market_assets"), "total_candles": scalar("SELECT COUNT(*) FROM stock_etf_candles")}
 
 _POSTGRES_SCHEMA = [
-"CREATE EXTENSION IF NOT EXISTS pgcrypto",
 "CREATE TABLE IF NOT EXISTS market_universes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, description TEXT NULL, region TEXT NULL, asset_type TEXT NULL, currency TEXT NULL, provider TEXT NOT NULL DEFAULT 'IBKR', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now())",
 "CREATE TABLE IF NOT EXISTS market_assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), universe_id UUID NULL REFERENCES market_universes(id), symbol TEXT NOT NULL, provider_symbol TEXT NOT NULL, exchange_code TEXT NULL, name TEXT NULL, asset_type TEXT NOT NULL, region TEXT NULL, country TEXT NULL, currency TEXT NULL, isin TEXT NULL, mic TEXT NULL, pea_eligible BOOLEAN NOT NULL DEFAULT FALSE, ucits BOOLEAN NOT NULL DEFAULT FALSE, provider TEXT NOT NULL DEFAULT 'IBKR', metadata JSONB NULL DEFAULT '{}'::jsonb, enabled BOOLEAN NOT NULL DEFAULT TRUE, priority INTEGER NOT NULL DEFAULT 100, last_synced_at TIMESTAMP NULL, last_error TEXT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), updated_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE(provider_symbol, asset_type))",
 "CREATE TABLE IF NOT EXISTS market_data_import_runs (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, run_type TEXT NOT NULL, status TEXT NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), finished_at TIMESTAMP NULL, total_assets INTEGER DEFAULT 0, success_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, error_message TEXT NULL, metadata JSONB NULL)",
