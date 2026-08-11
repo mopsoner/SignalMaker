@@ -30,6 +30,11 @@ def main() -> int:
     margin_group = parser.add_mutually_exclusive_group()
     margin_group.add_argument("--margin-only", dest="margin_only", action="store_true", default=True, help="Import only Kraken margin-eligible pairs. Default.")
     margin_group.add_argument("--include-spot", dest="margin_only", action="store_false", help="Include all spot pairs for the selected quotes.")
+    parser.add_argument(
+        "--require-margin-sell",
+        action="store_true",
+        help="Exclude long-only margin pairs that do not advertise leveraged sells.",
+    )
 
     args = parser.parse_args()
 
@@ -42,6 +47,7 @@ def main() -> int:
             limit=args.limit,
             max_symbols=args.max_symbols,
             margin_only=args.margin_only,
+            require_margin_sell=args.require_margin_sell,
             base_url=args.base_url,
             requests_per_minute=args.requests_per_minute,
         )
