@@ -190,6 +190,10 @@ class MarketDataService:
                     "number_of_trades": row.number_of_trades,
                     "taker_buy_base_volume": row.taker_buy_base_volume,
                     "taker_buy_quote_volume": row.taker_buy_quote_volume,
+                    # Momentum uses the source ingestion time as its freshness
+                    # marker.  Dropping it here made a successfully calculated
+                    # row look as though it had never consumed a candle.
+                    "ingested_at": row.ingested_at,
                 }
                 for row in rows
             ]

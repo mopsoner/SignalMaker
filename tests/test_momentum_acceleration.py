@@ -31,8 +31,12 @@ def payload(momentum, candle_time=BASE_CANDLE_TIME):
     }
 
 
-def build_row(values, previous=None):
-    service = DummyMomentumService([payload(v) for v in values])
+def build_row(values, previous=None, candle_times=None):
+    candle_times = candle_times or [BASE_CANDLE_TIME] * len(values)
+    service = DummyMomentumService([
+        payload(value, candle_time)
+        for value, candle_time in zip(values, candle_times)
+    ])
     return service._build_symbol_row("BTCUSD", previous=previous)
 
 
@@ -221,3 +225,32 @@ def test_interval_momentum_ignores_open_candle():
     ])
     assert result["price"] == 110.0
     assert result["candle_time"] == datetime.fromtimestamp(closed_open / 1000, tz=timezone.utc)
+
+
+def test_interval_momentum_accepts_naive_database_close_times():
+    service = MomentumService.__new__(MomentumService)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    result = service._interval_momentum([
+        {"open_time": now - timedelta(minutes=30), "close_time": now - timedelta(minutes=15), "close": 100.0},
+        {"open_time": now - timedelta(minutes=15), "close_time": now - timedelta(seconds=1), "close": 110.0},
+    ])
+
+    assert result["price"] == 110.0
+
+
+def test_persisted_naive_candle_time_does_not_block_new_candle_analysis():
+    previous_row = previous(
+        momentum_15m=10.0,
+        momentum_candle_time_15m=BASE_CANDLE_TIME.replace(tzinfo=None),
+    )
+    new_candle_time = BASE_CANDLE_TIME + timedelta(minutes=15)
+
+    row = build_row(
+        [12.0, None, None],
+        previous_row,
+        candle_times=[new_candle_time, None, None],
+    )
+
+    assert row["updated_timeframes"] == ["15m"]
+    assert row["momentum_candle_time_15m"] == new_candle_time
