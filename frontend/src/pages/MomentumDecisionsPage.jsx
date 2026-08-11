@@ -13,15 +13,15 @@ function safeText(value) {
   return String(value)
 }
 
-function decisionRows(decision) {
-  if (!decision || typeof decision !== 'object') return []
-  return [decision]
+function decisionRows(decisions) {
+  return Array.isArray(decisions) ? decisions : []
 }
 
 export default function MomentumDecisionsPage() {
-  const loadDecision = useCallback(() => api.momentumDecision(), [])
-  const { data: decision, loading, error } = usePollingQuery(loadDecision, 60 * 1000)
-  const rows = decisionRows(decision)
+  const loadDecisions = useCallback(() => api.momentumDecisions(), [])
+  const { data: decisions, loading, error } = usePollingQuery(loadDecisions, 60 * 1000)
+  const rows = decisionRows(decisions)
+  const decision = rows[0]
 
   const columns = [
     { key: 'produced_at', title: 'Produced at', render: (row) => fmtDate(row.produced_at), sortValue: (row) => row.produced_at || '' },
@@ -44,7 +44,7 @@ export default function MomentumDecisionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Momentum Decisions" subtitle="Current persisted momentum-engine decision from /api/v1/momentum-engine/decision. Historical decision storage should use a separate backend history table in a distinct task." />
+    <PageHeader title="Momentum Decisions" subtitle="Complete persisted momentum-engine decision history, newest first." />
     <div className="stats-grid">
       <StatCard label="Current action" value={safeText(decision?.action)} hint={decision?.produced_at ? `Produced ${fmtDate(decision.produced_at)}` : 'No produced_at persisted'} />
       <StatCard label="Should trade" value={safeText(decision?.should_trade)} hint={safeText(decision?.status)} />
@@ -53,6 +53,6 @@ export default function MomentumDecisionsPage() {
     </div>
     {loading ? <div className="panel">Loading momentum decision…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
-    <FoldableTable title="Current persisted momentum decision" columns={columns} rows={rows} empty="No persisted momentum decision yet" paginated={false} />
+    <FoldableTable title="All persisted momentum decisions" columns={columns} rows={rows} empty="No persisted momentum decision yet" defaultSortKey="produced_at" defaultSortDir="desc" paginated initialPageSize={50} />
   </div>
 }

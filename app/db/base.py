@@ -14,7 +14,7 @@ from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTra
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_structure_current import MomentumStructureCurrent
 from app.models.momentum_backtest import MomentumBacktestRun, MomentumBacktestTrade, MomentumBacktestEquity
-from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
+from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision, MomentumEngineDecisionHistory
 
 
 def init_db() -> None:

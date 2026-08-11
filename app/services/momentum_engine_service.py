@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.market_candle import MarketCandle
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
-from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
+from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision, MomentumEngineDecisionHistory
 from app.services.momentum_service import MomentumService
 from app.services.momentum_market import CandleLoader, CRYPTO_CONTEXT, MomentumMarketContext, RankingLoader
 
@@ -75,6 +75,22 @@ class MomentumEngineService:
         if current and isinstance(current.payload_json, dict) and current.payload_json:
             return current.payload_json
         return self._empty_current_decision()
+
+    def decision_history(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Return persisted decisions, newest first."""
+        rows = self.db.scalars(
+            select(MomentumEngineDecisionHistory)
+            .where(MomentumEngineDecisionHistory.market_scope == self.market_scope)
+            .order_by(MomentumEngineDecisionHistory.produced_at.desc(), MomentumEngineDecisionHistory.id.desc())
+            .limit(limit)
+        ).all()
+        history = [row.payload_json for row in rows if isinstance(row.payload_json, dict)]
+        if history:
+            return history
+        current = self.db.scalar(select(MomentumEngineCurrentDecision).where(
+            MomentumEngineCurrentDecision.market_scope == self.market_scope
+        ))
+        return [current.payload_json] if current and isinstance(current.payload_json, dict) and current.payload_json else []
 
     def _empty_current_decision(self) -> dict[str, Any]:
         """Return a stable executor-compatible fallback when no current snapshot exists."""
@@ -460,7 +476,9 @@ class MomentumEngineService:
         else:
             parsed_produced_at = now
 
-        row.decision_id = str(decision.get("decision_id") or f"momentum-current-{uuid4().hex}")
+        decision_id = str(decision.get("decision_id") or f"momentum-{uuid4().hex}")
+        decision["decision_id"] = decision_id
+        row.decision_id = decision_id
         row.strategy = decision.get("strategy")
         row.action = action
         row.decision_action = decision.get("decision_action")
@@ -475,6 +493,12 @@ class MomentumEngineService:
         row.payload_json = decision
         row.produced_at = parsed_produced_at
         row.updated_at = now
+        self.db.add(MomentumEngineDecisionHistory(
+            market_scope=self.market_scope,
+            decision_id=decision_id,
+            payload_json=decision,
+            produced_at=parsed_produced_at,
+        ))
         self.db.flush()
         return decision
 
@@ -685,10 +709,17 @@ class MomentumEngineService:
 
     def _latest_market_price(self, symbol: str) -> tuple[float, str] | None:
         normalized = symbol.upper()
+        # The 15-minute feed is the price reference for execution. A newly
+        # closed 1h/4h candle can otherwise appear newer while carrying a less
+        # granular price than the latest available 15m close.
         stmt = (
             select(MarketCandle.close, MarketCandle.interval)
             .where(MarketCandle.symbol == normalized, MarketCandle.close > 0)
-            .order_by(MarketCandle.close_time.desc(), MarketCandle.open_time.desc())
+            .order_by(
+                case((MarketCandle.interval == "15m", 0), else_=1),
+                MarketCandle.close_time.desc(),
+                MarketCandle.open_time.desc(),
+            )
             .limit(1)
         )
         row = self.db.execute(stmt).first()

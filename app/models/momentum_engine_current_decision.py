@@ -31,3 +31,16 @@ class MomentumEngineCurrentDecision(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class MomentumEngineDecisionHistory(Base):
+    __tablename__ = "momentum_engine_decision_history"
+    __table_args__ = (
+        Index("ix_momentum_engine_decision_history_scope_produced", "market_scope", "produced_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_scope: Mapped[str] = mapped_column(String(32), default="crypto", nullable=False)
+    decision_id: Mapped[str] = mapped_column(String(96), unique=True, nullable=False)
+    payload_json: Mapped[dict | list] = mapped_column(JSON, nullable=False)
+    produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

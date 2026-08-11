@@ -12,7 +12,7 @@ from app.models.base import Base
 from app.models.market_candle import MarketCandle
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
-from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision
+from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision, MomentumEngineDecisionHistory
 from app.models.momentum_structure_current import MomentumStructureCurrent
 from app.services.momentum_engine_service import MomentumEngineService
 
@@ -312,14 +312,14 @@ def test_hold_trade_records_mark_to_market_pnl_with_latest_market_price() -> Non
         ).one()
         position = db.get(MomentumEnginePosition, "pos-1")
 
-    assert hold_trade.price == 130.0
-    assert hold_trade.value == 130.0
-    assert hold_trade.pnl == 30.0
-    assert hold_trade.pnl_pct == 30.0
-    assert hold_trade.price_source == "market_candle:1h"
+    assert hold_trade.price == 125.0
+    assert hold_trade.value == 125.0
+    assert hold_trade.pnl == 25.0
+    assert hold_trade.pnl_pct == 25.0
+    assert hold_trade.price_source == "market_candle:15m"
     assert position is not None
-    assert position.mark_price == 130.0
-    assert position.unrealized_pnl == 30.0
+    assert position.mark_price == 125.0
+    assert position.unrealized_pnl == 25.0
 
 
 def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_price() -> (
@@ -378,10 +378,10 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
             )
         ).one()
 
-    assert position.entry_price == 130.0
-    assert position.quantity == pytest.approx(240.0 / 130.0)
-    assert trade.price == 130.0
-    assert trade.price_source == "market_candle:4h"
+    assert position.entry_price == 120.0
+    assert position.quantity == pytest.approx(240.0 / 120.0)
+    assert trade.price == 120.0
+    assert trade.price_source == "market_candle:15m"
 
 
 def test_decision_buy_does_not_write_trade() -> None:
