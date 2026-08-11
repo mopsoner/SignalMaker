@@ -63,8 +63,14 @@ PY
   scheduler-loop)
     python -m scripts.run_scheduler_loop
     ;;
+  kraken-candle-feed-once)
+    python -m scripts.run_kraken_candle_feed_loop --once
+    ;;
+  kraken-candle-feed-loop)
+    python -m scripts.run_kraken_candle_feed_loop
+    ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop]"
     exit 1
     ;;
 esac
