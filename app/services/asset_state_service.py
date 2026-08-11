@@ -15,9 +15,34 @@ class AssetStateService:
         self.db = db
         self._ensure_15m_columns()
 
+    def _column_exists(self, table_name: str, column_name: str) -> bool:
+        result = self.db.execute(
+            text(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = :table_name
+                  AND column_name = :column_name
+                LIMIT 1
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        ).first()
+        return result is not None
+
     def _ensure_15m_columns(self) -> None:
         self.db.execute(text("ALTER TABLE asset_state_current ADD COLUMN IF NOT EXISTS rsi_15m DOUBLE PRECISION"))
-        self.db.execute(text("UPDATE asset_state_current SET rsi_15m = rsi_5m WHERE rsi_15m IS NULL AND rsi_5m IS NOT NULL"))
+        if self._column_exists("asset_state_current", "rsi_5m"):
+            self.db.execute(
+                text(
+                    """
+                    UPDATE asset_state_current
+                    SET rsi_15m = rsi_5m
+                    WHERE rsi_15m IS NULL
+                      AND rsi_5m IS NOT NULL
+                    """
+                )
+            )
         self.db.commit()
 
     def list_assets(self, *, limit: int | None, min_score: float | None, stage: str | None, sort_by: AssetSortBy = "score") -> list[AssetStateCurrent]:
