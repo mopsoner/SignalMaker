@@ -31,3 +31,32 @@ def test_reserved_vm_script_writes_a_pid_file_for_every_configured_worker() -> N
     assert launched_workers == _configured_worker_names()
     assert 'printf \'%s\\n\' "$pid" > "$RUNTIME_DIR/$name.pid"' in script
     assert 'rm -f "${WORKER_PID_FILES[@]}"' in script
+
+
+def test_every_deployment_worker_redirects_both_streams_to_api_log_path() -> None:
+    systemd_dir = ROOT_DIR / "deploy/systemd"
+    unit_by_worker = {
+        "pipeline": "signalmaker-pipeline.service",
+        "executor": "signalmaker-executor.service",
+        "scheduler": "signalmaker-scheduler.service",
+        "momentum_engine": "signalmaker-momentum-engine.service",
+        "momentum_backtest": "signalmaker-momentum-backtest.service",
+        "kraken_candle_feed": "signalmaker-kraken-candle-feed.service",
+        "ibkr_ingestion": "signalmaker-ibkr-ingestion.service",
+        "stock_etf_analysis": "signalmaker-market-analysis.service",
+    }
+
+    assert set(unit_by_worker) == _configured_worker_names()
+    for worker, unit_name in unit_by_worker.items():
+        unit = (systemd_dir / unit_name).read_text(encoding="utf-8")
+        destination = f"append:/opt/signalmaker/logs/{worker}.log"
+        assert "Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs" in unit
+        assert f"StandardOutput={destination}" in unit
+        assert f"StandardError={destination}" in unit
+
+
+def test_reserved_vm_redirects_both_streams_to_configured_log_directory() -> None:
+    script = RESERVED_VM_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$APP_DIR/logs}"' in script
+    assert 'bash "$script" >> "$LOG_DIR/$name.log" 2>&1 &' in script

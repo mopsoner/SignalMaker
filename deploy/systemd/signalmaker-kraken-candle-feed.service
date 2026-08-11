@@ -1,0 +1,16 @@
+[Unit]
+Description=SignalMaker Kraken candle feed worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_kraken_candle_feed_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/kraken_candle_feed.log
+StandardError=append:/opt/signalmaker/logs/kraken_candle_feed.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -5,7 +5,10 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/signalmaker
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_market_analysis_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/stock_etf_analysis.log
+StandardError=append:/opt/signalmaker/logs/stock_etf_analysis.log
 Restart=always
 RestartSec=5
 

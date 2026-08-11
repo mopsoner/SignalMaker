@@ -5,7 +5,9 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 
 RUNTIME_DIR="$APP_DIR/.runtime"
-mkdir -p "$RUNTIME_DIR"
+export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$APP_DIR/logs}"
+LOG_DIR="$SIGNALMAKER_LOG_DIR"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 WORKER_PIDS=()
 WORKER_PID_FILES=()
@@ -15,7 +17,8 @@ start_worker() {
   local script="$2"
   local pid
 
-  bash "$script" &
+  mkdir -p "$LOG_DIR"
+  bash "$script" >> "$LOG_DIR/$name.log" 2>&1 &
   pid=$!
 
   printf -v "${name^^}_PID" '%s' "$pid"

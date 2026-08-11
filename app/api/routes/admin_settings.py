@@ -1,4 +1,3 @@
-import os
 from collections import deque
 from typing import Any
 
@@ -8,6 +7,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.core.logging import worker_log_candidates
 from app.services.notifier_service import NotifierService
 from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
 from app.services.worker_control_service import WorkerControlService
@@ -108,46 +108,30 @@ def stop_worker(worker_name: str) -> dict:
 
 
 
-# Log names are intentionally kept separate from the workers managed by
-# WorkerControlService.  The VM launcher owns these long-running application
-# processes, but the operations UI still needs to be able to tail their logs.
-_ALLOWED_LOG_WORKERS = {
-    "pipeline",
-    "executor",
-    "scheduler",
-    "momentum_engine",
-    "momentum_backtest",
-    "kraken_candle_feed",
-    "ibkr_ingestion",
-    "stock_etf_analysis",
-}
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Keep the log allowlist tied to the same worker registry used by controls and status.
+_ALLOWED_LOG_WORKERS = frozenset(WorkerControlService.WORKERS)
 
 
 @router.get('/admin/logs/{worker_name}')
 def get_worker_logs(worker_name: str, lines: int = Query(default=200, ge=1, le=2_000)) -> dict:
     if worker_name not in _ALLOWED_LOG_WORKERS:
         raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
-    candidates = [
-        os.path.join(_ROOT, "logs", f"{worker_name}.log"),
-        os.path.join(_ROOT, ".runtime", f"{worker_name}.log"),
-        os.path.join(os.getcwd(), "logs", f"{worker_name}.log"),
-        os.path.join(os.getcwd(), ".runtime", f"{worker_name}.log"),
-    ]
-    log_path = next((p for p in candidates if os.path.isfile(p)), None)
+
+    existing_logs = [path for path in worker_log_candidates(worker_name) if path.is_file()]
+    log_path = max(existing_logs, key=lambda path: path.stat().st_mtime_ns, default=None)
     if log_path is None:
         return {"worker": worker_name, "path": None, "lines": [], "size_bytes": 0}
     try:
-        with open(log_path, "r", errors="replace") as fh:
+        with log_path.open("r", errors="replace") as fh:
             tail = list(deque(fh, maxlen=lines))
         return {
             "worker": worker_name,
-            "path": log_path,
-            "lines": [ln.rstrip("\n") for ln in tail],
-            "size_bytes": os.path.getsize(log_path),
+            "path": str(log_path),
+            "lines": [line.rstrip("\n") for line in tail],
+            "size_bytes": log_path.stat().st_size,
         }
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post('/admin/test/notifications')

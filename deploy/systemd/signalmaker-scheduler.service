@@ -1,11 +1,14 @@
 [Unit]
-Description=SignalMaker Scheduler Worker
+Description=SignalMaker Scheduler worker
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/signalmaker
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_scheduler_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/scheduler.log
+StandardError=append:/opt/signalmaker/logs/scheduler.log
 Restart=always
 RestartSec=5
 

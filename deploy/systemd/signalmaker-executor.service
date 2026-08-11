@@ -1,11 +1,14 @@
 [Unit]
-Description=SignalMaker Executor Worker
+Description=SignalMaker Executor worker
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/signalmaker
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_executor_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/executor.log
+StandardError=append:/opt/signalmaker/logs/executor.log
 Restart=always
 RestartSec=5
 
