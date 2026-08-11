@@ -14,6 +14,19 @@ class VisibilitySource extends EventTarget {
 
 const flushPromises = () => new Promise((resolve) => setImmediate(resolve))
 
+function coordinationPair() {
+  let leader = null
+  const listeners = new Set()
+  const make = (id) => ({
+    claim() { leader ??= id; return leader === id },
+    isLeader() { return leader === id },
+    publish(message) { listeners.forEach((listener) => listener(message)) },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
+    close() { if (leader === id) leader = null },
+  })
+  return [make('first'), make('second')]
+}
+
 test('does not poll while the document is hidden and resumes once when visible', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const visibility = new VisibilitySource()
@@ -82,4 +95,33 @@ test('cleans up its timer and visibility listener when stopped', async (t) => {
   visibility.setVisibility('visible')
   await flushPromises()
   assert.equal(calls, 1)
+})
+
+test('two consumers of the same endpoint share polling results and fail over', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const [firstCoordination, secondCoordination] = coordinationPair()
+  let requests = 0
+  const received = [[], []]
+  const loader = async () => ({ request: ++requests })
+  const first = createPollingController(loader, 1000, new VisibilitySource(), {
+    coordination: firstCoordination,
+    onResult: (value) => received[0].push(value),
+  })
+  const second = createPollingController(loader, 1000, new VisibilitySource(), {
+    coordination: secondCoordination,
+    onResult: (value) => received[1].push(value),
+  })
+
+  first.start()
+  second.start()
+  await flushPromises()
+  assert.equal(requests, 1)
+  assert.deepEqual(received, [[{ request: 1 }], [{ request: 1 }]])
+
+  first.stop()
+  t.mock.timers.tick(1000)
+  await flushPromises()
+  assert.equal(requests, 2)
+  assert.deepEqual(received[1], [{ request: 1 }, { request: 2 }])
+  second.stop()
 })
