@@ -39,6 +39,21 @@ def test_double_start_is_idempotent(tmp_path, monkeypatch):
     popen.assert_called_once()
 
 
+def test_status_exposes_frontend_running_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    service = control.WorkerControlService()
+    (tmp_path / "scheduler.pid").write_text("4242")
+    monkeypatch.setattr(service, "_owns_pid", lambda name, pid: name == "scheduler" and pid == 4242)
+
+    statuses = service.status()
+
+    assert statuses["scheduler"]["running"] is True
+    assert statuses["scheduler"]["process_state"] == "running"
+    assert statuses["scheduler"]["pid"] == 4242
+    assert statuses["pipeline"]["running"] is False
+    assert statuses["pipeline"]["process_state"] == "stopped"
+
+
 def test_stopping_current_job_requeues_claim_cleanly():
     class DB:
         def commit(self): pass
