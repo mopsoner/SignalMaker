@@ -12,14 +12,13 @@ def test_feed_settings_are_loaded_from_environment():
             "KRAKEN_CANDLE_FEED_ENABLED": "yes",
             "KRAKEN_CANDLE_FEED_POLL_SECONDS": "45",
             "KRAKEN_CANDLE_FEED_INTERVALS": "15m, 1h",
-            "KRAKEN_CANDLE_FEED_QUOTE_ASSETS": "usd, usdc",
             "KRAKEN_CANDLE_FEED_LIMIT": "75",
             "KRAKEN_CANDLE_FEED_MAX_SYMBOLS": "12",
             "KRAKEN_CANDLE_FEED_MARGIN_ONLY": "false",
         }
     )
 
-    assert settings == feed.FeedSettings(True, 45, ["15m", "1h"], ["USD", "USDC"], 75, 12, False)
+    assert settings == feed.FeedSettings(True, 45, ["15m", "1h"], ["USD"], 75, 12, False)
 
 
 def test_run_once_passes_feed_settings_to_internal_importer(monkeypatch):
