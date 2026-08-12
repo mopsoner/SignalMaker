@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     @field_validator("signal_execution_interval", mode="before")
     @classmethod
     def validate_execution_interval(cls, v: str) -> str:
-        return "15m"
+        value = str(v or "15m").strip().lower()
+        return value if value in {"5m", "15m", "1h", "4h"} else "15m"
 
     @field_validator("signal_entry_rsi_timeframe", mode="before")
     @classmethod
@@ -76,6 +77,29 @@ class Settings(BaseSettings):
     momentum_engine_cadence_hours: int = Field(default=1, alias="MOMENTUM_ENGINE_CADENCE_HOURS")
     bot_executor_limit: int = Field(default=10, alias="BOT_EXECUTOR_LIMIT")
     bot_executor_quantity: float = Field(default=1.0, alias="BOT_EXECUTOR_QUANTITY")
+    bot_momentum_engine_enabled: bool = Field(default=True, alias="BOT_MOMENTUM_ENGINE_ENABLED")
+
+    momentum_engine_enabled: bool = Field(default=True, alias="MOMENTUM_ENGINE_ENABLED")
+    momentum_engine_starting_capital: float = Field(default=1000.0, alias="MOMENTUM_ENGINE_STARTING_CAPITAL")
+    momentum_engine_min_score: float = Field(default=0.0, alias="MOMENTUM_ENGINE_MIN_SCORE")
+
+    stock_etf_feeder_enabled: bool = Field(default=False, alias="STOCK_ETF_FEEDER_ENABLED")
+    stock_etf_momentum_enabled: bool = Field(default=False, alias="STOCK_ETF_MOMENTUM_ENABLED")
+    stock_etf_wyckoff_smc_enabled: bool = Field(default=False, alias="STOCK_ETF_WYCKOFF_SMC_ENABLED")
+    stock_etf_momentum_cadence_hours: int = Field(default=24, alias="STOCK_ETF_MOMENTUM_CADENCE_HOURS")
+    stock_etf_wyckoff_smc_cadence_hours: int = Field(default=1, alias="STOCK_ETF_WYCKOFF_SMC_CADENCE_HOURS")
+    stock_etf_exchange_timezone: str = Field(default="Europe/Paris", alias="STOCK_ETF_EXCHANGE_TIMEZONE")
+    stock_etf_market_open: str = Field(default="09:00", alias="STOCK_ETF_MARKET_OPEN")
+    stock_etf_market_close: str = Field(default="17:30", alias="STOCK_ETF_MARKET_CLOSE")
+    stock_etf_retry_max_attempts: int = Field(default=3, alias="STOCK_ETF_RETRY_MAX_ATTEMPTS")
+    stock_etf_retry_delay_seconds: int = Field(default=30, alias="STOCK_ETF_RETRY_DELAY_SECONDS")
+    stock_etf_timeout_seconds: int = Field(default=1800, alias="STOCK_ETF_TIMEOUT_SECONDS")
+    stock_etf_paper_starting_capital: float = Field(default=1000.0, alias="STOCK_ETF_PAPER_STARTING_CAPITAL")
+    stock_etf_paper_max_positions: int = Field(default=1, alias="STOCK_ETF_PAPER_MAX_POSITIONS")
+    stock_etf_paper_max_position_pct: float = Field(default=10.0, alias="STOCK_ETF_PAPER_MAX_POSITION_PCT")
+
+    scheduler_reconciliation_interval_seconds: int = Field(default=300, alias="SCHEDULER_RECONCILIATION_INTERVAL_SECONDS")
+    scheduler_abandoned_after_seconds: int = Field(default=900, alias="SCHEDULER_ABANDONED_AFTER_SECONDS")
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -84,7 +108,7 @@ class Settings(BaseSettings):
 
     def signal_config(self) -> dict:
         return {
-            "execution_interval": "15m",
+            "execution_interval": self.signal_execution_interval,
             "rsi_period": self.signal_rsi_period,
             "swing_window": self.signal_swing_window,
             "equal_level_tolerance_pct": self.signal_equal_level_tolerance_pct,

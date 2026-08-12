@@ -30,11 +30,17 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 
 def _entry_rsi_timeframe(value: Any) -> str:
-    value = str(value or "1h").strip().lower()
-    return value if value in {"1h", "4h"} else "1h"
+    value = str(value or base_settings.signal_entry_rsi_timeframe).strip().lower()
+    return value if value in {"1h", "4h"} else base_settings.signal_entry_rsi_timeframe
 
 
-def _momentum_cadence(value: Any, default: int = 1) -> int:
+def _execution_interval(value: Any) -> str:
+    value = str(value or base_settings.signal_execution_interval).strip().lower()
+    return value if value in {"5m", "15m", "1h", "4h"} else base_settings.signal_execution_interval
+
+
+def _momentum_cadence(value: Any, default: int | None = None) -> int:
+    default = base_settings.momentum_engine_cadence_hours if default is None else default
     try:
         cadence = int(value)
     except (TypeError, ValueError):
@@ -51,7 +57,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "strategy": {
         "session_timezone_offset_hours": base_settings.session_timezone_offset_hours,
-        "signal_execution_interval": "15m",
+        "signal_execution_interval": base_settings.signal_execution_interval,
         "signal_rsi_period": base_settings.signal_rsi_period,
         "signal_swing_window": base_settings.signal_swing_window,
         "signal_equal_level_tolerance_pct": base_settings.signal_equal_level_tolerance_pct,
@@ -74,7 +80,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "bot_pipeline_enabled": base_settings.bot_pipeline_enabled,
         "bot_executor_enabled": base_settings.bot_executor_enabled,
         "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
-        "bot_momentum_engine_enabled": True,
+        "bot_momentum_engine_enabled": base_settings.bot_momentum_engine_enabled,
         "bot_pipeline_symbol_limit": "all",
         "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
         "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
@@ -84,39 +90,42 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "bot_executor_quantity": base_settings.bot_executor_quantity,
     },
     "momentum": {
-        "momentum_engine_enabled": True,
+        "momentum_engine_enabled": base_settings.momentum_engine_enabled,
         "momentum_engine_interval_sec": base_settings.bot_momentum_engine_interval_sec,
         "momentum_engine_cadence_hours": _momentum_cadence(base_settings.momentum_engine_cadence_hours),
-        "momentum_engine_starting_capital": 1000.0,
-        "momentum_engine_min_score": 0.0,
+        "momentum_engine_starting_capital": base_settings.momentum_engine_starting_capital,
+        "momentum_engine_min_score": base_settings.momentum_engine_min_score,
     },
     "stock_etf": {
         # Opt-in defaults prevent a new installation from starting data imports or trades.
-        "feeder_enabled": False,
-        "momentum_enabled": False,
-        "wyckoff_smc_enabled": False,
-        "momentum_cadence_hours": 24,
-        "wyckoff_smc_cadence_hours": 1,
+        "feeder_enabled": base_settings.stock_etf_feeder_enabled,
+        "momentum_enabled": base_settings.stock_etf_momentum_enabled,
+        "wyckoff_smc_enabled": base_settings.stock_etf_wyckoff_smc_enabled,
+        "momentum_cadence_hours": base_settings.stock_etf_momentum_cadence_hours,
+        "wyckoff_smc_cadence_hours": base_settings.stock_etf_wyckoff_smc_cadence_hours,
         "universes": ["Europe Stocks", "Europe ETF"],
         "asset_types": ["STOCK", "ETF"],
         "timeframes": ["1d"],
-        "exchange_timezone": "Europe/Paris",
-        "market_open": "09:00",
-        "market_close": "17:30",
+        "exchange_timezone": base_settings.stock_etf_exchange_timezone,
+        "market_open": base_settings.stock_etf_market_open,
+        "market_close": base_settings.stock_etf_market_close,
         "min_lot_size": 1,
         "max_lot_size": 100,
-        "retry_max_attempts": 3,
-        "retry_delay_seconds": 30,
-        "timeout_seconds": 1800,
+        "retry_max_attempts": base_settings.stock_etf_retry_max_attempts,
+        "retry_delay_seconds": base_settings.stock_etf_retry_delay_seconds,
+        "timeout_seconds": base_settings.stock_etf_timeout_seconds,
         "paper_momentum": {
             "enabled": False,
-            "starting_capital": 1000.0,
+            "starting_capital": base_settings.stock_etf_paper_starting_capital,
             "reference_currency": "EUR",
-            "max_positions": 1,
-            "max_position_pct": 10.0,
+            "max_positions": base_settings.stock_etf_paper_max_positions,
+            "max_position_pct": base_settings.stock_etf_paper_max_position_pct,
         },
     },
-    "scheduler": {"reconciliation_interval_seconds": 300, "abandoned_after_seconds": 900},
+    "scheduler": {
+        "reconciliation_interval_seconds": base_settings.scheduler_reconciliation_interval_seconds,
+        "abandoned_after_seconds": base_settings.scheduler_abandoned_after_seconds,
+    },
     "live": {
         "live_spot_allow_shorts": base_settings.live_spot_allow_shorts,
         "live_max_open_positions": base_settings.live_max_open_positions,
@@ -223,7 +232,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload.pop("stock_etf_momentum", None)
         payload.pop("stock_etf_wyckoff_smc", None)
         strategy = payload.setdefault("strategy", {})
-        strategy["signal_execution_interval"] = "15m"
+        strategy["signal_execution_interval"] = _execution_interval(strategy.get("signal_execution_interval"))
         strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy.get("signal_entry_rsi_timeframe"))
         payload.setdefault("bot", {})["bot_momentum_engine_enabled"] = _as_bool(
             payload.get("bot", {}).get("bot_momentum_engine_enabled", True),
@@ -261,7 +270,7 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
     strategy = payload.get("strategy")
     if isinstance(strategy, dict):
         if "signal_execution_interval" in strategy:
-            strategy["signal_execution_interval"] = "15m"
+            strategy["signal_execution_interval"] = _execution_interval(strategy["signal_execution_interval"])
         if "signal_entry_rsi_timeframe" in strategy:
             strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy["signal_entry_rsi_timeframe"])
 
@@ -305,16 +314,16 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 def get_runtime_signal_config(db: Session | None = None) -> dict[str, Any]:
     strategy = load_runtime_settings(db)["strategy"]
     return {
-        "execution_interval": "15m",
+        "execution_interval": strategy["signal_execution_interval"],
         "rsi_period": strategy["signal_rsi_period"],
         "swing_window": strategy["signal_swing_window"],
         "equal_level_tolerance_pct": strategy["signal_equal_level_tolerance_pct"],
         "session_timezone_offset_hours": strategy["session_timezone_offset_hours"],
         "session_confirm_filter_enabled": strategy["signal_session_confirm_filter_enabled"],
         "entry_rsi": {
-            "min": strategy.get("signal_entry_rsi_min", 50.0),
-            "max": strategy.get("signal_entry_rsi_max", 65.0),
-            "timeframe": strategy.get("signal_entry_rsi_timeframe", "1h"),
+            "min": strategy.get("signal_entry_rsi_min", base_settings.signal_entry_rsi_min),
+            "max": strategy.get("signal_entry_rsi_max", base_settings.signal_entry_rsi_max),
+            "timeframe": strategy.get("signal_entry_rsi_timeframe", base_settings.signal_entry_rsi_timeframe),
         },
         "signals": {
             "overbought": strategy["signal_overbought"],

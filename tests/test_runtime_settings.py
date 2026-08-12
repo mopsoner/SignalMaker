@@ -16,8 +16,6 @@ from app.services.runtime_settings import (
     load_runtime_settings_admin,
     persist_runtime_settings,
 )
-
-
 SIGNAL_ENV_KEYS = (
     "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED",
     "SIGNAL_ENTRY_RSI_MIN",
@@ -249,3 +247,48 @@ def test_legacy_stock_etf_settings_are_migrated_without_crypto_fallback() -> Non
 def test_stock_etf_invalid_combinations_are_rejected(stock_etf, message) -> None:
     with _session() as db, pytest.raises(ValueError, match=message):
         persist_runtime_settings(db, {"stock_etf": stock_etf})
+
+
+def test_deployment_defaults_have_one_canonical_settings_source() -> None:
+    """Every deployment-tunable runtime default must be read from Settings."""
+    configured = Settings(_env_file=None)
+    paths = {
+        ("strategy", "signal_execution_interval"): "signal_execution_interval",
+        ("bot", "bot_pipeline_interval_sec"): "bot_pipeline_interval_sec",
+        ("bot", "bot_executor_interval_sec"): "bot_executor_interval_sec",
+        ("bot", "bot_scheduler_interval_sec"): "bot_scheduler_interval_sec",
+        ("momentum", "momentum_engine_starting_capital"): "momentum_engine_starting_capital",
+        ("momentum", "momentum_engine_min_score"): "momentum_engine_min_score",
+        ("stock_etf", "momentum_cadence_hours"): "stock_etf_momentum_cadence_hours",
+        ("stock_etf", "wyckoff_smc_cadence_hours"): "stock_etf_wyckoff_smc_cadence_hours",
+        ("stock_etf", "exchange_timezone"): "stock_etf_exchange_timezone",
+        ("stock_etf", "market_open"): "stock_etf_market_open",
+        ("stock_etf", "market_close"): "stock_etf_market_close",
+        ("stock_etf", "retry_max_attempts"): "stock_etf_retry_max_attempts",
+        ("stock_etf", "retry_delay_seconds"): "stock_etf_retry_delay_seconds",
+        ("stock_etf", "timeout_seconds"): "stock_etf_timeout_seconds",
+        ("scheduler", "reconciliation_interval_seconds"): "scheduler_reconciliation_interval_seconds",
+        ("scheduler", "abandoned_after_seconds"): "scheduler_abandoned_after_seconds",
+    }
+    for (category, key), field in paths.items():
+        assert DEFAULT_SETTINGS[category][key] == getattr(configured, field)
+    assert DEFAULT_SETTINGS["stock_etf"]["paper_momentum"]["starting_capital"] == configured.stock_etf_paper_starting_capital
+    assert DEFAULT_SETTINGS["stock_etf"]["paper_momentum"]["max_positions"] == configured.stock_etf_paper_max_positions
+    assert DEFAULT_SETTINGS["stock_etf"]["paper_momentum"]["max_position_pct"] == configured.stock_etf_paper_max_position_pct
+
+
+def test_execution_interval_is_normalized_once_and_consumed_by_services(monkeypatch) -> None:
+    custom = Settings(_env_file=None, SIGNAL_EXECUTION_INTERVAL="1h")
+    assert custom.signal_config()["execution_interval"] == "1h"
+
+    with _session() as db:
+        runtime = persist_runtime_settings(db, {"strategy": {"signal_execution_interval": "4h"}})
+        assert runtime["strategy"]["signal_execution_interval"] == "4h"
+        assert get_runtime_signal_config(db)["execution_interval"] == "4h"
+
+    monkeypatch.setattr(
+        "app.services.signal_engine_service.get_runtime_signal_config",
+        lambda: {"execution_interval": "1h"},
+    )
+    from app.services.signal_engine_service import SignalEngineService
+    assert SignalEngineService().heartbeat()["primary_interval"] == "1h"
