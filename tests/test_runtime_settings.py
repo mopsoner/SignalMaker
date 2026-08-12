@@ -4,6 +4,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.models.app_setting import AppSetting
 from app.models.base import Base
+from app.core.config import Settings
 import pytest
 
 from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
@@ -24,6 +25,26 @@ def test_load_runtime_settings_defaults_momentum_cadence_to_one_hour() -> None:
         runtime = load_runtime_settings(db)
 
     assert runtime["momentum"]["momentum_engine_cadence_hours"] == 1
+    # Polling stays more frequent than the user-selected cadence so a structure
+    # break can make a due-only run sell immediately.
+    assert runtime["momentum"]["momentum_engine_interval_sec"] == 300
+    assert runtime["bot"]["bot_momentum_engine_interval_sec"] == 300
+
+
+def test_momentum_interval_default_can_be_configured_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_MOMENTUM_ENGINE_INTERVAL_SEC", "7200")
+
+    configured = Settings(_env_file=None)
+
+    assert configured.bot_momentum_engine_interval_sec == 7200
+
+
+def test_momentum_cadence_defaults_to_one_hour_and_can_be_configured_from_environment(monkeypatch) -> None:
+    assert Settings(_env_file=None).momentum_engine_cadence_hours == 1
+
+    monkeypatch.setenv("MOMENTUM_ENGINE_CADENCE_HOURS", "4")
+
+    assert Settings(_env_file=None).momentum_engine_cadence_hours == 4
 
 
 def test_load_runtime_settings_honors_persisted_four_hour_cadence() -> None:

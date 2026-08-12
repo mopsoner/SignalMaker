@@ -14,11 +14,12 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from app.db.session import SessionLocal
+from app.core.config import settings as base_settings
 from app.services.momentum_engine_service import MomentumEngineService
 from app.services.runtime_settings import load_runtime_settings
 
-DEFAULT_INTERVAL = 300
-DEFAULT_CADENCE_HOURS = 1
+DEFAULT_INTERVAL = base_settings.bot_momentum_engine_interval_sec
+DEFAULT_CADENCE_HOURS = base_settings.momentum_engine_cadence_hours
 DEFAULT_STARTING_CAPITAL = 1000.0
 DEFAULT_MIN_SCORE = 0.0
 
