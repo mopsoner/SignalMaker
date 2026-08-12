@@ -59,7 +59,7 @@ class FeedSettings:
             intervals=_csv(values.get("KRAKEN_CANDLE_FEED_INTERVALS"), default=["15m", "1h", "4h"]),
             quote_assets=[
                 item.upper()
-                for item in _csv(values.get("KRAKEN_CANDLE_FEED_QUOTE_ASSETS"), default=["USD", "USDC"])
+                for item in _csv(values.get("KRAKEN_CANDLE_FEED_QUOTE_ASSETS"), default=["USD"])
             ],
             limit=_positive_int(values.get("KRAKEN_CANDLE_FEED_LIMIT"), default=120),
             max_symbols=_positive_int(

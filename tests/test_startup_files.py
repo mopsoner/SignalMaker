@@ -40,10 +40,10 @@ def test_example_env_configures_kraken_candle_feed() -> None:
         "KRAKEN_CANDLE_FEED_ENABLED=true",
         "KRAKEN_CANDLE_FEED_POLL_SECONDS=600",
         "KRAKEN_CANDLE_FEED_INTERVALS=15m,1h,4h",
-        "KRAKEN_CANDLE_FEED_QUOTE_ASSETS=USD,USDC",
+        "KRAKEN_CANDLE_FEED_QUOTE_ASSETS=USD",
         "KRAKEN_CANDLE_FEED_LIMIT=120",
-        "KRAKEN_CANDLE_FEED_MAX_SYMBOLS=20",
-        "KRAKEN_CANDLE_FEED_MARGIN_ONLY=false",
+        "KRAKEN_CANDLE_FEED_MAX_SYMBOLS=0",
+        "KRAKEN_CANDLE_FEED_MARGIN_ONLY=true",
     )
 
     assert all(setting in example_env.splitlines() for setting in expected_settings)
