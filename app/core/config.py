@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     bot_pipeline_interval_sec: int = Field(default=60, alias="BOT_PIPELINE_INTERVAL_SEC")
     bot_executor_interval_sec: int = Field(default=30, alias="BOT_EXECUTOR_INTERVAL_SEC")
     bot_scheduler_interval_sec: int = Field(default=30, alias="BOT_SCHEDULER_INTERVAL_SEC")
+    bot_momentum_engine_interval_sec: int = Field(default=300, alias="BOT_MOMENTUM_ENGINE_INTERVAL_SEC")
+    momentum_engine_cadence_hours: int = Field(default=1, alias="MOMENTUM_ENGINE_CADENCE_HOURS")
     bot_executor_limit: int = Field(default=10, alias="BOT_EXECUTOR_LIMIT")
     bot_executor_quantity: float = Field(default=1.0, alias="BOT_EXECUTOR_QUANTITY")
 
