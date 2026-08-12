@@ -1,9 +1,10 @@
 import os
 from datetime import datetime
 
+from app.core.config import Settings
 from signalmaker.data_providers.ibkr.config import get_ibkr_config
 
-ENV_VARS = [
+_BASE_ENV_VARS = [
     "IBKR_ENABLED", "IBKR_AUTH_METHOD", "IBKR_BEARER_TOKEN", "IBKR_BASE_URL", "IBKR_TRADING_BASE_PATH",
     "IBKR_DEFAULT_EXCHANGE", "IBKR_DEFAULT_TIMEFRAME", "IBKR_REQUEST_SLEEP_SECONDS", "IBKR_MAX_CONCURRENT",
     "IBKR_START_DATE", "IBKR_HISTORY_PERIOD", "IBKR_HISTORY_BAR", "IBKR_USE_RTH", "IBKR_OAUTH2_TOKEN_URL",
@@ -12,11 +13,49 @@ ENV_VARS = [
     "MARKET_DATA_DEFAULT_TIMEFRAME", "MARKET_DATA_ENABLE_STOCKS", "MARKET_DATA_ENABLE_ETFS",
     "MARKET_DATA_ENABLE_INDICES", "ADMIN_ENV_SETTINGS_ENABLED",
 ]
+
+# Keep the diagnostic surface tied to the configuration model: adding a new
+# SIGNAL_* setting makes it visible here without requiring a second manual list.
+_APP_SETTING_FIELDS = {
+    field.alias: name
+    for name, field in Settings.model_fields.items()
+    if isinstance(field.alias, str)
+}
+_STRATEGY_ENV_VARS = [
+    alias
+    for alias in _APP_SETTING_FIELDS
+    if alias.startswith("SIGNAL_") or alias in {"PLANNER_MIN_SCORE", "PLANNER_MIN_RR"}
+]
+ENV_VARS = [*_BASE_ENV_VARS, *_STRATEGY_ENV_VARS]
 SECRETS = {"IBKR_BEARER_TOKEN", "IBKR_OAUTH2_PRIVATE_KEY"}
+
+
+def _effective_app_values() -> dict[str, object]:
+    settings = Settings()
+    return {
+        alias: getattr(settings, field_name)
+        for alias, field_name in _APP_SETTING_FIELDS.items()
+        if alias in ENV_VARS
+    }
+
+
+def _variable_status(key: str, effective_values: dict[str, object]) -> dict[str, object]:
+    configured = key in os.environ
+    effective_value = effective_values.get(key, os.getenv(key, ""))
+    if key in SECRETS:
+        effective_value = "***" if effective_value else ""
+    return {
+        "name": key,
+        "configured": configured,
+        "source": "environment" if configured else "application_default",
+        "value": effective_value,
+        "secret": key in SECRETS,
+    }
 
 
 def env_status():
     ibkr = get_ibkr_config()
+    effective_values = _effective_app_values()
     warnings = []
     if ibkr.enabled and ibkr.auth_method == "bearer" and not ibkr.bearer_token:
         warnings.append("IBKR_AUTH_METHOD=bearer but IBKR_BEARER_TOKEN is missing")
@@ -35,4 +74,4 @@ def env_status():
     if os.getenv("ADMIN_ENV_SETTINGS_ENABLED", "true").lower() == "false":
         warnings.append("ADMIN_ENV_SETTINGS_ENABLED=false")
     worker_control_supported = os.getenv("WORKER_CONTROL_ENABLED", "false").lower() in {"1", "true", "yes"}
-    return {"variables": [{"name": key, "configured": bool(os.getenv(key)), "value": "***" if key in SECRETS and os.getenv(key) else os.getenv(key, ""), "secret": key in SECRETS} for key in ENV_VARS], "warnings": warnings, "editing_supported": False, "worker_control_supported": worker_control_supported, "instructions": "Update secrets in Replit Secrets or deployment environment; runtime writes are intentionally not performed."}
+    return {"variables": [_variable_status(key, effective_values) for key in ENV_VARS], "warnings": warnings, "editing_supported": False, "worker_control_supported": worker_control_supported, "instructions": "Update secrets in Replit Secrets or deployment environment; runtime writes are intentionally not performed."}
