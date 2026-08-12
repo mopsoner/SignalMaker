@@ -7,7 +7,20 @@ from app.models.base import Base
 from app.core.config import Settings
 import pytest
 
-from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
+from app.services.runtime_settings import (
+    get_runtime_signal_config,
+    load_runtime_settings,
+    persist_runtime_settings,
+)
+
+
+SIGNAL_ENV_KEYS = (
+    "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED",
+    "SIGNAL_ENTRY_RSI_MIN",
+    "SIGNAL_ENTRY_RSI_MAX",
+    "PLANNER_MIN_RR",
+    "PLANNER_MIN_SCORE",
+)
 
 
 def _session() -> Session:
@@ -18,6 +31,65 @@ def _session() -> Session:
     )
     Base.metadata.create_all(engine)
     return Session(engine)
+
+
+def test_signal_configuration_defaults_and_environment_overrides(monkeypatch) -> None:
+    for key in SIGNAL_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    defaults = Settings(_env_file=None)
+
+    assert defaults.signal_session_confirm_filter_enabled is False
+    assert defaults.signal_entry_rsi_min == 50.0
+    assert defaults.signal_entry_rsi_max == 65.0
+    assert defaults.planner_min_rr == 1.75
+    assert defaults.planner_min_score == 25.0
+    monkeypatch.setattr(
+        "app.services.runtime_settings.load_runtime_settings",
+        lambda db=None: {"strategy": defaults.model_dump()},
+    )
+    default_runtime = get_runtime_signal_config()
+    assert default_runtime["session_confirm_filter_enabled"] is False
+    assert default_runtime["entry_rsi"] == {"min": 50.0, "max": 65.0, "timeframe": "1h"}
+
+    overrides = {
+        "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED": "true",
+        "SIGNAL_ENTRY_RSI_MIN": "52.5",
+        "SIGNAL_ENTRY_RSI_MAX": "67.5",
+        "PLANNER_MIN_RR": "2.25",
+        "PLANNER_MIN_SCORE": "30",
+    }
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+
+    configured = Settings(_env_file=None)
+
+    assert configured.signal_session_confirm_filter_enabled is True
+    assert configured.signal_entry_rsi_min == 52.5
+    assert configured.signal_entry_rsi_max == 67.5
+    assert configured.planner_min_rr == 2.25
+    assert configured.planner_min_score == 30.0
+    monkeypatch.setattr(
+        "app.services.runtime_settings.load_runtime_settings",
+        lambda db=None: {"strategy": configured.model_dump()},
+    )
+    configured_runtime = get_runtime_signal_config()
+    assert configured_runtime["session_confirm_filter_enabled"] is True
+    assert configured_runtime["entry_rsi"] == {"min": 52.5, "max": 67.5, "timeframe": "1h"}
+
+
+def test_runtime_signal_config_uses_new_rsi_fallback(monkeypatch) -> None:
+    strategy = Settings(_env_file=None).model_dump()
+    strategy.pop("signal_entry_rsi_min")
+    monkeypatch.setattr(
+        "app.services.runtime_settings.load_runtime_settings",
+        lambda db=None: {"strategy": strategy},
+    )
+
+    runtime = get_runtime_signal_config()
+
+    assert runtime["session_confirm_filter_enabled"] is False
+    assert runtime["entry_rsi"] == {"min": 50.0, "max": 65.0, "timeframe": "1h"}
 
 
 def test_load_runtime_settings_defaults_momentum_cadence_to_one_hour() -> None:
