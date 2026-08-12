@@ -2,14 +2,28 @@ import { useEffect, useMemo, useState } from 'react'
 import PageHeader from '../components/PageHeader'
 import { api } from '../lib/api'
 
+// This shell only makes the first render safe. Business defaults come exclusively
+// from the admin settings response, whose backend source is Settings.
 const EMPTY_SETTINGS = {
-  general: { app_name: '', app_env: '', cors_origins: '', create_tables_on_boot: true },
-  strategy: { session_timezone_offset_hours: -4, signal_execution_interval: '15m', signal_rsi_period: 14, signal_swing_window: 8, signal_equal_level_tolerance_pct: 0.002, signal_overbought: 70, signal_oversold: 30, signal_entry_rsi_min: 50, signal_entry_rsi_max: 65, signal_entry_rsi_timeframe: '1h', signal_price_near_extreme_pct: 0.0025, signal_session_confirm_filter_enabled: false, planner_min_score: 25, planner_min_rr: 1.75 },
-  notifications: { telegram_chat_id: '', telegram_secret: '', discord_url: '' },
-  bot: { bot_pipeline_enabled: true, bot_executor_enabled: true, bot_scheduler_enabled: true, bot_pipeline_interval_sec: 60, bot_executor_interval_sec: 30, bot_scheduler_interval_sec: 30, bot_executor_limit: 10, bot_executor_quantity: 1.0 },
-  momentum: { momentum_engine_cadence_hours: 1 },
-  stock_etf: { feeder_enabled: false, momentum_enabled: false, wyckoff_smc_enabled: false, momentum_cadence_hours: 24, wyckoff_smc_cadence_hours: 1, universes: ['Europe Stocks', 'Europe ETF'], asset_types: ['STOCK', 'ETF'], timeframes: ['1d'], min_lot_size: 1, max_lot_size: 100, retry_max_attempts: 3, retry_delay_seconds: 30, paper_momentum: { enabled: false, starting_capital: 1000, reference_currency: 'EUR', max_positions: 1, max_position_pct: 10 } },
-  live: { live_spot_allow_shorts: false, live_max_open_positions: 3, live_max_notional_per_trade: 250, live_require_tp_sl: true, live_reconcile_enabled: false },
+  general: {}, strategy: {}, notifications: {}, bot: {}, momentum: {},
+  stock_etf: { universes: [], asset_types: [], timeframes: [], paper_momentum: {} },
+  live: {}, scheduler: {},
+}
+
+function withSafeShape(value = {}) {
+  return {
+    ...EMPTY_SETTINGS,
+    ...value,
+    general: value.general || {}, strategy: value.strategy || {},
+    notifications: value.notifications || {}, bot: value.bot || {},
+    momentum: value.momentum || {}, live: value.live || {},
+    scheduler: value.scheduler || {},
+    stock_etf: {
+      ...EMPTY_SETTINGS.stock_etf,
+      ...(value.stock_etf || {}),
+      paper_momentum: value.stock_etf?.paper_momentum || {},
+    },
+  }
 }
 
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }
@@ -44,17 +58,7 @@ export default function AdminSettingsPage() {
     try {
       const [data, workerData] = await Promise.all([api.adminSettings(), api.workerStatus()])
       const effective = data.settings || data
-      const merged = {
-        ...EMPTY_SETTINGS,
-        ...effective,
-        general: { ...EMPTY_SETTINGS.general, ...(effective.general || {}) },
-        strategy: { ...EMPTY_SETTINGS.strategy, ...(effective.strategy || {}) },
-        notifications: { ...EMPTY_SETTINGS.notifications, ...(effective.notifications || {}) },
-        bot: { ...EMPTY_SETTINGS.bot, ...(effective.bot || {}) },
-        momentum: { ...EMPTY_SETTINGS.momentum, ...(effective.momentum || {}) },
-        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(effective.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(effective.stock_etf?.paper_momentum || {}) } },
-        live: { ...EMPTY_SETTINGS.live, ...(effective.live || {}) },
-      }
+      const merged = withSafeShape(effective)
       setSettings(merged)
       setInitialSettings(merged)
       setOverrides(data.overrides || [])
@@ -86,17 +90,7 @@ export default function AdminSettingsPage() {
       ]).filter(([, values]) => Object.keys(values).length))
       const response = await api.updateAdminSettings(changes)
       const saved = response.settings || response
-      const merged = {
-        ...EMPTY_SETTINGS,
-        ...saved,
-        general: { ...EMPTY_SETTINGS.general, ...(saved.general || {}) },
-        strategy: { ...EMPTY_SETTINGS.strategy, ...(saved.strategy || {}) },
-        notifications: { ...EMPTY_SETTINGS.notifications, ...(saved.notifications || {}) },
-        bot: { ...EMPTY_SETTINGS.bot, ...(saved.bot || {}) },
-        momentum: { ...EMPTY_SETTINGS.momentum, ...(saved.momentum || {}) },
-        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(saved.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(saved.stock_etf?.paper_momentum || {}) } },
-        live: { ...EMPTY_SETTINGS.live, ...(saved.live || {}) },
-      }
+      const merged = withSafeShape(saved)
       setSettings(merged)
       setInitialSettings(merged)
       setOverrides(response.overrides || [])
@@ -254,8 +248,8 @@ export default function AdminSettingsPage() {
         <Field label="Reconcile enabled"><input type="checkbox" checked={Boolean(settings.live.live_reconcile_enabled)} onChange={(e) => updateField('live', 'live_reconcile_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
       </Section>
 
-      <Section title="Strategy" description="Signal engine, execution timeframe and planner thresholds. Main RSI/execution is pinned to 15m; entry RSI preference is evaluated on 1h by default.">
-        <Field label="Execution timeframe"><select style={inputStyle} value={settings.strategy.signal_execution_interval || '15m'} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}><option value="15m">15 minutes</option></select></Field>
+      <Section title="Strategy" description="Signal engine, configurable execution timeframe and planner thresholds. Entry RSI preference is evaluated on 1h by default.">
+        <Field label="Execution timeframe"><select style={inputStyle} value={settings.strategy.signal_execution_interval || ''} onChange={(e) => updateField('strategy', 'signal_execution_interval', e.target.value)} disabled={loading}><option value="" disabled>Loading…</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option><option value="1h">1 hour</option><option value="4h">4 hours</option></select></Field>
         <Field label="Session timezone offset"><input style={inputStyle} type="number" value={settings.strategy.session_timezone_offset_hours} onChange={(e) => updateField('strategy', 'session_timezone_offset_hours', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Session confirm filter enabled"><input type="checkbox" checked={Boolean(settings.strategy.signal_session_confirm_filter_enabled)} onChange={(e) => updateField('strategy', 'signal_session_confirm_filter_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="RSI period"><input style={inputStyle} type="number" value={settings.strategy.signal_rsi_period} onChange={(e) => updateField('strategy', 'signal_rsi_period', e.target.value, 'number')} disabled={loading} /></Field>

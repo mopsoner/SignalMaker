@@ -1,17 +1,19 @@
 from datetime import datetime, timezone
 
+from app.core.config import settings as base_settings
 from app.services.runtime_settings import get_runtime_signal_config
 from app.strategy.legacy_engine import build_signal
 
 
 class SignalEngineService:
     def heartbeat(self) -> dict:
+        cfg = get_runtime_signal_config()
         return {
             'service': 'signal_engine',
             'status': 'ready',
             'last_tick_at': datetime.now(timezone.utc).isoformat(),
             'strategy': 'legacy_wyckoff_v231',
-            'primary_interval': '15m',
+            'primary_interval': cfg['execution_interval'],
         }
 
     def _range_position(self, price: float, low: float | None, high: float | None) -> float | None:
@@ -51,7 +53,7 @@ class SignalEngineService:
         pos = self._range_position(price, range_low_4h, range_high_4h)
         overbought = cfg['signals']['overbought']
         oversold = cfg['signals']['oversold']
-        near_pct = max(cfg['signals'].get('price_near_extreme_pct', 0.004) * 4, 0.01)
+        near_pct = max(cfg['signals']['price_near_extreme_pct'] * 4, 0.01)
 
         near_res_4h = any([
             self._near(price, resistance, near_pct),
@@ -195,15 +197,13 @@ class SignalEngineService:
         }
 
     def _entry_rsi_profile(self, signal: dict, cfg: dict | None = None) -> dict:
-        raw_cfg = (cfg or {}).get('entry_rsi') if isinstance(cfg, dict) else None
-        raw_cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
-        min_value = float(raw_cfg.get('min', 50.0))
-        max_value = float(raw_cfg.get('max', 65.0))
+        cfg = cfg if isinstance(cfg, dict) else base_settings.signal_config()
+        raw_cfg = cfg['entry_rsi']
+        min_value = float(raw_cfg['min'])
+        max_value = float(raw_cfg['max'])
         if min_value > max_value:
             min_value, max_value = max_value, min_value
-        timeframe = str(raw_cfg.get('timeframe', '1h') or '1h').lower()
-        if timeframe not in {'1h', '4h'}:
-            timeframe = '1h'
+        timeframe = str(raw_cfg['timeframe']).lower()
         source = 'rsi_macro' if timeframe == '4h' else 'rsi_htf'
         entry_value = signal.get(source)
         preferred = entry_value is not None and min_value <= float(entry_value) <= max_value
@@ -633,8 +633,8 @@ class SignalEngineService:
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
         cfg = get_runtime_signal_config()
-        execution_interval = cfg.get('execution_interval', '15m')
-        candles_main = candles.get(execution_interval) or candles.get('15m') or candles.get('5m')
+        execution_interval = cfg['execution_interval']
+        candles_main = candles.get(execution_interval)
         if not candles_main:
             raise KeyError(f'missing_{execution_interval}_candles')
         signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)

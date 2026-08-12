@@ -87,7 +87,7 @@ class ExecutorService:
         raw_target = float(raw_target)
         risk = abs(entry - float(stop)) if stop is not None else None
         runtime = load_runtime_settings(getattr(self, 'db', None))
-        planner_min_rr = float(runtime['strategy'].get('planner_min_rr', 0.8))
+        planner_min_rr = float(runtime['strategy']['planner_min_rr'])
         candidate_rr = float(candidate.rr_ratio or 0.0)
         min_reward_ratio = max(0.75, planner_min_rr, candidate_rr)
         min_reward = risk * min_reward_ratio if risk and risk > 0 else 0.0
