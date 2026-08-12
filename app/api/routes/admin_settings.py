@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.logging import worker_log_candidates
 from app.services.notifier_service import NotifierService
-from app.services.runtime_settings import load_runtime_settings, persist_runtime_settings
+from app.services.runtime_settings import (
+    delete_runtime_setting_override,
+    load_runtime_settings,
+    load_runtime_settings_admin,
+    persist_runtime_settings,
+)
 from app.services.worker_control_service import WorkerControlService
 
 router = APIRouter()
@@ -26,16 +31,22 @@ class SettingsPayload(BaseModel):
 
 
 @router.get('/admin/settings')
-def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
-    return load_runtime_settings(db)
+def get_admin_settings(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return load_runtime_settings_admin(db)
 
 
 @router.put('/admin/settings')
-def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, dict[str, Any]]:
+def update_admin_settings(payload: SettingsPayload, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
-        return persist_runtime_settings(db, payload.model_dump())
+        persist_runtime_settings(db, payload.model_dump(exclude_unset=True))
+        return load_runtime_settings_admin(db)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete('/admin/settings/{category}/{key}')
+def remove_admin_setting_override(category: str, key: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return delete_runtime_setting_override(db, category, key)
 
 
 _PRESERVED_APP_DATA_TABLES = {"app_settings"}

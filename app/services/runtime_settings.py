@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings as base_settings
@@ -126,7 +126,14 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
 }
 
-
+# Runtime values have one deliberately simple precedence order:
+#
+#     explicit AppSetting row > value loaded by Settings from .env/process env
+#     > built-in Settings/default value
+#
+# AppSetting rows are therefore overrides, never a cache of the resolved
+# configuration.  In particular, partial writes must not materialize inherited
+# values in the database, or a later .env change would be silently masked.
 def _migrate_stock_etf(rows: list[AppSetting], stock_etf: dict[str, Any]) -> None:
     """Read legacy stock/ETF categories without borrowing any crypto setting."""
     explicit = {(row.category, row.key) for row in rows}
@@ -234,10 +241,27 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             db.close()
 
 
+def load_runtime_settings_admin(db: Session) -> dict[str, Any]:
+    """Return effective settings and override identifiers, without source labels."""
+    rows = db.execute(select(AppSetting)).scalars().all()
+    return {
+        "settings": load_runtime_settings(db),
+        "overrides": [{"category": row.category, "key": row.key} for row in rows],
+    }
+
+
+def delete_runtime_setting_override(db: Session, category: str, key: str) -> dict[str, Any]:
+    """Delete one explicit override so the effective value falls back to env/default."""
+    db.execute(delete(AppSetting).where(AppSetting.category == category, AppSetting.key == key))
+    db.commit()
+    return load_runtime_settings_admin(db)
+
+
 def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     strategy = payload.get("strategy")
     if isinstance(strategy, dict):
-        strategy["signal_execution_interval"] = "15m"
+        if "signal_execution_interval" in strategy:
+            strategy["signal_execution_interval"] = "15m"
         if "signal_entry_rsi_timeframe" in strategy:
             strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy["signal_entry_rsi_timeframe"])
 
@@ -254,13 +278,14 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 
     stock_etf = payload.get("stock_etf")
     if isinstance(stock_etf, dict):
-        merged_stock_etf = deepcopy(DEFAULT_SETTINGS["stock_etf"])
+        merged_stock_etf = deepcopy(load_runtime_settings(db)["stock_etf"])
         merged_stock_etf.update(stock_etf)
-        merged_paper = deepcopy(DEFAULT_SETTINGS["stock_etf"]["paper_momentum"])
+        merged_paper = deepcopy(merged_stock_etf["paper_momentum"])
         merged_paper.update(stock_etf.get("paper_momentum", {}))
         merged_stock_etf["paper_momentum"] = merged_paper
         validate_stock_etf_settings(merged_stock_etf)
-        payload["stock_etf"] = merged_stock_etf
+        # Validate the effective configuration, but persist only fields supplied
+        # by the caller below.
 
     for category, values in payload.items():
         if not isinstance(values, dict):

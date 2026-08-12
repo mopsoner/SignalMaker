@@ -80,6 +80,7 @@ export const api = {
   momentumBacktestEquity: (runId, limit = 1000) => request('/api/v1/momentum-backtest/runs/' + runId + '/equity?limit=' + limit),
   adminSettings: () => request('/api/v1/admin/settings'),
   updateAdminSettings: (payload) => request('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteAdminSettingOverride: (category, key) => request(`/api/v1/admin/settings/${encodeURIComponent(category)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   workerStatus: () => request('/api/v1/admin/workers'),
   startWorker: (name) => request(`/api/v1/admin/workers/${name}/start`, { method: 'POST' }),
   stopWorker: (name) => request(`/api/v1/admin/workers/${name}/stop`, { method: 'POST' }),

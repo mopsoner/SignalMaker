@@ -32,6 +32,7 @@ function CleanupCard({ title, description, children }) {
 export default function AdminSettingsPage() {
   const [settings, setSettings] = useState(EMPTY_SETTINGS)
   const [initialSettings, setInitialSettings] = useState(EMPTY_SETTINGS)
+  const [overrides, setOverrides] = useState([])
   const [workers, setWorkers] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -42,19 +43,21 @@ export default function AdminSettingsPage() {
     setLoading(true)
     try {
       const [data, workerData] = await Promise.all([api.adminSettings(), api.workerStatus()])
+      const effective = data.settings || data
       const merged = {
         ...EMPTY_SETTINGS,
-        ...data,
-        general: { ...EMPTY_SETTINGS.general, ...(data.general || {}) },
-        strategy: { ...EMPTY_SETTINGS.strategy, ...(data.strategy || {}) },
-        notifications: { ...EMPTY_SETTINGS.notifications, ...(data.notifications || {}) },
-        bot: { ...EMPTY_SETTINGS.bot, ...(data.bot || {}) },
-        momentum: { ...EMPTY_SETTINGS.momentum, ...(data.momentum || {}) },
-        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(data.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(data.stock_etf?.paper_momentum || {}) } },
-        live: { ...EMPTY_SETTINGS.live, ...(data.live || {}) },
+        ...effective,
+        general: { ...EMPTY_SETTINGS.general, ...(effective.general || {}) },
+        strategy: { ...EMPTY_SETTINGS.strategy, ...(effective.strategy || {}) },
+        notifications: { ...EMPTY_SETTINGS.notifications, ...(effective.notifications || {}) },
+        bot: { ...EMPTY_SETTINGS.bot, ...(effective.bot || {}) },
+        momentum: { ...EMPTY_SETTINGS.momentum, ...(effective.momentum || {}) },
+        stock_etf: { ...EMPTY_SETTINGS.stock_etf, ...(effective.stock_etf || {}), paper_momentum: { ...EMPTY_SETTINGS.stock_etf.paper_momentum, ...(effective.stock_etf?.paper_momentum || {}) } },
+        live: { ...EMPTY_SETTINGS.live, ...(effective.live || {}) },
       }
       setSettings(merged)
       setInitialSettings(merged)
+      setOverrides(data.overrides || [])
       setWorkers(workerData)
       setMessage('')
     } catch (error) {
@@ -77,7 +80,12 @@ export default function AdminSettingsPage() {
     setSaving(true)
     setMessage('')
     try {
-      const saved = await api.updateAdminSettings(settings)
+      const changes = Object.fromEntries(Object.entries(settings).map(([category, values]) => [
+        category,
+        Object.fromEntries(Object.entries(values).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(initialSettings[category]?.[key]))),
+      ]).filter(([, values]) => Object.keys(values).length))
+      const response = await api.updateAdminSettings(changes)
+      const saved = response.settings || response
       const merged = {
         ...EMPTY_SETTINGS,
         ...saved,
@@ -91,11 +99,22 @@ export default function AdminSettingsPage() {
       }
       setSettings(merged)
       setInitialSettings(merged)
+      setOverrides(response.overrides || [])
       setMessage('Settings saved')
     } catch (error) {
       setMessage(error.message || 'Failed to save settings')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function removeOverride(category, key) {
+    try {
+      await api.deleteAdminSettingOverride(category, key)
+      await loadSettings()
+      setMessage(`${category}.${key} now inherits from .env or the built-in default`)
+    } catch (error) {
+      setMessage(error.message || 'Failed to remove override')
     }
   }
 
@@ -147,6 +166,19 @@ export default function AdminSettingsPage() {
           <button className="button" onClick={() => doAction(api.testNotifications)} disabled={loading}>Test notifications</button>
         </div>
         {message ? <p className="stat-hint" style={{ marginTop: 14 }}>{message}</p> : null}
+      </section>
+
+      <section className="panel">
+        <div style={{ marginBottom: 16 }}><h2>Database overrides</h2><p className="stat-hint" style={{ marginTop: 6 }}>Remove an override to inherit its value from .env or the application default again.</p></div>
+        <div style={gridStyle}>
+          {overrides.map(({ category, key }) => (
+            <div className="stat-card" key={`${category}.${key}`}>
+              <div className="stat-label">{category}.{key}</div>
+              <button className="button" style={{ marginTop: 10 }} onClick={() => removeOverride(category, key)}>Remove override</button>
+            </div>
+          ))}
+          {!overrides.length ? <p className="stat-hint">No database overrides.</p> : null}
+        </div>
       </section>
 
       <section className="panel">
