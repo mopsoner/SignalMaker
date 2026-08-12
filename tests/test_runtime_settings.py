@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
+from pathlib import Path
 
 from app.models.app_setting import AppSetting
 from app.models.base import Base
@@ -8,8 +9,11 @@ from app.core.config import Settings
 import pytest
 
 from app.services.runtime_settings import (
+    DEFAULT_SETTINGS,
     get_runtime_signal_config,
+    delete_runtime_setting_override,
     load_runtime_settings,
+    load_runtime_settings_admin,
     persist_runtime_settings,
 )
 
@@ -139,6 +143,56 @@ def test_load_runtime_settings_honors_explicit_supported_cadence() -> None:
         runtime = load_runtime_settings(db)
 
     assert runtime["momentum"]["momentum_engine_cadence_hours"] == 4
+
+
+def test_environment_value_is_effective_without_database_row(monkeypatch) -> None:
+    monkeypatch.setitem(DEFAULT_SETTINGS["strategy"], "planner_min_score", 31.0)
+    with _session() as db:
+        response = load_runtime_settings_admin(db)
+    assert response["settings"]["strategy"]["planner_min_score"] == 31.0
+    assert response["overrides"] == []
+
+
+def test_database_override_wins_and_can_be_deleted() -> None:
+    with _session() as db:
+        persist_runtime_settings(db, {"strategy": {"planner_min_score": 40}})
+        response = load_runtime_settings_admin(db)
+        assert response["settings"]["strategy"]["planner_min_score"] == 40
+        assert response["overrides"] == [{"category": "strategy", "key": "planner_min_score"}]
+
+        response = delete_runtime_setting_override(db, "strategy", "planner_min_score")
+        assert response["settings"]["strategy"]["planner_min_score"] == DEFAULT_SETTINGS["strategy"]["planner_min_score"]
+        assert response["overrides"] == []
+
+
+def test_partial_update_does_not_materialize_defaults() -> None:
+    with _session() as db:
+        persist_runtime_settings(db, {"strategy": {"planner_min_score": 33}})
+        rows = db.execute(select(AppSetting)).scalars().all()
+    assert [(row.category, row.key) for row in rows] == [("strategy", "planner_min_score")]
+
+
+def test_sql_migration_removes_legacy_fingerprint_but_preserves_customization() -> None:
+    migration = Path("migrations/20260812_remove_legacy_strategy_defaults.sql").read_text()
+    legacy = {
+        "signal_entry_rsi_min": 45, "signal_entry_rsi_max": 55,
+        "planner_min_score": 4, "planner_min_rr": 0.8,
+        "signal_session_confirm_filter_enabled": True,
+    }
+    with _session() as db:
+        db.add_all(AppSetting(category="strategy", key=key, value=value) for key, value in legacy.items())
+        db.commit()
+        db.connection().connection.executescript(migration)
+        db.commit()
+        assert db.execute(select(AppSetting)).scalars().all() == []
+
+    with _session() as db:
+        customized = {**legacy, "planner_min_score": 9}
+        db.add_all(AppSetting(category="strategy", key=key, value=value) for key, value in customized.items())
+        db.commit()
+        db.connection().connection.executescript(migration)
+        db.commit()
+        assert len(db.execute(select(AppSetting)).scalars().all()) == 5
 
 
 def test_stock_etf_defaults_are_safe_and_independent_from_crypto() -> None:
