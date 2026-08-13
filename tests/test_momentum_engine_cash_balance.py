@@ -979,6 +979,35 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
     }
 
 
+def test_decision_history_contains_only_executable_actions() -> None:
+    with _make_session() as db:
+        service = MomentumEngineService(db)
+        service._save_current_decision({
+            "action": "wait",
+            "should_trade": False,
+            "due_now": False,
+        })
+        service._save_current_decision({
+            "action": "buy",
+            "symbol": "BTCUSDC",
+            "target_symbol": "BTCUSDC",
+            "should_trade": True,
+            "due_now": True,
+        })
+        db.add(MomentumEngineDecisionHistory(
+            market_scope="crypto",
+            decision_id="legacy-wait-snapshot",
+            payload_json={"action": "wait", "should_trade": False},
+            produced_at=datetime.now(timezone.utc),
+        ))
+        db.flush()
+
+        persisted = list(db.scalars(select(MomentumEngineDecisionHistory)).all())
+        assert len(persisted) == 2
+        assert service.decision_history() == [persisted[0].payload_json]
+        assert service.decision_history()[0]["action"] == "buy"
+
+
 def test_run_once_waits_before_cadence_for_normal_position() -> None:
     with _make_session() as db:
         db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])

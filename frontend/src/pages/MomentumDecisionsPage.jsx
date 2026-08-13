@@ -14,7 +14,9 @@ function safeText(value) {
 }
 
 function decisionRows(decisions) {
-  return Array.isArray(decisions) ? decisions : []
+  // The API filters legacy snapshots too; retain this guard so WAIT/HOLD polling
+  // snapshots can never leak into the action log during a rolling deployment.
+  return Array.isArray(decisions) ? decisions.filter((decision) => decision?.should_trade === true) : []
 }
 
 export default function MomentumDecisionsPage() {
@@ -44,15 +46,15 @@ export default function MomentumDecisionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Momentum Decisions" subtitle="Complete persisted momentum-engine decision history, newest first." />
+    <PageHeader title="Momentum Decisions" subtitle="Executed momentum actions only, newest first." />
     <div className="stats-grid">
-      <StatCard label="Current action" value={safeText(decision?.action)} hint={decision?.produced_at ? `Produced ${fmtDate(decision.produced_at)}` : 'No produced_at persisted'} />
+      <StatCard label="Latest action" value={safeText(decision?.action)} hint={decision?.produced_at ? `Produced ${fmtDate(decision.produced_at)}` : 'No action persisted'} />
       <StatCard label="Should trade" value={safeText(decision?.should_trade)} hint={safeText(decision?.status)} />
       <StatCard label="Equity" value={fmtNumber(decision?.equity, 2)} hint={`Cash ${fmtNumber(decision?.cash, 2)}`} />
       <StatCard label="Total PnL" value={fmtNumber(decision?.total_pnl, 2)} hint={`${fmtNumber(decision?.total_pnl_pct, 2)}%`} />
     </div>
     {loading ? <div className="panel">Loading momentum decision…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
-    <FoldableTable title="All persisted momentum decisions" columns={columns} rows={rows} empty="No persisted momentum decision yet" defaultSortKey="produced_at" defaultSortDir="desc" paginated initialPageSize={50} />
+    <FoldableTable title="Executed momentum actions" columns={columns} rows={rows} empty="No momentum action executed yet" defaultSortKey="produced_at" defaultSortDir="desc" paginated initialPageSize={50} />
   </div>
 }
