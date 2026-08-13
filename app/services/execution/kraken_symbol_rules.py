@@ -52,9 +52,34 @@ class KrakenSymbolRules:
         if qty * Decimal(str(price)) < Decimal(str(info.get("costmin") or 0)):
             raise ValueError("notional below Kraken cost minimum")
 
+    def supported_leverages(self, symbol: str, side: str) -> tuple[int, ...]:
+        normalized_side = side.strip().lower()
+        if normalized_side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+        key = f"leverage_{normalized_side}"
+        supported: set[int] = set()
+        for value in self.symbol_info(symbol).get(key, []):
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 1:
+                supported.add(parsed)
+        return tuple(sorted(supported))
+
+    def max_supported_leverage(self, symbol: str, side: str, configured_max: int) -> int:
+        if configured_max < 2:
+            raise ValueError("configured maximum leverage must be at least 2")
+        eligible = tuple(value for value in self.supported_leverages(symbol, side) if value <= configured_max)
+        if not eligible:
+            raise ValueError(
+                f"no Kraken margin leverage is supported for {symbol} {side} "
+                f"within configured maximum {configured_max}"
+            )
+        return eligible[-1]
+
     def validate_leverage(self, symbol: str, side: str, leverage: int) -> int:
-        key = "leverage_buy" if side == "buy" else "leverage_sell"
-        supported = {int(value) for value in self.symbol_info(symbol).get(key, [])}
+        supported = set(self.supported_leverages(symbol, side))
         if leverage not in supported:
             raise ValueError(f"leverage {leverage} is not supported for {symbol} {side}")
         return leverage

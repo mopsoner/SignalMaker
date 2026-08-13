@@ -44,6 +44,16 @@ class KrakenExecutionService:
             self.db.commit()
         return result
 
+    def _margin_leverage(self, symbol: str, side: str, requested: int | None) -> tuple[int, tuple[int, ...]]:
+        configured_max = settings.kraken_margin_max_leverage
+        supported = self.rules.supported_leverages(symbol, side)
+        if requested is None:
+            return self.rules.max_supported_leverage(symbol, side, configured_max), supported
+        effective = int(requested)
+        if effective > configured_max:
+            raise ValueError("requested leverage exceeds configured maximum")
+        return self.rules.validate_leverage(symbol, side, effective), supported
+
     def buy_market(self, symbol: str, quote_amount: float | None = None, *, mode: str = "spot", leverage: int | None = None) -> dict:
         self._guard(mode)
         desired = float(quote_amount or settings.kraken_order_quote_amount)
@@ -57,15 +67,15 @@ class KrakenExecutionService:
         if own_quote < settings.kraken_min_buy_notional:
             raise ValueError("insufficient usable quote balance")
         effective_leverage = 1
+        supported_leverages: tuple[int, ...] = ()
         if mode == "margin":
-            effective_leverage = int(leverage or settings.kraken_margin_max_leverage)
-            if effective_leverage > settings.kraken_margin_max_leverage:
-                raise ValueError("requested leverage exceeds configured maximum")
-            self.rules.validate_leverage(symbol, "buy", effective_leverage)
+            effective_leverage, supported_leverages = self._margin_leverage(symbol, "buy", leverage)
         total = own_quote * effective_leverage
         quantity = self.rules.quantity_from_quote(symbol, total, price)
         result = self.client.place_market_entry(symbol, "buy", quantity) if mode == "spot" else self.margin.margin_order(symbol, "buy", quantity, effective_leverage)
         result.update({"mode": mode, "own_quote_amount": own_quote, "borrowed_notional": total - own_quote, "total_notional": total, "price": price})
+        if mode == "margin":
+            result.update({"configured_max_leverage": settings.kraken_margin_max_leverage, "supported_leverages": list(supported_leverages), "effective_leverage": effective_leverage})
         return self._record(result, symbol, "buy", float(quantity), mode)
 
     def sell_market(self, symbol: str, quantity: float | None = None, *, mode: str = "spot", leverage: int | None = None, intent: str = "close_long") -> dict:
@@ -80,9 +90,14 @@ class KrakenExecutionService:
                 raise ValueError("quantity is required for margin sells")
             raw_quantity = self.client.free_balance(self.rules.base_asset(symbol))
         normalized = self.rules.normalize_market_quantity(symbol, raw_quantity)
-        lev = int(leverage or settings.kraken_margin_max_leverage)
+        lev = 1
+        supported_leverages: tuple[int, ...] = ()
+        if mode == "margin":
+            lev, supported_leverages = self._margin_leverage(symbol, "sell", leverage)
         result = self.client.place_market_entry(symbol, "sell", normalized) if mode == "spot" else self.margin.margin_order(symbol, "sell", normalized, lev)
         result.update({"mode": mode, "intent": intent})
+        if mode == "margin":
+            result.update({"configured_max_leverage": settings.kraken_margin_max_leverage, "supported_leverages": list(supported_leverages), "effective_leverage": lev})
         return self._record(result, symbol, "sell", float(normalized), mode)
 
     def cancel_order(self, symbol: str, order_id: str, *, mode: str = "spot") -> dict:
