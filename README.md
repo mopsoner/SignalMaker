@@ -106,6 +106,64 @@ cp .env.production.example .env
 ```
 Then edit the database URL and runtime values.
 
+### Préflight Kraken avant la production
+
+Avant d'activer l'exécution réelle, lancez le préflight avec les mêmes clés API,
+symboles et modes que la production :
+
+```bash
+# Le mode par défaut est MOMENTUM_EXECUTION_MODE.
+bash run.sh kraken-preflight --symbol BTCUSD --quote-amount 50
+
+# Vérifier explicitement les payloads spot et margin, achat et vente.
+bash run.sh kraken-preflight --symbol BTCUSD --quote-amount 50 \
+  --mode spot --mode margin
+```
+
+Le préflight appelle réellement `AssetPairs`, `Ticker`, `OHLC`, `Balance`,
+`OpenOrders` et `OpenPositions`. Il envoie aussi chaque variante de `AddOrder`
+avec `validate=true` : Kraken valide donc la signature, les permissions, la
+paire, le volume et le levier **sans créer d'ordre**. La commande ne journalise
+ni les clés ni les soldes et renvoie un code non nul dès qu'au moins un contrôle
+échoue. `QueryOrders` et `CancelOrder` ne sont pas lancés : ils nécessitent un
+identifiant d'ordre réel et ne disposent pas d'un mode de validation sans effet.
+
+Ne passez `KRAKEN_DRY_RUN=false` et n'activez les workers d'exécution qu'après un
+résultat global `"ok": true`. Les clés doivent autoriser la consultation des
+fonds/ordres et la création d'ordres ; le préflight ne requiert aucun droit de
+retrait.
+
+### Démarrer le momentum live
+
+Le moteur momentum est long-only ; commencez en spot. Après un préflight réussi,
+configurez les valeurs suivantes dans le `.env` de production :
+
+```dotenv
+KRAKEN_EXECUTION_ENABLED=true
+KRAKEN_DRY_RUN=false
+MOMENTUM_EXECUTION_ENABLED=true
+MOMENTUM_EXECUTION_MODE=spot
+MOMENTUM_EXECUTOR_INTERVAL_SECONDS=60
+```
+
+Puis installez et démarrez le worker dédié :
+
+```bash
+sudo cp deploy/systemd/signalmaker-momentum-executor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now signalmaker-momentum-executor
+sudo systemctl status signalmaker-momentum-executor
+```
+
+Le worker refuse de démarrer si les clés, les garde-fous Kraken ou le mode live
+ne sont pas cohérents. Chaque `decision_id` live est journalisé avant le prochain
+cycle afin qu'un redémarrage ou une décision persistée ne soumette pas deux fois
+le même ordre. Pour arrêter immédiatement les nouvelles soumissions :
+
+```bash
+sudo systemctl stop signalmaker-momentum-executor
+```
+
 ## systemd templates
 Templates are available in `deploy/systemd/`.
 

@@ -88,3 +88,30 @@ def test_signed_rejects_non_private_path_without_sending_request():
         client._signed("POST", "/private/Balance")
 
     session.post.assert_not_called()
+
+
+def test_validate_market_entry_uses_kraken_validate_flag_even_in_dry_run():
+    client = KrakenClient(
+        api_key="key",
+        secret_key=base64.b64encode(b"secret").decode(),
+        dry_run=True,
+    )
+    client.pair_info = Mock(return_value={"pair_key": "XXBTZUSD"})
+    client._signed = Mock(return_value={"descr": {"order": "buy 0.001 XBTUSD"}})
+
+    result = client.validate_market_entry("BTCUSD", "buy", "0.001", leverage=2)
+
+    client._signed.assert_called_once_with(
+        "POST",
+        "/0/private/AddOrder",
+        {
+            "pair": "XXBTZUSD",
+            "type": "buy",
+            "ordertype": "market",
+            "volume": "0.001",
+            "validate": "true",
+            "leverage": "2",
+        },
+    )
+    assert result["status"] == "validated"
+    assert result["submitted"] is False

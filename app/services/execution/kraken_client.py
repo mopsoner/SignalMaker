@@ -194,6 +194,44 @@ class KrakenClient:
         order_id = (result.get("txid") or [None])[0]
         return {"order_id": order_id, "status": "pending", "symbol": symbol.upper(), "side": side, "requested_quantity": str(quantity), "executed_quantity": "0", "leverage": leverage, "dry_run": False, "raw_result": result}
 
+    def validate_market_entry(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float | str,
+        *,
+        leverage: int | None = None,
+    ) -> dict[str, Any]:
+        """Ask Kraken to validate an AddOrder payload without creating an order.
+
+        Kraken's ``validate`` flag exercises authentication, permissions, pair
+        resolution and order validation while guaranteeing that no order is
+        submitted.  Unlike ``place_market_entry``, this deliberately performs
+        the private request even when the application is configured for dry-run.
+        """
+        side = side.strip().lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+        payload: dict[str, Any] = {
+            "pair": self.pair_info(symbol)["pair_key"],
+            "type": side,
+            "ordertype": "market",
+            "volume": str(quantity),
+            "validate": "true",
+        }
+        if leverage is not None:
+            payload["leverage"] = str(leverage)
+        result = self._signed("POST", "/0/private/AddOrder", payload)
+        return {
+            "status": "validated",
+            "symbol": symbol.upper(),
+            "side": side,
+            "requested_quantity": str(quantity),
+            "leverage": leverage,
+            "submitted": False,
+            "raw_result": result,
+        }
+
     def place_exit_limit(self, symbol: str, side: str, quantity: float | str, price: float | str) -> dict[str, Any]:
         return self._place_price_order(symbol, side, quantity, "limit", price)
 
