@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import threading
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlencode
@@ -24,6 +25,7 @@ class HTTPResponse(Protocol):
 
 
 class HTTPSession(Protocol):
+    def get(self, url: str, *, params: Mapping[str, Any], timeout: int) -> HTTPResponse: ...
     def post(
         self,
         url: str,
@@ -128,3 +130,107 @@ class KrakenClient:
         if errors:
             raise KrakenAPIError(path, errors)
         return data.get("result") or {}
+
+    def _public(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
+        response = self.session.get(f"{self.base_url}{path}", params=dict(params or {}), timeout=KRAKEN_REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        data = response.json()
+        errors = data.get("error") or []
+        if errors:
+            raise KrakenAPIError(path, errors)
+        return data.get("result") or {}
+
+    @staticmethod
+    def _asset_name(asset: str) -> str:
+        value = str(asset or "").upper()
+        if value in {"XBT", "XXBT"}:
+            return "BTC"
+        return value.lstrip("XZ")
+
+    def asset_pairs(self) -> dict[str, Any]:
+        return self._public("/0/public/AssetPairs", {"assetVersion": 1})
+
+    def pair_info(self, symbol: str) -> dict[str, Any]:
+        wanted = symbol.upper().replace("/", "").replace("BTC", "XBT")
+        for key, row in self.asset_pairs().items():
+            names = {str(key), str(row.get("altname") or ""), str(row.get("wsname") or "")}
+            normalized = {name.upper().replace("/", "").replace("BTC", "XBT") for name in names}
+            if wanted in normalized:
+                return {**row, "pair_key": key, "baseAsset": self._asset_name(row.get("base", "")), "quoteAsset": self._asset_name(row.get("quote", ""))}
+        raise ValueError(f"Kraken pair not found: {symbol}")
+
+    def current_price(self, symbol: str) -> float:
+        info = self.pair_info(symbol)
+        rows = self._public("/0/public/Ticker", {"pair": info["pair_key"]})
+        if not rows:
+            raise KrakenAPIError("/0/public/Ticker", ["empty ticker result"])
+        return float((next(iter(rows.values())).get("c") or [0])[0])
+
+    def balance(self) -> dict[str, Any]:
+        return self._signed("POST", "/0/private/Balance")
+
+    account = balance
+
+    def free_balance(self, asset: str) -> float:
+        if self.dry_run:
+            return 0.0
+        wanted = self._asset_name(asset)
+        for name, value in self.balance().items():
+            if self._asset_name(name) == wanted:
+                return float(value or 0)
+        return 0.0
+
+    def place_market_entry(self, symbol: str, side: str, quantity: float | str, *, leverage: int | None = None) -> dict[str, Any]:
+        side = side.strip().lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+        payload: dict[str, Any] = {"pair": self.pair_info(symbol)["pair_key"], "type": side, "ordertype": "market", "volume": str(quantity)}
+        if leverage is not None:
+            payload["leverage"] = str(leverage)
+        if self.dry_run:
+            order_id = f"dry-{uuid.uuid4()}"
+            return {"order_id": order_id, "status": "simulated", "symbol": symbol.upper(), "side": side, "requested_quantity": str(quantity), "executed_quantity": "0", "leverage": leverage, "dry_run": True, "payload": payload}
+        result = self._signed("POST", "/0/private/AddOrder", payload)
+        order_id = (result.get("txid") or [None])[0]
+        return {"order_id": order_id, "status": "pending", "symbol": symbol.upper(), "side": side, "requested_quantity": str(quantity), "executed_quantity": "0", "leverage": leverage, "dry_run": False, "raw_result": result}
+
+    def place_exit_limit(self, symbol: str, side: str, quantity: float | str, price: float | str) -> dict[str, Any]:
+        return self._place_price_order(symbol, side, quantity, "limit", price)
+
+    def place_stop_loss(self, symbol: str, side: str, quantity: float | str, stop_price: float | str) -> dict[str, Any]:
+        return self._place_price_order(symbol, side, quantity, "stop-loss", stop_price)
+
+    def _place_price_order(self, symbol: str, side: str, quantity: float | str, ordertype: str, price: float | str) -> dict[str, Any]:
+        side = side.strip().lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy or sell")
+        payload = {"pair": self.pair_info(symbol)["pair_key"], "type": side, "ordertype": ordertype, "volume": str(quantity), "price": str(price)}
+        if self.dry_run:
+            return {"order_id": f"dry-{uuid.uuid4()}", "status": "simulated", "dry_run": True, "payload": payload}
+        result = self._signed("POST", "/0/private/AddOrder", payload)
+        return {"order_id": (result.get("txid") or [None])[0], "status": "pending", "dry_run": False, "raw_result": result}
+
+    def get_order(self, symbol: str, order_id: str) -> dict[str, Any]:
+        if order_id.startswith("dry-"):
+            return {"order_id": order_id, "status": "simulated", "dry_run": True}
+        rows = self._signed("POST", "/0/private/QueryOrders", {"txid": order_id, "trades": True})
+        row = rows.get(order_id, {})
+        status = str(row.get("status") or "unknown").lower()
+        return {"order_id": order_id, "status": "filled" if status == "closed" else status, "symbol": symbol.upper(), "side": row.get("type"), "requested_quantity": str(row.get("vol") or 0), "executed_quantity": str(row.get("vol_exec") or 0), "average_price": float(row.get("price") or 0), "dry_run": False, "raw_result": row}
+
+    def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        if self.dry_run:
+            return []
+        rows = (self._signed("POST", "/0/private/OpenOrders", {"trades": True}) or {}).get("open", {})
+        return [{"order_id": oid, **row} for oid, row in rows.items()]
+
+    def open_margin_positions(self) -> dict[str, Any]:
+        if self.dry_run:
+            return {}
+        return self._signed("POST", "/0/private/OpenPositions", {"docalcs": "true"})
+
+    def cancel_order(self, symbol: str, order_id: str) -> dict[str, Any]:
+        if self.dry_run or order_id.startswith("dry-"):
+            return {"order_id": order_id, "symbol": symbol.upper(), "status": "canceled", "dry_run": True}
+        result = self._signed("POST", "/0/private/CancelOrder", {"txid": order_id})
+        return {"order_id": order_id, "symbol": symbol.upper(), "status": "canceled", "dry_run": False, "raw_result": result}
