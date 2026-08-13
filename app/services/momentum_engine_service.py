@@ -77,20 +77,22 @@ class MomentumEngineService:
         return self._empty_current_decision()
 
     def decision_history(self, *, limit: int = 500) -> list[dict[str, Any]]:
-        """Return persisted decisions, newest first."""
+        """Return persisted trade actions, newest first.
+
+        Older installations may already contain periodic WAIT/HOLD snapshots, so
+        keep filtering on read in addition to only persisting actionable decisions.
+        """
         rows = self.db.scalars(
             select(MomentumEngineDecisionHistory)
             .where(MomentumEngineDecisionHistory.market_scope == self.market_scope)
             .order_by(MomentumEngineDecisionHistory.produced_at.desc(), MomentumEngineDecisionHistory.id.desc())
-            .limit(limit)
         ).all()
-        history = [row.payload_json for row in rows if isinstance(row.payload_json, dict)]
-        if history:
-            return history
-        current = self.db.scalar(select(MomentumEngineCurrentDecision).where(
-            MomentumEngineCurrentDecision.market_scope == self.market_scope
-        ))
-        return [current.payload_json] if current and isinstance(current.payload_json, dict) and current.payload_json else []
+        actions = [
+            row.payload_json
+            for row in rows
+            if isinstance(row.payload_json, dict) and row.payload_json.get("should_trade") is True
+        ]
+        return actions[:limit]
 
     def _empty_current_decision(self) -> dict[str, Any]:
         """Return a stable executor-compatible fallback when no current snapshot exists."""
@@ -493,12 +495,13 @@ class MomentumEngineService:
         row.payload_json = decision
         row.produced_at = parsed_produced_at
         row.updated_at = now
-        self.db.add(MomentumEngineDecisionHistory(
-            market_scope=self.market_scope,
-            decision_id=decision_id,
-            payload_json=decision,
-            produced_at=parsed_produced_at,
-        ))
+        if decision["should_trade"]:
+            self.db.add(MomentumEngineDecisionHistory(
+                market_scope=self.market_scope,
+                decision_id=decision_id,
+                payload_json=decision,
+                produced_at=parsed_produced_at,
+            ))
         self.db.flush()
         return decision
 
