@@ -106,6 +106,33 @@ cp .env.production.example .env
 ```
 Then edit the database URL and runtime values.
 
+### Préflight Kraken avant la production
+
+Avant d'activer l'exécution réelle, lancez le préflight avec les mêmes clés API,
+symboles et modes que la production :
+
+```bash
+# Le mode par défaut est MOMENTUM_EXECUTION_MODE.
+bash run.sh kraken-preflight --symbol BTCUSD --quote-amount 50
+
+# Vérifier explicitement les payloads spot et margin, achat et vente.
+bash run.sh kraken-preflight --symbol BTCUSD --quote-amount 50 \
+  --mode spot --mode margin
+```
+
+Le préflight appelle réellement `AssetPairs`, `Ticker`, `OHLC`, `Balance`,
+`OpenOrders` et `OpenPositions`. Il envoie aussi chaque variante de `AddOrder`
+avec `validate=true` : Kraken valide donc la signature, les permissions, la
+paire, le volume et le levier **sans créer d'ordre**. La commande ne journalise
+ni les clés ni les soldes et renvoie un code non nul dès qu'au moins un contrôle
+échoue. `QueryOrders` et `CancelOrder` ne sont pas lancés : ils nécessitent un
+identifiant d'ordre réel et ne disposent pas d'un mode de validation sans effet.
+
+Ne passez `KRAKEN_DRY_RUN=false` et n'activez les workers d'exécution qu'après un
+résultat global `"ok": true`. Les clés doivent autoriser la consultation des
+fonds/ordres et la création d'ordres ; le préflight ne requiert aucun droit de
+retrait.
+
 ## systemd templates
 Templates are available in `deploy/systemd/`.
 

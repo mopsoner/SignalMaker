@@ -72,6 +72,10 @@ PY
   kraken-account)
     python -c 'from app.db.session import SessionLocal; from app.services.execution.kraken_execution_service import KrakenExecutionService; db=SessionLocal(); print(KrakenExecutionService(db).account_summary()); db.close()'
     ;;
+  kraken-preflight)
+    shift
+    python -m scripts.check_kraken_workflow "$@"
+    ;;
   kraken-buy)
     [ "${KRAKEN_EXECUTION_ENABLED:-false}" = "true" ] || { echo "Kraken execution is disabled" >&2; exit 2; }
     SYMBOL="${2:?symbol required}" AMOUNT="${3:-}" python -c 'import os; from app.db.session import SessionLocal; from app.services.execution.kraken_execution_service import KrakenExecutionService; db=SessionLocal(); print(KrakenExecutionService(db).buy_market(os.environ["SYMBOL"], float(os.environ["AMOUNT"]) if os.environ["AMOUNT"] else None)); db.close()'
@@ -87,7 +91,7 @@ PY
     python -m scripts.run_momentum_executor_loop
     ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-buy|kraken-sell|momentum-executor-once|momentum-executor-loop]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-preflight|kraken-buy|kraken-sell|momentum-executor-once|momentum-executor-loop]"
     exit 1
     ;;
 esac
