@@ -1,16 +1,71 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.momentum_engine import MomentumEngineDecision, MomentumEngineRunRequest, MomentumEngineStatus
+from app.schemas.momentum_engine import (
+    MomentumEngineDecision,
+    MomentumEnginePositionPage,
+    MomentumEngineRunRequest,
+    MomentumEngineStatus,
+    MomentumEngineTradePage,
+)
 from app.services.momentum_engine_service import MomentumEngineService
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_engine_current_decision import MomentumEngineDecisionHistory
 
 router = APIRouter()
+MOMENTUM_MARKET_SCOPE = "crypto"
+MOMENTUM_STRATEGY = "momentum_rotation_v1"
+
+
+@router.get("/positions", response_model=MomentumEnginePositionPage)
+def momentum_engine_positions(
+    status: Literal["open", "closed"] | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> MomentumEnginePositionPage:
+    filters = [
+        MomentumEnginePosition.market_scope == MOMENTUM_MARKET_SCOPE,
+        MomentumEnginePosition.strategy == MOMENTUM_STRATEGY,
+    ]
+    if status is not None:
+        filters.append(MomentumEnginePosition.status == status)
+    total = db.scalar(select(func.count()).select_from(MomentumEnginePosition).where(*filters)) or 0
+    items = list(db.scalars(
+        select(MomentumEnginePosition)
+        .where(*filters)
+        .order_by(MomentumEnginePosition.opened_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all())
+    return MomentumEnginePositionPage(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/trades", response_model=MomentumEngineTradePage)
+def momentum_engine_trades(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> MomentumEngineTradePage:
+    filters = [
+        MomentumEngineTrade.market_scope == MOMENTUM_MARKET_SCOPE,
+        MomentumEngineTrade.strategy == MOMENTUM_STRATEGY,
+    ]
+    total = db.scalar(select(func.count()).select_from(MomentumEngineTrade).where(*filters)) or 0
+    items = list(db.scalars(
+        select(MomentumEngineTrade)
+        .where(*filters)
+        .order_by(MomentumEngineTrade.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all())
+    return MomentumEngineTradePage(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/status", response_model=MomentumEngineStatus)

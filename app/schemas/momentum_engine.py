@@ -42,6 +42,24 @@ class MomentumEngineTradeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MomentumEnginePositionPage(BaseModel):
+    """A stable, paginated view of the crypto momentum position ledger."""
+
+    items: list[MomentumEnginePositionRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class MomentumEngineTradePage(BaseModel):
+    """A stable, paginated view of momentum engine decisions that were recorded."""
+
+    items: list[MomentumEngineTradeRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class MomentumEngineDecision(BaseModel):
     strategy: str
     mode: str = "paper"
