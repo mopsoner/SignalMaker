@@ -16,6 +16,7 @@ from app.services.runtime_settings import (
     load_runtime_settings_admin,
     persist_runtime_settings,
 )
+from scripts.run_pipeline_loop import parse_pipeline_interval
 SIGNAL_ENV_KEYS = (
     "SIGNAL_SESSION_CONFIRM_FILTER_ENABLED",
     "SIGNAL_ENTRY_RSI_MIN",
@@ -103,6 +104,38 @@ def test_load_runtime_settings_defaults_momentum_cadence_to_one_hour() -> None:
     # break can make a due-only run sell immediately.
     assert runtime["momentum"]["momentum_engine_interval_sec"] == 300
     assert runtime["bot"]["bot_momentum_engine_interval_sec"] == 300
+
+
+def test_pipeline_interval_defaults_to_fifteen_minutes() -> None:
+    assert Settings(_env_file=None).bot_pipeline_interval_sec == 900
+    assert DEFAULT_SETTINGS["bot"]["bot_pipeline_interval_sec"] == 900
+
+
+def test_valid_pipeline_interval_is_converted_and_persisted() -> None:
+    with _session() as db:
+        runtime = persist_runtime_settings(db, {"bot": {"bot_pipeline_interval_sec": "120"}})
+        row = db.execute(select(AppSetting)).scalar_one()
+
+    assert runtime["bot"]["bot_pipeline_interval_sec"] == 120
+    assert row.value == 120
+
+
+@pytest.mark.parametrize("interval", [None, -1, 0, 59, "not-an-integer"])
+def test_invalid_pipeline_interval_is_rejected(interval) -> None:
+    with _session() as db, pytest.raises(ValueError, match=r"bot\.bot_pipeline_interval_sec.*at least 60"):
+        persist_runtime_settings(db, {"bot": {"bot_pipeline_interval_sec": interval}})
+
+
+@pytest.mark.parametrize(("legacy_value", "effective"), [
+    (None, 900),
+    ("invalid", 900),
+    (-10, 60),
+    (0, 60),
+    (59, 60),
+    (120, 120),
+])
+def test_pipeline_worker_defensively_bounds_legacy_intervals(legacy_value, effective) -> None:
+    assert parse_pipeline_interval(legacy_value) == effective
 
 
 def test_momentum_interval_default_can_be_configured_from_environment(monkeypatch) -> None:

@@ -18,7 +18,8 @@ from app.db.session import SessionLocal
 from app.services.pipeline_service import PipelineService
 from app.services.runtime_settings import load_runtime_settings
 
-DEFAULT_INTERVAL = 60
+DEFAULT_INTERVAL = 900
+MIN_INTERVAL = 60
 DEFAULT_LIMIT = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -49,6 +50,15 @@ def parse_symbol_limit(value):
         return None
 
 
+def parse_pipeline_interval(value):
+    """Return a safe effective cadence, including for legacy database values."""
+    try:
+        interval = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_INTERVAL
+    return max(interval, MIN_INTERVAL)
+
+
 if __name__ == "__main__":
     print("Pipeline worker started", flush=True)
     while True:
@@ -64,7 +74,7 @@ if __name__ == "__main__":
                 raw_limit = os.getenv("BOT_PIPELINE_SYMBOL_LIMIT")
 
             limit = parse_symbol_limit(raw_limit)
-            interval = int(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
+            interval = parse_pipeline_interval(bot.get("bot_pipeline_interval_sec", DEFAULT_INTERVAL))
             settings_log = (
                 f"bot_pipeline_enabled={enabled} "
                 f"bot_pipeline_interval_sec={interval} "

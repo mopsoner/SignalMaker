@@ -15,6 +15,7 @@ MOMENTUM_CADENCE_KEY = "momentum_engine_cadence_hours"
 SUPPORTED_MOMENTUM_CADENCES = {1, 4, 8, 24}
 STOCK_ETF_TIMEFRAMES = {"15m", "1h", "4h", "1d"}
 STOCK_ETF_ASSET_TYPES = {"STOCK", "ETF"}
+MIN_PIPELINE_INTERVAL_SEC = 60
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -275,8 +276,23 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
             strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy["signal_entry_rsi_timeframe"])
 
     bot = payload.get("bot")
-    if isinstance(bot, dict) and "bot_momentum_engine_enabled" in bot:
-        bot["bot_momentum_engine_enabled"] = _as_bool(bot["bot_momentum_engine_enabled"], default=True)
+    if isinstance(bot, dict):
+        if "bot_momentum_engine_enabled" in bot:
+            bot["bot_momentum_engine_enabled"] = _as_bool(bot["bot_momentum_engine_enabled"], default=True)
+        if "bot_pipeline_interval_sec" in bot:
+            try:
+                interval = int(bot["bot_pipeline_interval_sec"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"bot.bot_pipeline_interval_sec must be an integer of at least "
+                    f"{MIN_PIPELINE_INTERVAL_SEC} seconds"
+                ) from exc
+            if interval < MIN_PIPELINE_INTERVAL_SEC:
+                raise ValueError(
+                    f"bot.bot_pipeline_interval_sec must be at least "
+                    f"{MIN_PIPELINE_INTERVAL_SEC} seconds"
+                )
+            bot["bot_pipeline_interval_sec"] = interval
 
     momentum = payload.get("momentum")
     if isinstance(momentum, dict):
