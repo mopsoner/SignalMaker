@@ -36,6 +36,9 @@ start_worker "pipeline" "scripts/start_pipeline_worker.sh"
 start_worker "executor" "scripts/start_executor_worker.sh"
 start_worker "kraken_candle_feed" "scripts/start_kraken_candle_feed_worker.sh"
 start_worker "momentum_engine" "scripts/start_momentum_engine_worker.sh"
+if [ "${MOMENTUM_EXECUTION_ENABLED:-false}" = "true" ]; then
+  start_worker "momentum_executor" "scripts/start_momentum_executor_worker.sh"
+fi
 start_worker "momentum_backtest" "scripts/start_momentum_backtest_worker.sh"
 start_worker "ibkr_ingestion" "scripts/start_ibkr_ingestion_worker.sh"
 start_worker "stock_etf_analysis" "scripts/start_market_analysis_worker.sh"

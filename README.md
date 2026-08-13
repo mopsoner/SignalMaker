@@ -133,6 +133,37 @@ résultat global `"ok": true`. Les clés doivent autoriser la consultation des
 fonds/ordres et la création d'ordres ; le préflight ne requiert aucun droit de
 retrait.
 
+### Démarrer le momentum live
+
+Le moteur momentum est long-only ; commencez en spot. Après un préflight réussi,
+configurez les valeurs suivantes dans le `.env` de production :
+
+```dotenv
+KRAKEN_EXECUTION_ENABLED=true
+KRAKEN_DRY_RUN=false
+MOMENTUM_EXECUTION_ENABLED=true
+MOMENTUM_EXECUTION_MODE=spot
+MOMENTUM_EXECUTOR_INTERVAL_SECONDS=60
+```
+
+Puis installez et démarrez le worker dédié :
+
+```bash
+sudo cp deploy/systemd/signalmaker-momentum-executor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now signalmaker-momentum-executor
+sudo systemctl status signalmaker-momentum-executor
+```
+
+Le worker refuse de démarrer si les clés, les garde-fous Kraken ou le mode live
+ne sont pas cohérents. Chaque `decision_id` live est journalisé avant le prochain
+cycle afin qu'un redémarrage ou une décision persistée ne soumette pas deux fois
+le même ordre. Pour arrêter immédiatement les nouvelles soumissions :
+
+```bash
+sudo systemctl stop signalmaker-momentum-executor
+```
+
 ## systemd templates
 Templates are available in `deploy/systemd/`.
 
