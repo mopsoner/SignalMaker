@@ -152,3 +152,50 @@ def test_list_candles_first_filters_symbol_and_interval() -> None:
         assert candles[0].candle_id == "BTCUSDC-1m-first"
         assert candles[0].symbol == "BTCUSDC"
         assert candles[0].interval == "1m"
+
+
+def test_latest_contiguous_candles_discards_history_before_most_recent_gap() -> None:
+    with _make_session() as db:
+        service = MarketDataService(db)
+        candles = [
+            {"open_time": 0},
+            {"open_time": 900_000},
+            # Simulate an application/ingester outage of two 15-minute bars.
+            {"open_time": 3_600_000},
+            {"open_time": 4_500_000},
+            {"open_time": 5_400_000},
+        ]
+
+        contiguous = service.latest_contiguous_candles("15m", candles)
+
+        assert [candle["open_time"] for candle in contiguous] == [
+            3_600_000,
+            4_500_000,
+            5_400_000,
+        ]
+
+
+def test_latest_contiguous_candles_uses_last_gap_when_there_are_several() -> None:
+    with _make_session() as db:
+        service = MarketDataService(db)
+        candles = [
+            {"open_time": 0},
+            {"open_time": 1_800_000},
+            {"open_time": 3_600_000},
+            {"open_time": 4_500_000},
+        ]
+
+        contiguous = service.latest_contiguous_candles("15m", candles)
+
+        assert [candle["open_time"] for candle in contiguous] == [3_600_000, 4_500_000]
+
+
+def test_latest_contiguous_candles_preserves_an_uninterrupted_series() -> None:
+    with _make_session() as db:
+        service = MarketDataService(db)
+        candles = [{"open_time": index * 3_600_000} for index in range(4)]
+
+        contiguous = service.latest_contiguous_candles("1h", candles)
+
+        assert contiguous == candles
+        assert contiguous is not candles
