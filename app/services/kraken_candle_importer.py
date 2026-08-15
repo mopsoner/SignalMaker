@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,9 @@ from app.services.market_data_service import MarketDataService
 
 
 KRAKEN_BASE_URL = "https://api.kraken.com"
+KRAKEN_OHLC_MAX_CANDLES = 720
+MAX_CATCHUP_PAGES = 100
+logger = logging.getLogger(__name__)
 
 INTERVAL_TO_KRAKEN_MINUTES = {
     "1m": 1,
@@ -200,7 +204,10 @@ def fetch_kraken_ohlc(
             break
 
     if limit and limit > 0:
-        rows = rows[-limit:]
+        # A historical request must consume the oldest rows first or advancing
+        # the cursor would silently skip the middle of a long outage.  With no
+        # cursor, retain the original "most recent N" bootstrap behaviour.
+        rows = rows[:limit] if since_ms is not None else rows[-limit:]
 
     candles = [candle_from_kraken_row(row, interval_minutes) for row in rows]
     for candle in candles:
@@ -221,6 +228,7 @@ def import_kraken_candles(
     require_margin_sell: bool = False,
     base_url: str = KRAKEN_BASE_URL,
     requests_per_minute: int = 60,
+    max_catchup_pages: int = MAX_CATCHUP_PAGES,
 ) -> dict[str, Any]:
     quote_assets = quote_assets or ["USD"]
     intervals = intervals or ["4h"]
@@ -243,34 +251,70 @@ def import_kraken_candles(
 
     for pair in pairs:
         for interval in intervals:
+            pages = 0
+            caught_up = 0
             try:
                 latest = service.list_candles(symbol=pair.symbol, interval=interval, limit=1, latest=True)
-                since_ms = int(latest[0].close_time) + 1 if latest else None
+                interval_ms = INTERVAL_TO_KRAKEN_MINUTES[interval] * 60_000
+                cursor_ms = int(latest[0].close_time) + 1 if latest else None
+                # Freeze the target for this cycle.  A candle is eligible only
+                # when its complete interval ended before this instant.
+                target_ms = int(time.time() * 1000)
 
-                now = time.monotonic()
-                if last_request_at is not None:
-                    elapsed = now - last_request_at
-                    if elapsed < min_delay:
-                        time.sleep(min_delay - elapsed)
-                last_request_at = time.monotonic()
+                while pages < max(1, int(max_catchup_pages)):
+                    now = time.monotonic()
+                    if last_request_at is not None:
+                        elapsed = now - last_request_at
+                        if elapsed < min_delay:
+                            time.sleep(min_delay - elapsed)
+                    last_request_at = time.monotonic()
 
-                candles = fetch_kraken_ohlc(
-                    pair=pair,
-                    interval=interval,
-                    limit=limit,
-                    base_url=base_url,
-                    since_ms=since_ms,
+                    candles = fetch_kraken_ohlc(
+                        pair=pair,
+                        interval=interval,
+                        limit=min(max(1, int(limit)), KRAKEN_OHLC_MAX_CANDLES),
+                        base_url=base_url,
+                        since_ms=cursor_ms,
+                    )
+                    pages += 1
+                    closed = [row for row in candles if int(row["close_time"]) < target_ms]
+                    if cursor_ms is not None:
+                        closed = [row for row in closed if int(row["open_time"]) >= cursor_ms]
+                    if not closed:
+                        break
+
+                    # Commit every page.  If a later request fails, the next
+                    # feed cycle resumes from this persisted boundary.
+                    service.upsert_candles(pair.symbol, interval, closed)
+                    caught_up += len(closed)
+                    next_cursor = int(closed[-1]["open_time"]) + interval_ms
+                    if cursor_ms is not None and next_cursor <= cursor_ms:
+                        break
+                    cursor_ms = next_cursor
+                    if cursor_ms >= target_ms or len(candles) < min(max(1, int(limit)), KRAKEN_OHLC_MAX_CANDLES):
+                        break
+
+                logger.info(
+                    "Kraken candle catch-up symbol=%s interval=%s pages=%s candles=%s",
+                    pair.symbol, interval, pages, caught_up,
                 )
+                if pages >= max(1, int(max_catchup_pages)) and cursor_ms is not None and cursor_ms < target_ms:
+                    logger.warning(
+                        "Kraken candle catch-up safety limit reached symbol=%s interval=%s pages=%s candles=%s cursor_ms=%s",
+                        pair.symbol, interval, pages, caught_up, cursor_ms,
+                    )
 
-                if not candles:
+                if not caught_up:
                     skipped.append({"symbol": pair.symbol, "interval": interval, "reason": "already_up_to_date"})
                     continue
-
-                upserted = service.upsert_candles(pair.symbol, interval, candles)
-                pushed.append({"symbol": pair.symbol, "interval": interval, "candles": len(candles), "upserted": upserted})
+                pushed.append({"symbol": pair.symbol, "interval": interval, "candles": caught_up, "upserted": caught_up, "pages": pages})
             except Exception as exc:
                 db.rollback()
-                errors.append({"symbol": pair.symbol, "interval": interval, "error": str(exc)})
+                logger.warning(
+                    "Kraken candle catch-up interrupted symbol=%s interval=%s pages=%s candles=%s error=%s",
+                    pair.symbol, interval, pages, caught_up, exc,
+                )
+                errors.append({"symbol": pair.symbol, "interval": interval, "pages": pages, "candles": caught_up, "error": str(exc)})
 
     return {
         "status": "ok" if not errors else "partial",
