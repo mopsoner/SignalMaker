@@ -210,6 +210,13 @@ class PipelineService:
                 # All engine inputs are now detached dictionaries.  End the read
                 # transaction before validation and signal computation.
                 self.db.rollback()
+                # Do not calculate indicators across an ingestion outage.  The
+                # external feed may resume without backfilling while this app
+                # was stopped, leaving one permanent gap in every loaded window.
+                candles = {
+                    interval: self.market_data.latest_contiguous_candles(interval, series)
+                    for interval, series in candles.items()
+                }
                 execution_candles = candles.get(execution_interval, [])
                 quality_exec = self.market_data.validate_candle_series(execution_interval, execution_candles, min_count=30)
                 if not quality_exec["valid"]:

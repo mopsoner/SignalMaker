@@ -261,6 +261,38 @@ class MarketDataService:
             "count": len(candles),
         }
 
+    def latest_contiguous_candles(
+        self,
+        interval: str,
+        candles: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Return the newest uninterrupted portion of a candle series.
+
+        An external ingester can legitimately stop while this application is
+        offline.  Once ingestion resumes, mixing candles from before and after
+        that outage makes indicators treat the missing period as if no market
+        time had elapsed.  Keep only the segment after the most recent gap so a
+        pipeline run cannot calculate a signal across missing market data.
+
+        The caller is still expected to run ``validate_candle_series`` on the
+        result.  In particular, a newly resumed feed will remain invalid until
+        it has accumulated the requested minimum number of contiguous candles.
+        """
+        if len(candles) < 2:
+            return list(candles)
+
+        expected_step = INTERVAL_MS[interval]
+        segment_start = 0
+        previous_open_time = int(candles[0]["open_time"])
+
+        for index, candle in enumerate(candles[1:], start=1):
+            open_time = int(candle["open_time"])
+            if open_time - previous_open_time != expected_step:
+                segment_start = index
+            previous_open_time = open_time
+
+        return candles[segment_start:]
+
     def upsert_candles(self, symbol: str, interval: str, candles: list[dict]) -> int:
         """
         True PostgreSQL upsert.
