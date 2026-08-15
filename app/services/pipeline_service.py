@@ -218,26 +218,32 @@ class PipelineService:
                     for interval, series in candles.items()
                 }
                 execution_candles = candles.get(execution_interval, [])
-                quality_exec = self.market_data.validate_candle_series(execution_interval, execution_candles, min_count=30)
-                if not quality_exec["valid"]:
-                    record_error({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{execution_interval}_quality", "issues": quality_exec["issues"]})
-                    for issue in quality_exec["issues"]:
-                        data_quality_counts[issue] += 1
+                candle_qualities = {
+                    interval: self.market_data.validate_candle_series(
+                        interval,
+                        execution_candles if interval == execution_interval else candles.get(interval, []),
+                        min_count=30,
+                    )
+                    for interval in (execution_interval, "1h", "4h")
+                }
+
+                for interval, quality in candle_qualities.items():
+                    if quality["valid"]:
+                        continue
+                    record_error({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{interval}_quality", "issues": quality["issues"]})
+                    for issue in quality["issues"]:
+                        counter_key = issue if interval == execution_interval else f"{interval}:{issue}"
+                        data_quality_counts[counter_key] += 1
+
                 if not candles.get("1h"):
                     record_error({"symbol": symbol, "phase": "analyze", "error": "missing_1h_candles"})
                     data_quality_counts["missing_1h_bundle"] += 1
-                    continue
                 if not candles.get("4h"):
                     record_error({"symbol": symbol, "phase": "analyze", "error": "missing_4h_candles"})
                     data_quality_counts["missing_4h_bundle"] += 1
-                    continue
 
-                for interval in ("1h", "4h"):
-                    quality_htf = self.market_data.validate_candle_series(interval, candles.get(interval, []), min_count=30)
-                    if not quality_htf["valid"]:
-                        record_error({"symbol": symbol, "phase": "diagnostic", "warning": f"invalid_{interval}_quality", "issues": quality_htf["issues"]})
-                        for issue in quality_htf["issues"]:
-                            data_quality_counts[f"{interval}:{issue}"] += 1
+                if any(not quality["valid"] for quality in candle_qualities.values()):
+                    continue
 
                 try:
                     signal, assessment = self.wyckoff_pipeline.analyze(
@@ -249,7 +255,7 @@ class PipelineService:
                 except Exception as exc:
                     record_error({"symbol": symbol, "phase": "compute_signal", "error": "compute_signal_error", "detail": str(exc)})
                     continue
-                signal[f"candle_quality_{execution_interval}"] = quality_exec
+                signal[f"candle_quality_{execution_interval}"] = candle_qualities[execution_interval]
                 try:
                     self.asset_states.upsert_from_signal(signal)
                     asset_states_upserted += 1
