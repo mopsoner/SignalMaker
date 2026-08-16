@@ -83,7 +83,9 @@ export default function AssetDetailPage() {
   const payload = asset?.state_payload || {}
   const breakdown = payload?.score_breakdown || payload?.final_score_breakdown || {}
   const legacyBreakdown = payload?.legacy_score_breakdown || {}
-  const displayScore = payload?.score ?? asset?.score
+  // Keep this aligned with the dashboard: the persisted top-level score is
+  // authoritative, while the payload is retained as diagnostic detail.
+  const displayScore = asset?.score ?? payload?.score ?? payload?.final_score
 
   return (
     <div className="page-stack">
