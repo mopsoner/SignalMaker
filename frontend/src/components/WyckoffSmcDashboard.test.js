@@ -7,7 +7,7 @@ import { createServer } from 'vite'
 
 const vite = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
 after(() => vite.close())
-const { DecisionPath, MarketFilterChips, MobileAssetCards } = await vite.ssrLoadModule('/src/components/WyckoffSmcDashboard.jsx')
+const { assetScore, DecisionPath, MarketFilterChips, MobileAssetCards } = await vite.ssrLoadModule('/src/components/WyckoffSmcDashboard.jsx')
 const row = { id: 1, symbol: 'BTCUSD', provider_symbol: 'IWDA.AS', stage: 'trade_candidate', bias: 'bull', score: 8.5, rsi_1h: 57, state_payload: { state: 'markup', pipeline: { liquidity: true }, projected_target: { type: 'buy_side', level: 101 }, confirmation_model: { confirmed_by_1h: true, fifteen_min_alignment: 'aligned' }, one_hour_decision: { valid: true, side: 'bull', source: 'spring_mss' }, zone_validity: { valid: true }, planner_candidate_status: 'candidate_watch' } }
 const render = (element) => renderToStaticMarkup(React.createElement(MemoryRouter, null, element))
 
@@ -43,4 +43,20 @@ test('mobile cards share stage badge, statistics and path while market actions s
   assert.doesNotMatch(stocks, /Debug view|\/assets\//)
   assert.match(stocks, /IWDA\.AS/)
   assert.match(stocks, /ETF · Europe ETF/)
+})
+
+test('dashboard score matches the persisted score shown by the debug view', () => {
+  const staleDiagnostics = {
+    score: 19.82,
+    state_payload: { score: 12.5, final_score: 12.5, gated_score: 27.25 },
+  }
+
+  assert.equal(assetScore(staleDiagnostics), 19.82)
+  const markup = render(React.createElement(MobileAssetCards, {
+    rows: [{ ...row, ...staleDiagnostics }],
+    detailUrl: () => '/assets/BTCUSD',
+    tradingViewLink: () => 'https://tv/crypto',
+  }))
+  assert.match(markup, /19\.82/)
+  assert.doesNotMatch(markup, /27\.25/)
 })

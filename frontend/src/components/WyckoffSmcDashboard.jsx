@@ -7,7 +7,10 @@ import { usePollingQuery } from '../hooks/usePollingQuery'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
 
 const get = (row, key) => row?.state_payload?.[key] ?? null
-const score = (row) => Number(get(row, 'gated_score') ?? get(row, 'score') ?? row.score ?? get(row, 'final_score') ?? 0)
+// `row.score` is the canonical score persisted for the asset and is also what
+// the debug view receives at the top level.  Diagnostic payload fields can be
+// left over from an earlier gate/scoring pass, so they must not override it.
+export const assetScore = (row) => Number(row?.score ?? get(row, 'score') ?? get(row, 'final_score') ?? get(row, 'gated_score') ?? 0)
 const stage = (row) => row?.stage || get(row, 'stage') || get(row, 'hierarchy_gate')?.stage || 'collect'
 const starts = (value, prefix) => String(value || '').startsWith(prefix)
 const trigger = (row) => get(row, 'execution_trigger') || null
@@ -85,7 +88,7 @@ export function MobileAssetCards({ rows, detailUrl, tradingViewLink, symbolFor =
   return <div className="mobile-card-grid market-mobile-cards">{rows.map((row) => { const symbol = symbolFor(row); const debugUrl = detailUrl?.(row); return <article className="mobile-asset-card" key={row.id || row.asset_id || symbol}>
     <div className="mobile-asset-top"><div>{debugUrl ? <Link to={debugUrl}><strong>{symbol}</strong></Link> : <strong>{symbol}</strong>}<div className="mobile-asset-meta">{get(row, 'state') || '—'} · {row.bias || '—'}{assetMeta?.(row) ? ` · ${assetMeta(row)}` : ''}</div></div><span className={stageBadgeClass(stage(row))}>{stage(row)}</span></div>
     <DecisionPath row={row} />
-    <div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(score(row), 2)}</strong></div><div><span>RSI 1H</span><strong>{fmtNumber(rsiOneHour(row), 2)}</strong></div><div><span>Model</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div>
+    <div className="mobile-kpi-grid"><div><span>Score</span><strong>{fmtNumber(assetScore(row), 2)}</strong></div><div><span>RSI 1H</span><strong>{fmtNumber(rsiOneHour(row), 2)}</strong></div><div><span>Model</span><strong>{confirmationLabel(row)}</strong></div><div><span>Target</span><strong>{context(row.execution_target || get(row, 'projected_target'))}</strong></div></div>
     <div className="mobile-reason"><span>Reason</span><strong>{plannerReason(row)}</strong></div>
     <div className="mobile-asset-actions">{debugUrl ? <Link to={debugUrl}>Debug view</Link> : null}<a href={tradingViewLink(row)} target="_blank" rel="noreferrer">TradingView</a></div>
   </article>})}</div>
@@ -136,7 +139,7 @@ export default function WyckoffSmcDashboard({
     mss: assets.filter(mss).length,
     bos: assets.filter(bos).length,
   }), [assets])
-  const avgScore = assets.length ? (assets.reduce((sum, row) => sum + score(row), 0) / assets.length).toFixed(2) : '0.00'
+  const avgScore = assets.length ? (assets.reduce((sum, row) => sum + assetScore(row), 0) / assets.length).toFixed(2) : '0.00'
 
   const filters = [
     ['actionable', `Actionable (${counts.actionable})`], ['trade_candidate', `Trade candidate (${counts.tradeCandidate})`], ['trade_ready', `Trade ready (${counts.tradeReady})`], ['one_hour_confirmed', `1H setup valid (${counts.oneHourConfirmed})`], ['fifteen_min_aligned', `15m aligned (${counts.fifteenMinAligned})`], ['fifteen_min_not_opposed', `15m not opposed (${counts.fifteenMinNotOpposed})`], ['fifteen_min_opposed', `15m opposed (${counts.fifteenMinOpposed})`], ['one_hour_bear', `1H bear UTAD/MSS (${counts.oneHourBear})`], ['one_hour_bull', `1H bull Spring/MSS (${counts.oneHourBull})`], ['waiting_1h_event', `Waiting 1H setup (${counts.waitingOneHourEvent})`], ['waiting_15m_alignment', `Waiting 15m alignment (${counts.waitingFifteenMinAlignment})`], ['macro_blocked', `4H context blocked (${counts.macroBlocked})`], ['target_blocked', `Target blocked (${counts.targetBlocked})`], ['liquidity_waiting', `Liquidity waiting (${counts.liquidityWaiting})`], ['bull', `Bull (${counts.bull})`], ['bear', `Bear (${counts.bear})`], ['swept', `Swept (${counts.swept})`], ['strong_zone', `Zone ok diagnostic (${counts.strongZones})`], ['with_target', `With target (${counts.withTarget})`], ['mss', `MSS (${counts.mss})`], ['bos', `BOS (${counts.bos})`], ['all', `All (${assets.length})`],
@@ -167,8 +170,8 @@ export default function WyckoffSmcDashboard({
     return assets
   }, [assets, marketFilter])
 
-  const sortedFilteredAssets = useMemo(() => [...filteredAssets].sort((a, b) => score(b) - score(a)), [filteredAssets])
-  const strongestAssets = useMemo(() => [...assets].sort((a, b) => score(b) - score(a)).slice(0, 6), [assets])
+  const sortedFilteredAssets = useMemo(() => [...filteredAssets].sort((a, b) => assetScore(b) - assetScore(a)), [filteredAssets])
+  const strongestAssets = useMemo(() => [...assets].sort((a, b) => assetScore(b) - assetScore(a)).slice(0, 6), [assets])
 
   const columns = [
     { key: 'symbol', title: labels.symbol || 'Symbol', render: (row) => { const symbol = symbolFor(row); const url = detailUrl?.(row); return <div style={{ display: 'grid', gap: 6 }}>{url ? <Link to={url}><strong>{symbol}</strong></Link> : <strong>{symbol}</strong>}{assetMeta?.(row) ? <span className="stat-hint">{assetMeta(row)}</span> : null}<a href={tradingViewLink(row)} target="_blank" rel="noreferrer">TradingView</a></div> }, sortValue: symbolFor },
@@ -176,7 +179,7 @@ export default function WyckoffSmcDashboard({
     { key: 'decision', title: 'Decision path', render: (row) => <DecisionPath row={row} />, sortValue: confirmationLabel },
     { key: 'state', title: 'State', render: (row) => get(row, 'state') || '—', sortValue: (row) => get(row, 'state') || '' },
     { key: 'bias', title: 'Bias', render: (row) => row.bias || '—', sortValue: (row) => row.bias || '' },
-    { key: 'score', title: 'Score', render: (row) => fmtNumber(score(row), 2), sortValue: score },
+    { key: 'score', title: 'Score', render: (row) => fmtNumber(assetScore(row), 2), sortValue: assetScore },
     { key: 'confirm_model', title: 'Alignment model', render: confirmationLabel, sortValue: confirmationLabel },
     { key: 'rsi', title: 'RSI 1H', render: (row) => fmtNumber(rsiOneHour(row), 2), sortValue: (row) => Number(rsiOneHour(row) ?? -1) },
     { key: 'reason', title: 'Reason', render: plannerReason, sortValue: plannerReason },
