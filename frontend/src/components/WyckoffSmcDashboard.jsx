@@ -5,12 +5,10 @@ import PageHeader from './PageHeader'
 import StatCard from './StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
+import { assetScore } from '../lib/assetScore'
 
 const get = (row, key) => row?.state_payload?.[key] ?? null
-// `row.score` is the canonical score persisted for the asset and is also what
-// the debug view receives at the top level.  Diagnostic payload fields can be
-// left over from an earlier gate/scoring pass, so they must not override it.
-export const assetScore = (row) => Number(row?.score ?? get(row, 'score') ?? get(row, 'final_score') ?? get(row, 'gated_score') ?? 0)
+export { assetScore } from '../lib/assetScore'
 const stage = (row) => row?.stage || get(row, 'stage') || get(row, 'hierarchy_gate')?.stage || 'collect'
 const starts = (value, prefix) => String(value || '').startsWith(prefix)
 const trigger = (row) => get(row, 'execution_trigger') || null

@@ -5,6 +5,7 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtNumber, fmtDate } from '../lib/format'
+import { assetScore } from '../lib/assetScore'
 
 function summarizeContext(value) {
   if (!value || typeof value !== 'object') return '—'
@@ -83,9 +84,6 @@ export default function AssetDetailPage() {
   const payload = asset?.state_payload || {}
   const breakdown = payload?.score_breakdown || payload?.final_score_breakdown || {}
   const legacyBreakdown = payload?.legacy_score_breakdown || {}
-  // Keep this aligned with the dashboard: the persisted top-level score is
-  // authoritative, while the payload is retained as diagnostic detail.
-  const displayScore = asset?.score ?? payload?.score ?? payload?.final_score
 
   return (
     <div className="page-stack">
@@ -100,7 +98,7 @@ export default function AssetDetailPage() {
           <div className="stats-grid">
             <StatCard label="Stage" value={asset.stage} />
             <StatCard label="Bias" value={asset.bias || '—'} />
-            <StatCard label="Score" value={fmtNumber(displayScore, 2)} hint={`Updated ${fmtDate(asset.updated_at)}`} />
+            <StatCard label="Score" value={fmtNumber(assetScore(asset), 2)} hint={`Updated ${fmtDate(asset.updated_at)}`} />
             <StatCard label="Session" value={payload.session_phase || asset.session || '—'} hint={`Filter ${payload.session_confirm_filter_enabled ? 'ON' : 'OFF'}`} />
           </div>
           <section className="panel two-col">
