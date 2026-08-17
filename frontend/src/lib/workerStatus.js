@@ -1,8 +1,10 @@
 export const MANAGED_WORKERS = [
   'pipeline',
-  'executor',
+  'wyckoff_paper',
   'kraken_candle_feed',
-  'momentum_engine',
+  'momentum_paper',
+  'momentum_live',
+  'wyckoff_live',
   'momentum_backtest',
   'ibkr_ingestion',
   'stock_etf_analysis',

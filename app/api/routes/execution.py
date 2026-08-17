@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_operator
 from app.services.execution.kraken_execution_service import ExecutionConfigurationError, ExecutionDisabledError, KrakenExecutionService
-from app.services.execution.momentum_execution_service import MomentumExecutionService
+from app.services.execution.momentum_live_execution_service import MomentumLiveExecutionService
 from app.services.momentum_engine_service import MomentumEngineService
 
 router = APIRouter(dependencies=[Depends(require_operator)])
@@ -67,5 +67,5 @@ def account(db: Session = Depends(get_db)):
 @router.post("/executor/momentum/run-once")
 def momentum_once(db: Session = Depends(get_db)):
     decision = MomentumEngineService(db).current_decision()
-    result = _call(lambda: MomentumExecutionService(db).execute_decision(decision))
+    result = _call(lambda: MomentumLiveExecutionService(db).execute_decision(decision))
     return {"decision": decision, "execution_result": result}

@@ -27,7 +27,7 @@ def _configured_worker_names() -> set[str]:
 
 def test_reserved_vm_script_writes_a_pid_file_for_every_configured_worker() -> None:
     script = RESERVED_VM_SCRIPT.read_text()
-    launched_workers = set(re.findall(r'^start_worker "([a-z_]+)" ', script, re.MULTILINE))
+    launched_workers = set(re.findall(r'^\s*start_worker "([a-z_]+)" ', script, re.MULTILINE))
 
     assert launched_workers == _configured_worker_names()
     assert 'printf \'%s\\n\' "$pid" > "$RUNTIME_DIR/$name.pid"' in script
@@ -38,9 +38,11 @@ def test_every_deployment_worker_redirects_both_streams_to_api_log_path() -> Non
     systemd_dir = ROOT_DIR / "deploy/systemd"
     unit_by_worker = {
         "pipeline": "signalmaker-pipeline.service",
-        "executor": "signalmaker-executor.service",
+        "wyckoff_paper": "signalmaker-wyckoff-paper.service",
         "scheduler": "signalmaker-scheduler.service",
-        "momentum_engine": "signalmaker-momentum-engine.service",
+        "momentum_paper": "signalmaker-momentum-paper.service",
+        "momentum_live": "signalmaker-momentum-live.service",
+        "wyckoff_live": "signalmaker-wyckoff-live.service",
         "momentum_backtest": "signalmaker-momentum-backtest.service",
         "kraken_candle_feed": "signalmaker-kraken-candle-feed.service",
         "ibkr_ingestion": "signalmaker-ibkr-ingestion.service",
@@ -67,5 +69,5 @@ def test_legacy_vm_entrypoint_uses_the_shared_log_directory_configuration() -> N
     script = LEGACY_VM_SCRIPT.read_text(encoding="utf-8")
 
     assert 'export SIGNALMAKER_LOG_DIR="${SIGNALMAKER_LOG_DIR:-$PWD/logs}"' in script
-    for worker in ("pipeline", "executor", "scheduler"):
+    for worker in ("pipeline", "wyckoff_paper", "scheduler"):
         assert f'>> "$LOG_DIR/{worker}.log" 2>&1 &' in script

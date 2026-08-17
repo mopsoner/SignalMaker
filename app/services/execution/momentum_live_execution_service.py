@@ -12,7 +12,7 @@ from app.models.app_setting import AppSetting
 from .kraken_execution_service import ExecutionDisabledError, KrakenExecutionService
 
 
-class MomentumExecutionService:
+class MomentumLiveExecutionService:
     JOURNAL_CATEGORY = "momentum_execution"
     JOURNAL_KEY = "last_live_decision"
 
@@ -36,7 +36,7 @@ class MomentumExecutionService:
             raise ValueError(f"unsupported momentum action: {action}")
         if action in {"WAIT", "HOLD"}:
             return {"status": "skipped", "action": action, "orders": []}
-        if not settings.momentum_execution_enabled:
+        if not settings.momentum_live_enabled:
             raise ExecutionDisabledError("Momentum execution is disabled")
         if decision.get("should_trade") is False:
             return {"status": "skipped", "reason": "should_trade_false", "orders": []}
@@ -52,9 +52,9 @@ class MomentumExecutionService:
                     "decision_id": decision_id,
                     "orders": previous.get("orders", []),
                 }
-        mode = settings.momentum_execution_mode.lower()
+        mode = settings.momentum_live_mode.lower()
         if mode not in {"spot", "margin"}:
-            raise ValueError("MOMENTUM_EXECUTION_MODE must be spot or margin")
+            raise ValueError("MOMENTUM_LIVE_MODE must be spot or margin")
         if action == "BUY":
             symbol = decision.get("buy_symbol") or decision.get("symbol")
             result = {"status": "executed", "action": action, "orders": [self.execution.buy_market(self._symbol(symbol), mode=mode)]}

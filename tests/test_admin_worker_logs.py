@@ -10,9 +10,11 @@ from app.services.worker_control_service import WorkerControlService
 
 EXPECTED_WORKERS = {
     "pipeline",
-    "executor",
+    "wyckoff_paper",
     "scheduler",
-    "momentum_engine",
+    "momentum_paper",
+    "momentum_live",
+    "wyckoff_live",
     "momentum_backtest",
     "kraken_candle_feed",
     "ibkr_ingestion",
@@ -53,15 +55,15 @@ def test_worker_logs_choose_most_recent_candidate(monkeypatch, tmp_path: Path):
     legacy_dir = tmp_path / ".runtime"
     log_dir.mkdir()
     legacy_dir.mkdir()
-    old_empty_log = log_dir / "executor.log"
-    recent_active_log = legacy_dir / "executor.log"
+    old_empty_log = log_dir / "wyckoff_paper.log"
+    recent_active_log = legacy_dir / "wyckoff_paper.log"
     old_empty_log.touch()
     recent_active_log.write_text("active worker output\n", encoding="utf-8")
     os.utime(old_empty_log, (1, 1))
     os.utime(recent_active_log, (2, 2))
     monkeypatch.setenv("SIGNALMAKER_LOG_DIR", str(log_dir))
 
-    result = admin_settings.get_worker_logs("executor", lines=20)
+    result = admin_settings.get_worker_logs("wyckoff_paper", lines=20)
 
     assert result["path"] == str(recent_active_log)
     assert result["lines"] == ["active worker output"]

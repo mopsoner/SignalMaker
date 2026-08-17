@@ -13,7 +13,7 @@ def test_deployment_entrypoint_and_required_files_are_tracked() -> None:
         "scripts/start_reserved_vm.sh",
         "scripts/init_db.py",
         "scripts/run_pipeline_loop.py",
-        "scripts/run_executor_loop.py",
+        "scripts/run_wyckoff_paper_loop.py",
         "scripts/run_scheduler_loop.py",
         "scripts/run_kraken_candle_feed_loop.py",
         "scripts/start_kraken_candle_feed_worker.sh",

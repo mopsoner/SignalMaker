@@ -99,11 +99,11 @@ def test_load_runtime_settings_defaults_momentum_cadence_to_one_hour() -> None:
     with _session() as db:
         runtime = load_runtime_settings(db)
 
-    assert runtime["momentum"]["momentum_engine_cadence_hours"] == 1
+    assert runtime["momentum"]["momentum_paper_cadence_hours"] == 1
     # Polling stays more frequent than the user-selected cadence so a structure
     # break can make a due-only run sell immediately.
-    assert runtime["momentum"]["momentum_engine_interval_sec"] == 300
-    assert runtime["bot"]["bot_momentum_engine_interval_sec"] == 300
+    assert runtime["momentum"]["momentum_paper_interval_sec"] == 300
+    assert runtime["bot"]["bot_momentum_paper_interval_sec"] == 300
 
 
 def test_pipeline_interval_defaults_to_fifteen_minutes() -> None:
@@ -139,41 +139,41 @@ def test_pipeline_worker_defensively_bounds_legacy_intervals(legacy_value, effec
 
 
 def test_momentum_interval_default_can_be_configured_from_environment(monkeypatch) -> None:
-    monkeypatch.setenv("BOT_MOMENTUM_ENGINE_INTERVAL_SEC", "7200")
+    monkeypatch.setenv("BOT_MOMENTUM_PAPER_INTERVAL_SEC", "7200")
 
     configured = Settings(_env_file=None)
 
-    assert configured.bot_momentum_engine_interval_sec == 7200
+    assert configured.bot_momentum_paper_interval_sec == 7200
 
 
 def test_momentum_cadence_defaults_to_one_hour_and_can_be_configured_from_environment(monkeypatch) -> None:
-    assert Settings(_env_file=None).momentum_engine_cadence_hours == 1
+    assert Settings(_env_file=None).momentum_paper_cadence_hours == 1
 
-    monkeypatch.setenv("MOMENTUM_ENGINE_CADENCE_HOURS", "4")
+    monkeypatch.setenv("MOMENTUM_PAPER_CADENCE_HOURS", "4")
 
-    assert Settings(_env_file=None).momentum_engine_cadence_hours == 4
+    assert Settings(_env_file=None).momentum_paper_cadence_hours == 4
 
 
 def test_load_runtime_settings_honors_persisted_four_hour_cadence() -> None:
     with _session() as db:
         db.add(AppSetting(
             category="momentum",
-            key="momentum_engine_cadence_hours",
+            key="momentum_paper_cadence_hours",
             value=4,
         ))
         db.commit()
 
         runtime = load_runtime_settings(db)
-        assert runtime["momentum"]["momentum_engine_cadence_hours"] == 4
+        assert runtime["momentum"]["momentum_paper_cadence_hours"] == 4
 
 
 def test_load_runtime_settings_honors_explicit_supported_cadence() -> None:
     with _session() as db:
-        persist_runtime_settings(db, {"momentum": {"momentum_engine_cadence_hours": 4}})
+        persist_runtime_settings(db, {"momentum": {"momentum_paper_cadence_hours": 4}})
 
         runtime = load_runtime_settings(db)
 
-    assert runtime["momentum"]["momentum_engine_cadence_hours"] == 4
+    assert runtime["momentum"]["momentum_paper_cadence_hours"] == 4
 
 
 def test_environment_value_is_effective_without_database_row(monkeypatch) -> None:
@@ -234,12 +234,29 @@ def test_stock_etf_defaults_are_safe_and_independent_from_crypto() -> None:
     assert runtime["stock_etf"]["momentum_enabled"] is False
     assert runtime["stock_etf"]["wyckoff_smc_enabled"] is False
     assert runtime["stock_etf"]["timeframes"] == ["1d"]
-    assert runtime["momentum"]["momentum_engine_enabled"] is True
+    assert runtime["momentum"]["momentum_paper_enabled"] is True
+
+
+def test_legacy_worker_names_are_read_through_clear_paper_names() -> None:
+    with _session() as db:
+        db.add_all([
+            AppSetting(category="bot", key="bot_executor_limit", value=7),
+            AppSetting(category="bot", key="bot_momentum_engine_enabled", value=False),
+            AppSetting(category="momentum", key="momentum_engine_cadence_hours", value=4),
+        ])
+        db.commit()
+        runtime = load_runtime_settings(db)
+
+    assert runtime["bot"]["bot_wyckoff_paper_limit"] == 7
+    assert runtime["bot"]["bot_momentum_paper_enabled"] is False
+    assert runtime["momentum"]["momentum_paper_cadence_hours"] == 4
+    assert "bot_executor_limit" not in runtime["bot"]
+    assert "momentum_engine_cadence_hours" not in runtime["momentum"]
 
 
 def test_stock_etf_update_round_trip_does_not_change_crypto_settings() -> None:
     with _session() as db:
-        persist_runtime_settings(db, {"momentum": {"momentum_engine_cadence_hours": 8}})
+        persist_runtime_settings(db, {"momentum": {"momentum_paper_cadence_hours": 8}})
         runtime = persist_runtime_settings(db, {"stock_etf": {
             "feeder_enabled": True,
             "momentum_enabled": True,
@@ -251,7 +268,7 @@ def test_stock_etf_update_round_trip_does_not_change_crypto_settings() -> None:
 
     assert runtime["stock_etf"]["max_lot_size"] == 25
     assert runtime["stock_etf"]["momentum_enabled"] is True
-    assert runtime["momentum"]["momentum_engine_cadence_hours"] == 8
+    assert runtime["momentum"]["momentum_paper_cadence_hours"] == 8
 
 
 def test_legacy_stock_etf_settings_are_migrated_without_crypto_fallback() -> None:
@@ -260,7 +277,7 @@ def test_legacy_stock_etf_settings_are_migrated_without_crypto_fallback() -> Non
             AppSetting(category="stock_etf_momentum", key="enabled", value=True),
             AppSetting(category="stock_etf_momentum", key="cadence_hours", value=4),
             AppSetting(category="stock_etf_momentum", key="starting_capital", value=2500),
-            AppSetting(category="momentum", key="momentum_engine_cadence_hours", value=8),
+            AppSetting(category="momentum", key="momentum_paper_cadence_hours", value=8),
         ])
         db.commit()
         runtime = load_runtime_settings(db)
@@ -268,7 +285,7 @@ def test_legacy_stock_etf_settings_are_migrated_without_crypto_fallback() -> Non
     assert runtime["stock_etf"]["momentum_enabled"] is True
     assert runtime["stock_etf"]["momentum_cadence_hours"] == 4
     assert runtime["stock_etf"]["paper_momentum"]["starting_capital"] == 2500
-    assert runtime["momentum"]["momentum_engine_cadence_hours"] == 8
+    assert runtime["momentum"]["momentum_paper_cadence_hours"] == 8
 
 
 @pytest.mark.parametrize("stock_etf, message", [
@@ -288,10 +305,10 @@ def test_deployment_defaults_have_one_canonical_settings_source() -> None:
     paths = {
         ("strategy", "signal_execution_interval"): "signal_execution_interval",
         ("bot", "bot_pipeline_interval_sec"): "bot_pipeline_interval_sec",
-        ("bot", "bot_executor_interval_sec"): "bot_executor_interval_sec",
+        ("bot", "bot_wyckoff_paper_interval_sec"): "bot_wyckoff_paper_interval_sec",
         ("bot", "bot_scheduler_interval_sec"): "bot_scheduler_interval_sec",
-        ("momentum", "momentum_engine_starting_capital"): "momentum_engine_starting_capital",
-        ("momentum", "momentum_engine_min_score"): "momentum_engine_min_score",
+        ("momentum", "momentum_paper_starting_capital"): "momentum_paper_starting_capital",
+        ("momentum", "momentum_paper_min_score"): "momentum_paper_min_score",
         ("stock_etf", "momentum_cadence_hours"): "stock_etf_momentum_cadence_hours",
         ("stock_etf", "wyckoff_smc_cadence_hours"): "stock_etf_wyckoff_smc_cadence_hours",
         ("stock_etf", "exchange_timezone"): "stock_etf_exchange_timezone",

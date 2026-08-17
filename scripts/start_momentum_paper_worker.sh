@@ -3,4 +3,4 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$APP_DIR"
 source .venv/bin/activate
-exec python -m scripts.run_momentum_executor_loop
+exec python -m scripts.run_momentum_paper_loop

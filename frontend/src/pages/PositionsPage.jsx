@@ -144,7 +144,7 @@ export default function PositionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Positions" subtitle="Paper execution state, orders, fills, PnL and strategy quality metrics" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run executor'}</button>} />
+    <PageHeader title="Positions" subtitle="Wyckoff / SMC paper state, orders, fills, PnL and strategy quality metrics" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run Wyckoff / SMC paper'}</button>} />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
     {summaryLoading ? <div className="panel">Loading PnL summary…</div> : null}
