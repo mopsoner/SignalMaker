@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import run_momentum_executor_loop as worker
+from scripts import run_momentum_live_loop as worker
 
 
 def test_live_worker_rejects_dry_run(monkeypatch):
@@ -10,12 +10,12 @@ def test_live_worker_rejects_dry_run(monkeypatch):
         worker,
         "settings",
         SimpleNamespace(
-            momentum_execution_enabled=True,
+            momentum_live_enabled=True,
             kraken_execution_enabled=True,
             kraken_dry_run=True,
             kraken_api_key="key",
             kraken_secret_key="secret",
-            momentum_execution_mode="spot",
+            momentum_live_mode="spot",
             kraken_margin_execution_enabled=False,
         ),
     )
@@ -29,12 +29,12 @@ def test_live_worker_accepts_complete_spot_configuration(monkeypatch):
         worker,
         "settings",
         SimpleNamespace(
-            momentum_execution_enabled=True,
+            momentum_live_enabled=True,
             kraken_execution_enabled=True,
             kraken_dry_run=False,
             kraken_api_key="key",
             kraken_secret_key="secret",
-            momentum_execution_mode="spot",
+            momentum_live_mode="spot",
             kraken_margin_execution_enabled=False,
         ),
     )

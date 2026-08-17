@@ -34,7 +34,7 @@ def test_stock_etf_run_does_not_mutate_crypto_state_or_configuration() -> None:
         crypto_decision = MomentumEngineCurrentDecision(
             id=1, market_scope="crypto", action="hold", payload_json={"action": "hold"},
         )
-        crypto_config = AppSetting(category="momentum", key="momentum_engine_cadence_hours", value=1)
+        crypto_config = AppSetting(category="momentum", key="momentum_paper_cadence_hours", value=1)
         db.add_all([crypto_position, crypto_trade, crypto_decision, crypto_config])
         db.commit()
 

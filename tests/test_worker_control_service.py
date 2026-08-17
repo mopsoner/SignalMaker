@@ -12,9 +12,11 @@ def test_only_exact_stable_worker_names_are_allowed(tmp_path, monkeypatch):
     service = control.WorkerControlService()
     assert set(control.WORKERS) == {
         "pipeline",
-        "executor",
+        "wyckoff_paper",
         "kraken_candle_feed",
-        "momentum_engine",
+        "momentum_paper",
+        "momentum_live",
+        "wyckoff_live",
         "momentum_backtest",
         "ibkr_ingestion",
         "stock_etf_analysis",

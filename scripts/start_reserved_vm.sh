@@ -33,11 +33,14 @@ bash run.sh api &
 API_PID=$!
 
 start_worker "pipeline" "scripts/start_pipeline_worker.sh"
-start_worker "executor" "scripts/start_executor_worker.sh"
+start_worker "wyckoff_paper" "scripts/start_wyckoff_paper_worker.sh"
 start_worker "kraken_candle_feed" "scripts/start_kraken_candle_feed_worker.sh"
-start_worker "momentum_engine" "scripts/start_momentum_engine_worker.sh"
-if [ "${MOMENTUM_EXECUTION_ENABLED:-false}" = "true" ]; then
-  start_worker "momentum_executor" "scripts/start_momentum_executor_worker.sh"
+start_worker "momentum_paper" "scripts/start_momentum_paper_worker.sh"
+if [ "${MOMENTUM_LIVE_ENABLED:-false}" = "true" ]; then
+  start_worker "momentum_live" "scripts/start_momentum_live_worker.sh"
+fi
+if [ "${WYCKOFF_LIVE_ENABLED:-false}" = "true" ]; then
+  start_worker "wyckoff_live" "scripts/start_wyckoff_live_worker.sh"
 fi
 start_worker "momentum_backtest" "scripts/start_momentum_backtest_worker.sh"
 start_worker "ibkr_ingestion" "scripts/start_ibkr_ingestion_worker.sh"

@@ -1,0 +1,17 @@
+[Unit]
+Description=SignalMaker live Kraken Wyckoff/SMC executor
+After=network-online.target signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker
+EnvironmentFile=/opt/signalmaker/.env
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_wyckoff_live_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/wyckoff_live.log
+StandardError=append:/opt/signalmaker/logs/wyckoff_live.log
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

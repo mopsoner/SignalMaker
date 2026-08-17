@@ -27,8 +27,8 @@ python -m scripts.init_db
 python -m scripts.run_pipeline_loop >> "$LOG_DIR/pipeline.log" 2>&1 &
 echo $! > "$RUNTIME_DIR/pipeline.pid"
 
-python -m scripts.run_executor_loop >> "$LOG_DIR/executor.log" 2>&1 &
-echo $! > "$RUNTIME_DIR/executor.pid"
+python -m scripts.run_wyckoff_paper_loop >> "$LOG_DIR/wyckoff_paper.log" 2>&1 &
+echo $! > "$RUNTIME_DIR/wyckoff_paper.pid"
 
 python -m scripts.run_scheduler_loop >> "$LOG_DIR/scheduler.log" 2>&1 &
 echo $! > "$RUNTIME_DIR/scheduler.pid"

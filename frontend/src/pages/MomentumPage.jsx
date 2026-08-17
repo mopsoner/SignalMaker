@@ -85,14 +85,14 @@ export function runMomentumEngine(cadenceHours = DEFAULT_CADENCE_HOURS, force = 
 
 export async function loadMomentumCadence() {
   const settings = await fetchJson('/api/v1/admin/settings')
-  return Number(settings?.momentum?.momentum_engine_cadence_hours || DEFAULT_CADENCE_HOURS)
+  return Number(settings?.momentum?.momentum_paper_cadence_hours || DEFAULT_CADENCE_HOURS)
 }
 
 export async function persistMomentumCadence(cadenceHours) {
   const settings = await fetchJson('/api/v1/admin/settings')
   settings.momentum = {
     ...(settings.momentum || {}),
-    momentum_engine_cadence_hours: Number(cadenceHours),
+    momentum_paper_cadence_hours: Number(cadenceHours),
   }
   return fetchJson('/api/v1/admin/settings', {
     method: 'PUT',

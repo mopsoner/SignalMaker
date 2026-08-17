@@ -1,0 +1,18 @@
+[Unit]
+Description=SignalMaker live Kraken momentum executor
+After=network-online.target signalmaker-momentum-paper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker
+EnvironmentFile=/opt/signalmaker/.env
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_momentum_live_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/momentum_live.log
+StandardError=append:/opt/signalmaker/logs/momentum_live.log
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

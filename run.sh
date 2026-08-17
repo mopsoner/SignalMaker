@@ -42,7 +42,7 @@ finally:
     db.close()
 PY
     ;;
-  executor-once)
+  wyckoff-paper-once)
     python - <<'PY'
 from app.db.session import SessionLocal
 from app.services.executor_service import ExecutorService
@@ -57,8 +57,8 @@ PY
   pipeline-loop)
     python -m scripts.run_pipeline_loop
     ;;
-  executor-loop)
-    python -m scripts.run_executor_loop
+  wyckoff-paper-loop)
+    python -m scripts.run_wyckoff_paper_loop
     ;;
   scheduler-loop)
     python -m scripts.run_scheduler_loop
@@ -84,14 +84,20 @@ PY
     [ "${KRAKEN_EXECUTION_ENABLED:-false}" = "true" ] || { echo "Kraken execution is disabled" >&2; exit 2; }
     SYMBOL="${2:?symbol required}" QUANTITY="${3:-}" python -c 'import os; from app.db.session import SessionLocal; from app.services.execution.kraken_execution_service import KrakenExecutionService; db=SessionLocal(); print(KrakenExecutionService(db).sell_market(os.environ["SYMBOL"], float(os.environ["QUANTITY"]) if os.environ["QUANTITY"] else None)); db.close()'
     ;;
-  momentum-executor-once)
-    python -m scripts.run_momentum_executor_loop --once
+  momentum-live-once)
+    python -m scripts.run_momentum_live_loop --once
     ;;
-  momentum-executor-loop)
-    python -m scripts.run_momentum_executor_loop
+  momentum-live-loop)
+    python -m scripts.run_momentum_live_loop
+    ;;
+  wyckoff-live-once)
+    python -m scripts.run_wyckoff_live_loop --once
+    ;;
+  wyckoff-live-loop)
+    python -m scripts.run_wyckoff_live_loop
     ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|executor-once|pipeline-loop|executor-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-preflight|kraken-buy|kraken-sell|momentum-executor-once|momentum-executor-loop]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|wyckoff-paper-once|pipeline-loop|wyckoff-paper-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-preflight|kraken-buy|kraken-sell|momentum-live-once|momentum-live-loop|wyckoff-live-once|wyckoff-live-loop]"
     exit 1
     ;;
 esac

@@ -1,10 +1,13 @@
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+
 from app.services.fill_service import FillService
 from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
+from app.services.execution.kraken_execution_service import KrakenExecutionService
 
 
 class ExecutorService:
@@ -235,7 +238,42 @@ class ExecutorService:
         return {"candidate_id": candidate.candidate_id, "position_id": position.position_id, "order_id": order.order_id, "fill_id": fill.fill_id, "mode": "paper", "target_price": target_price, "raw_target_price": target_plan.get('raw_target_price')}
 
     def _execute_live_candidate(self, candidate, quantity: float) -> dict:
-        raise RuntimeError('Live exchange execution has been removed from SignalMaker main; use the Raspberry Executor for real orders')
+        target_plan = self._hierarchical_target_plan(candidate)
+        runtime = load_runtime_settings(self.db)
+        live = runtime.get("live", {})
+        if live.get("live_require_tp_sl", True) and (
+            candidate.stop_price is None or target_plan.get("target_price") is None
+        ):
+            raise ValueError("live candidate requires stop-loss and take-profit levels")
+
+        mode = settings.wyckoff_live_mode.lower()
+        execution = KrakenExecutionService(self.db)
+        if self._is_short_side(candidate.side):
+            if mode == "spot":
+                raise ValueError("bearish Wyckoff candidates require margin mode")
+            exchange_order = execution.sell_market(
+                candidate.symbol,
+                quantity=quantity,
+                mode=mode,
+                intent="open_short",
+            )
+        else:
+            requested_notional = float(candidate.entry_price) * quantity
+            max_notional = float(live.get("live_max_notional_per_trade", requested_notional))
+            exchange_order = execution.buy_market(
+                candidate.symbol,
+                quote_amount=min(requested_notional, max_notional),
+                mode=mode,
+            )
+        self.candidates.mark_executed(candidate.candidate_id)
+        return {
+            "candidate_id": candidate.candidate_id,
+            "mode": "live",
+            "exchange": "kraken",
+            "exchange_order": exchange_order,
+            "target_price": target_plan.get("target_price"),
+            "stop_price": candidate.stop_price,
+        }
 
     def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
         executed = []

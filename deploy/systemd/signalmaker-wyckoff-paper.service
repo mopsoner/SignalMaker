@@ -1,0 +1,16 @@
+[Unit]
+Description=SignalMaker Wyckoff/SMC paper worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_wyckoff_paper_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/wyckoff_paper.log
+StandardError=append:/opt/signalmaker/logs/wyckoff_paper.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

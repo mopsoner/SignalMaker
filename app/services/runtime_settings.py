@@ -11,11 +11,28 @@ from app.db.session import SessionLocal
 from app.models.app_setting import AppSetting
 
 
-MOMENTUM_CADENCE_KEY = "momentum_engine_cadence_hours"
+MOMENTUM_CADENCE_KEY = "momentum_paper_cadence_hours"
 SUPPORTED_MOMENTUM_CADENCES = {1, 4, 8, 24}
 STOCK_ETF_TIMEFRAMES = {"15m", "1h", "4h", "1d"}
 STOCK_ETF_ASSET_TYPES = {"STOCK", "ETF"}
 MIN_PIPELINE_INTERVAL_SEC = 60
+LEGACY_WYCKOFF_PAPER_KEYS = {
+    "bot_executor_enabled": "bot_wyckoff_paper_enabled",
+    "bot_executor_interval_sec": "bot_wyckoff_paper_interval_sec",
+    "bot_executor_limit": "bot_wyckoff_paper_limit",
+    "bot_executor_quantity": "bot_wyckoff_paper_quantity",
+}
+LEGACY_MOMENTUM_PAPER_BOT_KEYS = {
+    "bot_momentum_engine_enabled": "bot_momentum_paper_enabled",
+    "bot_momentum_engine_interval_sec": "bot_momentum_paper_interval_sec",
+}
+LEGACY_MOMENTUM_PAPER_KEYS = {
+    "momentum_engine_enabled": "momentum_paper_enabled",
+    "momentum_engine_interval_sec": "momentum_paper_interval_sec",
+    "momentum_engine_cadence_hours": "momentum_paper_cadence_hours",
+    "momentum_engine_starting_capital": "momentum_paper_starting_capital",
+    "momentum_engine_min_score": "momentum_paper_min_score",
+}
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -41,7 +58,7 @@ def _execution_interval(value: Any) -> str:
 
 
 def _momentum_cadence(value: Any, default: int | None = None) -> int:
-    default = base_settings.momentum_engine_cadence_hours if default is None else default
+    default = base_settings.momentum_paper_cadence_hours if default is None else default
     try:
         cadence = int(value)
     except (TypeError, ValueError):
@@ -79,23 +96,23 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     },
     "bot": {
         "bot_pipeline_enabled": base_settings.bot_pipeline_enabled,
-        "bot_executor_enabled": base_settings.bot_executor_enabled,
+        "bot_wyckoff_paper_enabled": base_settings.bot_wyckoff_paper_enabled,
         "bot_scheduler_enabled": base_settings.bot_scheduler_enabled,
-        "bot_momentum_engine_enabled": base_settings.bot_momentum_engine_enabled,
+        "bot_momentum_paper_enabled": base_settings.bot_momentum_paper_enabled,
         "bot_pipeline_symbol_limit": "all",
         "bot_pipeline_interval_sec": base_settings.bot_pipeline_interval_sec,
-        "bot_executor_interval_sec": base_settings.bot_executor_interval_sec,
+        "bot_wyckoff_paper_interval_sec": base_settings.bot_wyckoff_paper_interval_sec,
         "bot_scheduler_interval_sec": base_settings.bot_scheduler_interval_sec,
-        "bot_momentum_engine_interval_sec": base_settings.bot_momentum_engine_interval_sec,
-        "bot_executor_limit": base_settings.bot_executor_limit,
-        "bot_executor_quantity": base_settings.bot_executor_quantity,
+        "bot_momentum_paper_interval_sec": base_settings.bot_momentum_paper_interval_sec,
+        "bot_wyckoff_paper_limit": base_settings.bot_wyckoff_paper_limit,
+        "bot_wyckoff_paper_quantity": base_settings.bot_wyckoff_paper_quantity,
     },
     "momentum": {
-        "momentum_engine_enabled": base_settings.momentum_engine_enabled,
-        "momentum_engine_interval_sec": base_settings.bot_momentum_engine_interval_sec,
-        "momentum_engine_cadence_hours": _momentum_cadence(base_settings.momentum_engine_cadence_hours),
-        "momentum_engine_starting_capital": base_settings.momentum_engine_starting_capital,
-        "momentum_engine_min_score": base_settings.momentum_engine_min_score,
+        "momentum_paper_enabled": base_settings.momentum_paper_enabled,
+        "momentum_paper_interval_sec": base_settings.bot_momentum_paper_interval_sec,
+        "momentum_paper_cadence_hours": _momentum_cadence(base_settings.momentum_paper_cadence_hours),
+        "momentum_paper_starting_capital": base_settings.momentum_paper_starting_capital,
+        "momentum_paper_min_score": base_settings.momentum_paper_min_score,
     },
     "stock_etf": {
         # Opt-in defaults prevent a new installation from starting data imports or trades.
@@ -227,6 +244,18 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         payload = deepcopy(DEFAULT_SETTINGS)
         for row in rows:
             payload.setdefault(row.category, {})[row.key] = row.value
+        explicit_bot_keys = {row.key for row in rows if row.category == "bot"}
+        bot = payload.setdefault("bot", {})
+        for legacy_key, paper_key in {**LEGACY_WYCKOFF_PAPER_KEYS, **LEGACY_MOMENTUM_PAPER_BOT_KEYS}.items():
+            if legacy_key in explicit_bot_keys and paper_key not in explicit_bot_keys:
+                bot[paper_key] = bot[legacy_key]
+            bot.pop(legacy_key, None)
+        explicit_momentum_keys = {row.key for row in rows if row.category == "momentum"}
+        momentum = payload.setdefault("momentum", {})
+        for legacy_key, paper_key in LEGACY_MOMENTUM_PAPER_KEYS.items():
+            if legacy_key in explicit_momentum_keys and paper_key not in explicit_momentum_keys:
+                momentum[paper_key] = momentum[legacy_key]
+            momentum.pop(legacy_key, None)
         _migrate_stock_etf(rows, payload["stock_etf"])
         # Legacy rows remain in the database for rollback compatibility, but the
         # public schema exposes one unambiguous namespace.
@@ -235,13 +264,12 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
         strategy = payload.setdefault("strategy", {})
         strategy["signal_execution_interval"] = _execution_interval(strategy.get("signal_execution_interval"))
         strategy["signal_entry_rsi_timeframe"] = _entry_rsi_timeframe(strategy.get("signal_entry_rsi_timeframe"))
-        payload.setdefault("bot", {})["bot_momentum_engine_enabled"] = _as_bool(
-            payload.get("bot", {}).get("bot_momentum_engine_enabled", True),
+        bot["bot_momentum_paper_enabled"] = _as_bool(
+            payload.get("bot", {}).get("bot_momentum_paper_enabled", True),
             default=True,
         )
-        momentum = payload.setdefault("momentum", {})
-        momentum["momentum_engine_enabled"] = _as_bool(
-            momentum.get("momentum_engine_enabled", True),
+        momentum["momentum_paper_enabled"] = _as_bool(
+            momentum.get("momentum_paper_enabled", True),
             default=True,
         )
         momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum.get(MOMENTUM_CADENCE_KEY))
@@ -277,8 +305,8 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 
     bot = payload.get("bot")
     if isinstance(bot, dict):
-        if "bot_momentum_engine_enabled" in bot:
-            bot["bot_momentum_engine_enabled"] = _as_bool(bot["bot_momentum_engine_enabled"], default=True)
+        if "bot_momentum_paper_enabled" in bot:
+            bot["bot_momentum_paper_enabled"] = _as_bool(bot["bot_momentum_paper_enabled"], default=True)
         if "bot_pipeline_interval_sec" in bot:
             try:
                 interval = int(bot["bot_pipeline_interval_sec"])
@@ -296,8 +324,8 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
 
     momentum = payload.get("momentum")
     if isinstance(momentum, dict):
-        if "momentum_engine_enabled" in momentum:
-            momentum["momentum_engine_enabled"] = _as_bool(momentum["momentum_engine_enabled"], default=True)
+        if "momentum_paper_enabled" in momentum:
+            momentum["momentum_paper_enabled"] = _as_bool(momentum["momentum_paper_enabled"], default=True)
         if MOMENTUM_CADENCE_KEY in momentum:
             momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum[MOMENTUM_CADENCE_KEY])
 

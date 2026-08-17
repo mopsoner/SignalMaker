@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quote-amount", type=float, default=settings.kraken_order_quote_amount)
     parser.add_argument("--mode", action="append", choices=("spot", "margin"), dest="modes")
     args = parser.parse_args(argv)
-    modes = args.modes or [settings.momentum_execution_mode]
+    modes = args.modes or [settings.momentum_live_mode]
     checks = check_workflow(args.symbol, args.quote_amount, modes)
     print(json.dumps({"ok": all(check.ok for check in checks), "non_destructive": True, "checks": [asdict(check) for check in checks]}, indent=2))
     return 0 if all(check.ok for check in checks) else 1

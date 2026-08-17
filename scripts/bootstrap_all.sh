@@ -8,5 +8,5 @@ bash scripts/deploy_vm.sh
 echo "Bootstrap complete"
 echo "Start API:        bash scripts/start_api.sh"
 echo "Start pipeline:   bash scripts/start_pipeline_worker.sh"
-echo "Start executor:   bash scripts/start_executor_worker.sh"
+echo "Start Wyckoff paper: bash scripts/start_wyckoff_paper_worker.sh"
 echo "Start scheduler:  bash scripts/start_scheduler_worker.sh"

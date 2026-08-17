@@ -41,7 +41,7 @@ Phases 1 to 4 are now scaffolded in a runnable form for Replit VM.
   - market-data ingestion API fed by the Raspberry Executor
   - signal engine wired to legacy v231 logic
   - planner service generating trade candidates
-  - executor service for paper trading
+  - `wyckoff_paper` worker for simulated Wyckoff/SMC trading
   - scheduler service plus simple worker loops
 - Pipeline and executor API endpoints
 - VM deployment helper script
@@ -95,7 +95,7 @@ bash scripts/bootstrap_all.sh
 ```bash
 bash scripts/start_api.sh
 bash scripts/start_pipeline_worker.sh
-bash scripts/start_executor_worker.sh
+bash scripts/start_wyckoff_paper_worker.sh
 bash scripts/start_scheduler_worker.sh
 bash scripts/start_frontend.sh
 ```
@@ -112,7 +112,7 @@ Avant d'activer l'exécution réelle, lancez le préflight avec les mêmes clés
 symboles et modes que la production :
 
 ```bash
-# Le mode par défaut est MOMENTUM_EXECUTION_MODE.
+# Le mode par défaut est MOMENTUM_LIVE_MODE.
 bash run.sh kraken-preflight --symbol BTCUSD --quote-amount 50
 
 # Vérifier explicitement les payloads spot et margin, achat et vente.
@@ -141,18 +141,18 @@ configurez les valeurs suivantes dans le `.env` de production :
 ```dotenv
 KRAKEN_EXECUTION_ENABLED=true
 KRAKEN_DRY_RUN=false
-MOMENTUM_EXECUTION_ENABLED=true
-MOMENTUM_EXECUTION_MODE=spot
-MOMENTUM_EXECUTOR_INTERVAL_SECONDS=60
+MOMENTUM_LIVE_ENABLED=true
+MOMENTUM_LIVE_MODE=spot
+MOMENTUM_LIVE_INTERVAL_SECONDS=60
 ```
 
 Puis installez et démarrez le worker dédié :
 
 ```bash
-sudo cp deploy/systemd/signalmaker-momentum-executor.service /etc/systemd/system/
+sudo cp deploy/systemd/signalmaker-momentum-live.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now signalmaker-momentum-executor
-sudo systemctl status signalmaker-momentum-executor
+sudo systemctl enable --now signalmaker-momentum-live
+sudo systemctl status signalmaker-momentum-live
 ```
 
 Le worker refuse de démarrer si les clés, les garde-fous Kraken ou le mode live
@@ -161,8 +161,38 @@ cycle afin qu'un redémarrage ou une décision persistée ne soumette pas deux f
 le même ordre. Pour arrêter immédiatement les nouvelles soumissions :
 
 ```bash
-sudo systemctl stop signalmaker-momentum-executor
+sudo systemctl stop signalmaker-momentum-live
 ```
+
+### Démarrer Wyckoff / SMC en live
+
+Le worker `wyckoff_paper` reste dédié au portefeuille paper. L'exécution
+réelle des candidats Wyckoff/SMC utilise un worker séparé afin qu'elle puisse
+être arrêtée sans interrompre le moteur d'analyse ni le paper trading.
+
+Après un préflight Kraken réussi, configurez :
+
+```dotenv
+KRAKEN_EXECUTION_ENABLED=true
+KRAKEN_DRY_RUN=false
+WYCKOFF_LIVE_ENABLED=true
+WYCKOFF_LIVE_MODE=spot
+WYCKOFF_LIVE_INTERVAL_SECONDS=60
+WYCKOFF_LIVE_LIMIT=10
+WYCKOFF_LIVE_QUANTITY=1
+```
+
+Puis démarrez le service dédié :
+
+```bash
+sudo cp deploy/systemd/signalmaker-wyckoff-live.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now signalmaker-wyckoff-live
+```
+
+Le spot accepte seulement les candidats haussiers. Pour ouvrir des positions
+baissières, utilisez `WYCKOFF_LIVE_MODE=margin` et activez explicitement
+`KRAKEN_MARGIN_EXECUTION_ENABLED` ainsi que `KRAKEN_MARGIN_SHORTS_ENABLED`.
 
 ## systemd templates
 Templates are available in `deploy/systemd/`.
@@ -170,7 +200,7 @@ Templates are available in `deploy/systemd/`.
 ### Momentum cadence setting
 
 The momentum worker cadence is stored in `AppSetting` with category `momentum`
-and key `momentum_engine_cadence_hours`. Its default is one hour. Select 1, 4, 8,
+and key `momentum_paper_cadence_hours`. Its default is one hour. Select 1, 4, 8,
 or 24 hours on the Momentum page or in **Admin Settings → Bot runtime → Momentum
 engine cadence**. The selection is persisted immediately and is used by the
 momentum worker on its next tick.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Momentum engine worker — runs the dedicated paper momentum rotation engine in background.
+Momentum paper worker — runs the simulated momentum rotation engine in background.
 Reads runtime settings from DB at each tick, like the other SignalMaker workers.
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ from app.core.config import settings as base_settings
 from app.services.momentum_engine_service import MomentumEngineService
 from app.services.runtime_settings import load_runtime_settings
 
-DEFAULT_INTERVAL = base_settings.bot_momentum_engine_interval_sec
-DEFAULT_CADENCE_HOURS = base_settings.momentum_engine_cadence_hours
+DEFAULT_INTERVAL = base_settings.bot_momentum_paper_interval_sec
+DEFAULT_CADENCE_HOURS = base_settings.momentum_paper_cadence_hours
 DEFAULT_STARTING_CAPITAL = 1000.0
 DEFAULT_MIN_SCORE = 0.0
 
@@ -43,9 +43,9 @@ if __name__ == "__main__":
             momentum = runtime.get("momentum", {})
 
             cadence_hours = validated_cadence_hours(
-                momentum.get("momentum_engine_cadence_hours", DEFAULT_CADENCE_HOURS)
+                momentum.get("momentum_paper_cadence_hours", DEFAULT_CADENCE_HOURS)
             )
-            enabled = bot.get("bot_momentum_engine_enabled", momentum.get("momentum_engine_enabled", True))
+            enabled = bot.get("bot_momentum_paper_enabled", momentum.get("momentum_paper_enabled", True))
             if not enabled:
                 print(f"Momentum engine disabled — cadence_hours={cadence_hours} sleeping 30s", flush=True)
                 db.rollback()
@@ -53,9 +53,9 @@ if __name__ == "__main__":
                 time.sleep(30)
                 continue
 
-            interval = int(bot.get("bot_momentum_engine_interval_sec", momentum.get("momentum_engine_interval_sec", DEFAULT_INTERVAL)))
-            starting_capital = float(momentum.get("momentum_engine_starting_capital", DEFAULT_STARTING_CAPITAL))
-            min_score = float(momentum.get("momentum_engine_min_score", DEFAULT_MIN_SCORE))
+            interval = int(bot.get("bot_momentum_paper_interval_sec", momentum.get("momentum_paper_interval_sec", DEFAULT_INTERVAL)))
+            starting_capital = float(momentum.get("momentum_paper_starting_capital", DEFAULT_STARTING_CAPITAL))
+            min_score = float(momentum.get("momentum_paper_min_score", DEFAULT_MIN_SCORE))
 
             result = MomentumEngineService(db).run_once(
                 force=False,

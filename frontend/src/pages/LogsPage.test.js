@@ -6,9 +6,11 @@ import { isWorkerRunning, MANAGED_WORKERS } from '../lib/workerStatus.js'
 test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
     'pipeline',
-    'executor',
+    'wyckoff_paper',
     'kraken_candle_feed',
-    'momentum_engine',
+    'momentum_paper',
+    'momentum_live',
+    'wyckoff_live',
     'momentum_backtest',
     'ibkr_ingestion',
     'stock_etf_analysis',

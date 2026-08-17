@@ -186,7 +186,7 @@ export default function AdminSettingsPage() {
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open positions', api.clearOpenPositions)}>Clear open positions</button>
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all positions', api.clearPositions)}>Clear all positions</button>
           </CleanupCard>
-          <CleanupCard title="Orders" description="Clear paper orders created by the executor.">
+          <CleanupCard title="Orders" description="Clear paper orders created by Wyckoff / SMC paper.">
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open orders', api.clearOpenOrders)}>Clear open orders</button>
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all orders', api.clearOrders)}>Clear all orders</button>
           </CleanupCard>
@@ -272,19 +272,19 @@ export default function AdminSettingsPage() {
 
       <Section title="Bot runtime" description="Enable workers and control cycle timings.">
         <Field label="Pipeline enabled"><input type="checkbox" checked={Boolean(settings.bot.bot_pipeline_enabled)} onChange={(e) => updateField('bot', 'bot_pipeline_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
-        <Field label="Executor enabled"><input type="checkbox" checked={Boolean(settings.bot.bot_executor_enabled)} onChange={(e) => updateField('bot', 'bot_executor_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
+        <Field label="Wyckoff / SMC paper enabled"><input type="checkbox" checked={Boolean(settings.bot.bot_wyckoff_paper_enabled)} onChange={(e) => updateField('bot', 'bot_wyckoff_paper_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="Scheduler enabled"><input type="checkbox" checked={Boolean(settings.bot.bot_scheduler_enabled)} onChange={(e) => updateField('bot', 'bot_scheduler_enabled', e.target.checked, 'checkbox')} disabled={loading} /></Field>
         <Field label="Pipeline interval (seconds — 900 recommended for 15 min)"><input style={inputStyle} type="number" min="60" step="60" value={settings.bot.bot_pipeline_interval_sec} onChange={(e) => updateField('bot', 'bot_pipeline_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Executor interval sec"><input style={inputStyle} type="number" value={settings.bot.bot_executor_interval_sec} onChange={(e) => updateField('bot', 'bot_executor_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Wyckoff / SMC paper interval sec"><input style={inputStyle} type="number" value={settings.bot.bot_wyckoff_paper_interval_sec} onChange={(e) => updateField('bot', 'bot_wyckoff_paper_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
         <Field label="Scheduler interval sec"><input style={inputStyle} type="number" value={settings.bot.bot_scheduler_interval_sec} onChange={(e) => updateField('bot', 'bot_scheduler_interval_sec', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Executor limit"><input style={inputStyle} type="number" value={settings.bot.bot_executor_limit} onChange={(e) => updateField('bot', 'bot_executor_limit', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Executor quantity"><input style={inputStyle} type="number" step="0.1" value={settings.bot.bot_executor_quantity} onChange={(e) => updateField('bot', 'bot_executor_quantity', e.target.value, 'number')} disabled={loading} /></Field>
-        <Field label="Momentum engine cadence"><select style={inputStyle} value={settings.momentum.momentum_engine_cadence_hours} onChange={(e) => updateField('momentum', 'momentum_engine_cadence_hours', e.target.value, 'number')} disabled={loading}><option value={1}>1 hour (default)</option><option value={4}>4 hours</option><option value={8}>8 hours</option><option value={24}>24 hours</option></select></Field>
+        <Field label="Wyckoff / SMC paper limit"><input style={inputStyle} type="number" value={settings.bot.bot_wyckoff_paper_limit} onChange={(e) => updateField('bot', 'bot_wyckoff_paper_limit', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Wyckoff / SMC paper quantity"><input style={inputStyle} type="number" step="0.1" value={settings.bot.bot_wyckoff_paper_quantity} onChange={(e) => updateField('bot', 'bot_wyckoff_paper_quantity', e.target.value, 'number')} disabled={loading} /></Field>
+        <Field label="Momentum paper cadence"><select style={inputStyle} value={settings.momentum.momentum_paper_cadence_hours} onChange={(e) => updateField('momentum', 'momentum_paper_cadence_hours', e.target.value, 'number')} disabled={loading}><option value={1}>1 hour (default)</option><option value={4}>4 hours</option><option value={8}>8 hours</option><option value={24}>24 hours</option></select></Field>
       </Section>
 
       <section className="panel">
         <h2>Workers</h2>
-        <div style={gridStyle}>{['pipeline', 'executor', 'scheduler'].map((name) => <div key={name} className="stat-card"><div className="stat-label">{name}</div><div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div><div className="page-actions"><button className="button" onClick={() => doAction(() => api.startWorker(name))}>Start</button><button className="button" onClick={() => doAction(() => api.stopWorker(name))}>Stop</button></div></div>)}</div>
+        <div style={gridStyle}>{['pipeline', 'momentum_paper', 'wyckoff_paper', 'momentum_live', 'wyckoff_live', 'scheduler'].map((name) => <div key={name} className="stat-card"><div className="stat-label">{{ momentum_paper: 'Momentum paper', wyckoff_paper: 'Wyckoff / SMC paper', momentum_live: 'Momentum live', wyckoff_live: 'Wyckoff / SMC live' }[name] || name}</div><div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div><div className="page-actions"><button className="button" onClick={() => doAction(() => api.startWorker(name))}>Start</button><button className="button" onClick={() => doAction(() => api.stopWorker(name))}>Stop</button></div></div>)}</div>
       </section>
     </div>
   )

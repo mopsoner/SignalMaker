@@ -48,7 +48,7 @@ def _start_workers() -> None:
     env = {**os.environ, "PYTHONPATH": ROOT}
     workers = [
         ("pipeline",  os.path.join(ROOT, "scripts", "run_pipeline_loop.py")),
-        ("executor",  os.path.join(ROOT, "scripts", "run_executor_loop.py")),
+        ("wyckoff_paper", os.path.join(ROOT, "scripts", "run_wyckoff_paper_loop.py")),
         ("scheduler", os.path.join(ROOT, "scripts", "run_scheduler_loop.py")),
     ]
     for name, script in workers:
