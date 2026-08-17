@@ -1,15 +1,34 @@
-export const MANAGED_WORKERS = [
-  'pipeline',
-  'wyckoff_paper',
-  'kraken_candle_feed',
-  'momentum_paper',
-  'momentum_live',
-  'wyckoff_live',
-  'momentum_backtest',
-  'ibkr_ingestion',
-  'stock_etf_analysis',
-  'scheduler',
+export const WORKER_CATEGORIES = {
+  live: { label: 'LIVE — appels réels', order: 0 },
+  paper: { label: 'PAPER — simulation', order: 1 },
+  infrastructure: { label: 'Infrastructure', order: 2 },
+}
+
+export const WORKER_METADATA = [
+  { id: 'pipeline', label: 'Pipeline', type: 'infrastructure' },
+  { id: 'wyckoff_paper', label: 'Wyckoff / SMC — Paper', type: 'paper' },
+  { id: 'kraken_candle_feed', label: 'Kraken — Candle feed', type: 'infrastructure' },
+  { id: 'momentum_paper', label: 'Momentum — Paper', type: 'paper' },
+  { id: 'momentum_live', label: 'Momentum — LIVE (Kraken)', type: 'live', logFile: 'momentum_live.log' },
+  { id: 'wyckoff_live', label: 'Wyckoff / SMC — LIVE (Kraken)', type: 'live', logFile: 'wyckoff_live.log' },
+  { id: 'momentum_backtest', label: 'Momentum — Backtest', type: 'infrastructure' },
+  { id: 'ibkr_ingestion', label: 'IBKR — Ingestion', type: 'infrastructure' },
+  { id: 'stock_etf_analysis', label: 'Stocks & ETF — Analysis', type: 'paper' },
+  { id: 'scheduler', label: 'Scheduler', type: 'infrastructure' },
 ]
+
+export const MANAGED_WORKERS = WORKER_METADATA.map(({ id }) => id)
+export const WORKER_BY_ID = Object.fromEntries(WORKER_METADATA.map((worker) => [worker.id, worker]))
+
+export function getWorkerMetadata(id) {
+  return WORKER_BY_ID[id] || { id, label: id, type: 'infrastructure' }
+}
+
+export const WORKERS_BY_CATEGORY = Object.keys(WORKER_CATEGORIES).map((type) => ({
+  type,
+  ...WORKER_CATEGORIES[type],
+  workers: WORKER_METADATA.filter((worker) => worker.type === type),
+})).sort((a, b) => a.order - b.order)
 
 // process_state is canonical; running supports older APIs during rolling deploys.
 export function isWorkerRunning(info) {

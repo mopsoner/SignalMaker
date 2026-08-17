@@ -5,6 +5,7 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
+import { getWorkerMetadata, isWorkerRunning } from '../lib/workerStatus'
 
 function fmtSpan(hours) {
   if (hours == null) return '—'
@@ -35,8 +36,8 @@ export default function OpsPage() {
     { key: 'note', title: 'Note' },
   ]
   const workerColumns = [
-    { key: 'name', title: 'Worker' },
-    { key: 'running', title: 'Status', render: (row) => row.running ? 'Running' : 'Stopped' },
+    { key: 'name', title: 'Worker', render: (row) => getWorkerMetadata(row.name).label },
+    { key: 'running', title: 'Status', render: (row) => isWorkerRunning(row) ? 'Running' : 'Stopped' },
     { key: 'pid', title: 'PID', render: (row) => row.pid || '—' },
   ]
   const fillColumns = [
