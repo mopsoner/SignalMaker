@@ -3,6 +3,15 @@ export function fmtNumber(value, digits = 4) {
   return Number(value).toFixed(digits)
 }
 
+export function fmtPrice(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
+  const price = Number(value)
+  const absolutePrice = Math.abs(price)
+  if (absolutePrice > 0 && absolutePrice < 0.01) return price.toFixed(8)
+  if (absolutePrice > 0 && absolutePrice < 1) return price.toFixed(6)
+  return price.toFixed(4)
+}
+
 export function fmtDate(value) {
   if (!value) return '—'
   try {

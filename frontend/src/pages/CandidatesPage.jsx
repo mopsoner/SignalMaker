@@ -3,14 +3,14 @@ import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
-import { fmtDate, fmtNumber, stageBadgeClass } from '../lib/format'
+import { fmtDate, fmtNumber, fmtPrice, stageBadgeClass } from '../lib/format'
 
 function safeText(value) {
   if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (typeof value === 'object') {
     const type = value.type || value.source || value.name || value.reason
-    const level = value.level !== null && value.level !== undefined ? ` @ ${fmtNumber(value.level, 4)}` : ''
+    const level = value.level !== null && value.level !== undefined ? ` @ ${fmtPrice(value.level)}` : ''
     if (type) return `${type}${level}`
     try { return JSON.stringify(value) } catch (_) { return 'object' }
   }
@@ -26,7 +26,7 @@ function plannerReason(row) { return payload(row)?.planner_candidate_reason || p
 function summarizeContext(value) {
   if (!value || typeof value !== 'object') return '—'
   const type = value.type || value.source || '—'
-  const level = value.level !== null && value.level !== undefined ? fmtNumber(value.level, 4) : '—'
+  const level = value.level !== null && value.level !== undefined ? fmtPrice(value.level) : '—'
   return `${type} @ ${level}`
 }
 function setupState(row) {
@@ -131,9 +131,9 @@ export default function CandidatesPage() {
     { key: 'stop_source', title: 'Stop source', render: stopSource, sortValue: stopSource },
     { key: 'target_source', title: 'Target source', render: targetSource, sortValue: targetSource },
     { key: 'score', title: 'Score', render: (row) => fmtNumber(row.score, 2) },
-    { key: 'entry_price', title: 'Entry', render: (row) => fmtNumber(row.entry_price, 4) },
-    { key: 'stop_price', title: 'Stop', render: (row) => fmtNumber(row.stop_price, 4) },
-    { key: 'target_price', title: 'Target', render: (row) => fmtNumber(row.target_price, 4) },
+    { key: 'entry_price', title: 'Entry', render: (row) => fmtPrice(row.entry_price) },
+    { key: 'stop_price', title: 'Stop', render: (row) => fmtPrice(row.stop_price) },
+    { key: 'target_price', title: 'Target', render: (row) => fmtPrice(row.target_price) },
     { key: 'rr_ratio', title: 'RR', render: (row) => fmtNumber(row.rr_ratio, 2) },
     { key: 'created_at', title: 'Created', render: (row) => fmtDate(row.created_at) },
   ]
