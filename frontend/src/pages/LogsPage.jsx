@@ -3,7 +3,7 @@ import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
-import { isWorkerRunning, MANAGED_WORKERS } from '../lib/workerStatus'
+import { isWorkerRunning, MANAGED_WORKERS, WORKERS_BY_CATEGORY } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
 const LOGS = ['application', ...WORKERS]
@@ -22,7 +22,8 @@ function dot(running) {
   )
 }
 
-function WorkerCard({ name, info, onAction, onError }) {
+function WorkerCard({ worker, info, onAction, onError }) {
+  const { id: name, label, type, logFile } = worker
   const running = isWorkerRunning(info)
   const [busy, setBusy] = useState(false)
 
@@ -39,14 +40,16 @@ function WorkerCard({ name, info, onAction, onError }) {
   }
 
   return (
-    <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: 10, borderColor: type === 'live' ? 'var(--red)' : undefined, boxShadow: type === 'live' ? '0 0 0 1px rgba(239, 68, 68, 0.3)' : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {dot(running)}
-        <span style={{ fontWeight: 700, textTransform: 'capitalize', fontSize: 15 }}>{name.replace('_', ' ')}</span>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>{label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: running ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
           {running ? 'Running' : 'Stopped'}
         </span>
       </div>
+      {type === 'live' ? <div className="badge orange" style={{ alignSelf: 'flex-start', fontWeight: 800 }}>LIVE · EXÉCUTION RÉELLE</div> : null}
+      {logFile ? <div className="stat-hint" style={{ fontFamily: 'monospace' }}>{logFile}</div> : null}
       {info?.pid ? <div className="stat-hint">PID {info.pid}</div> : null}
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
         <button
@@ -240,17 +243,12 @@ export default function LogsPage() {
 
       {actionError ? <div className="panel error" role="alert">{actionError}</div> : null}
 
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))' }}>
-        {WORKERS.map((name) => (
-          <WorkerCard
-            key={name}
-            name={name}
-            info={workers[name]}
-            onAction={handleWorkerAction}
-            onError={setActionError}
-          />
-        ))}
-      </div>
+      {WORKERS_BY_CATEGORY.map((group) => <section key={group.type} aria-labelledby={`workers-${group.type}`}>
+        <h2 id={`workers-${group.type}`} style={{ color: group.type === 'live' ? 'var(--red)' : undefined }}>{group.label}</h2>
+        <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))' }}>
+          {group.workers.map((worker) => <WorkerCard key={worker.id} worker={worker} info={workers[worker.id]} onAction={handleWorkerAction} onError={setActionError} />)}
+        </div>
+      </section>)}
 
       <section className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
