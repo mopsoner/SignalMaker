@@ -5,7 +5,6 @@ export const MANAGED_WORKERS = [
   'momentum_paper',
   'momentum_live',
   'wyckoff_live',
-  'momentum_backtest',
   'ibkr_ingestion',
   'stock_etf_analysis',
   'scheduler',

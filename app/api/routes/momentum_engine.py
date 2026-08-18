@@ -93,14 +93,6 @@ def momentum_engine_decision(
     return MomentumEngineService(db).current_decision()
 
 
-@router.get("/decisions", response_model=list[MomentumEngineDecision])
-def momentum_engine_decisions(
-    limit: int = Query(default=500, ge=1, le=2000),
-    db: Session = Depends(get_db),
-) -> list[MomentumEngineDecision]:
-    return MomentumEngineService(db).decision_history(limit=limit)
-
-
 @router.post("/run-once", response_model=MomentumEngineStatus)
 def momentum_engine_run_once(payload: MomentumEngineRunRequest, db: Session = Depends(get_db)) -> MomentumEngineStatus:
     return MomentumEngineService(db).run_once(

@@ -76,24 +76,6 @@ class MomentumEngineService:
             return current.payload_json
         return self._empty_current_decision()
 
-    def decision_history(self, *, limit: int = 500) -> list[dict[str, Any]]:
-        """Return persisted trade actions, newest first.
-
-        Older installations may already contain periodic WAIT/HOLD snapshots, so
-        keep filtering on read in addition to only persisting actionable decisions.
-        """
-        rows = self.db.scalars(
-            select(MomentumEngineDecisionHistory)
-            .where(MomentumEngineDecisionHistory.market_scope == self.market_scope)
-            .order_by(MomentumEngineDecisionHistory.produced_at.desc(), MomentumEngineDecisionHistory.id.desc())
-        ).all()
-        actions = [
-            row.payload_json
-            for row in rows
-            if isinstance(row.payload_json, dict) and row.payload_json.get("should_trade") is True
-        ]
-        return actions[:limit]
-
     def _empty_current_decision(self) -> dict[str, Any]:
         """Return a stable executor-compatible fallback when no current snapshot exists."""
         message = "No persisted momentum decision available yet."

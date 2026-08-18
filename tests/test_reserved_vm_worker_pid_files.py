@@ -43,7 +43,6 @@ def test_every_deployment_worker_redirects_both_streams_to_api_log_path() -> Non
         "momentum_paper": "signalmaker-momentum-paper.service",
         "momentum_live": "signalmaker-momentum-live.service",
         "wyckoff_live": "signalmaker-wyckoff-live.service",
-        "momentum_backtest": "signalmaker-momentum-backtest.service",
         "kraken_candle_feed": "signalmaker-kraken-candle-feed.service",
         "ibkr_ingestion": "signalmaker-ibkr-ingestion.service",
         "stock_etf_analysis": "signalmaker-market-analysis.service",
