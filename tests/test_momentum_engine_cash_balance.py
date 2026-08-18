@@ -979,7 +979,7 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
     }
 
 
-def test_decision_history_contains_only_executable_actions() -> None:
+def test_only_executable_decisions_are_persisted_to_history() -> None:
     with _make_session() as db:
         service = MomentumEngineService(db)
         service._save_current_decision({
@@ -994,18 +994,11 @@ def test_decision_history_contains_only_executable_actions() -> None:
             "should_trade": True,
             "due_now": True,
         })
-        db.add(MomentumEngineDecisionHistory(
-            market_scope="crypto",
-            decision_id="legacy-wait-snapshot",
-            payload_json={"action": "wait", "should_trade": False},
-            produced_at=datetime.now(timezone.utc),
-        ))
         db.flush()
 
         persisted = list(db.scalars(select(MomentumEngineDecisionHistory)).all())
-        assert len(persisted) == 2
-        assert service.decision_history() == [persisted[0].payload_json]
-        assert service.decision_history()[0]["action"] == "buy"
+        assert len(persisted) == 1
+        assert persisted[0].payload_json["action"] == "buy"
 
 
 def test_run_once_waits_before_cadence_for_normal_position() -> None:

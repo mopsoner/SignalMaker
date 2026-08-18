@@ -191,10 +191,9 @@ export default function AdminSettingsPage() {
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear open orders', api.clearOpenOrders)}>Clear open orders</button>
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear all orders', api.clearOrders)}>Clear all orders</button>
           </CleanupCard>
-          <CleanupCard title="Momentum analysis" description="Clear momentum scanner rankings, 15m structure analysis, backend paper-engine logs/positions and backtest chart data.">
+          <CleanupCard title="Momentum analysis" description="Clear momentum scanner rankings, 15m structure analysis and backend paper-engine logs/positions.">
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum rankings and structure analysis', api.clearMomentumAnalysis)}>Clear rankings</button>
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum engine logs, charts and positions', api.clearMomentumEngine)}>Clear engine logs/charts</button>
-            <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear momentum backtest runs, trades and charts', api.clearMomentumBacktests)}>Clear backtests</button>
           </CleanupCard>
           <CleanupCard title="ETF & stock analysis" description="Clear generated ETF/stock analysis results, candidate/position views and queued job logs while keeping assets, universes and candles.">
             <button className="button" style={dangerButtonStyle} onClick={() => doCleanup('Clear ETF and stock analysis, trades/positions and job logs', api.clearStockEtfGeneratedData)}>Clear ETF/stock generated data</button>

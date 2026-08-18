@@ -11,7 +11,6 @@ test('logs page displays every managed worker', () => {
     'momentum_paper',
     'momentum_live',
     'wyckoff_live',
-    'momentum_backtest',
     'ibkr_ingestion',
     'stock_etf_analysis',
     'scheduler',
