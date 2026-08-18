@@ -120,7 +120,7 @@ def stop_worker(worker_name: str) -> dict:
 
 
 # Keep the log allowlist tied to the same worker registry used by controls and status.
-_ALLOWED_LOG_WORKERS = frozenset(WorkerControlService.WORKERS)
+_ALLOWED_LOG_WORKERS = frozenset((*WorkerControlService.WORKERS, "application"))
 
 
 @router.get('/admin/logs/{worker_name}')

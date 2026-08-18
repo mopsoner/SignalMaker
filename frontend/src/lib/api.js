@@ -21,7 +21,9 @@ async function request(path, options = {}) {
   try {
     res = await fetch(url, { ...options, headers })
   } catch (error) {
-    throw new Error(`API request failed for ${url}: ${error.message || 'network error'}`)
+    const requestError = new Error(`API request failed for ${url}: ${error.message || 'network error'}`)
+    console.error('[SignalMaker] API loading error', { method: options.method || 'GET', url, error: requestError.message })
+    throw requestError
   }
   if (!res.ok) {
     const text = await res.text()
@@ -32,13 +34,18 @@ async function request(path, options = {}) {
     } catch {
       // Keep a plain-text response as-is.
     }
-    throw new Error(`${res.status} ${res.statusText} from ${url}${detail ? `: ${detail}` : ''}`)
+    const requestId = res.headers.get('x-request-id')
+    const requestError = new Error(`${res.status} ${res.statusText} from ${url}${detail ? `: ${detail}` : ''}${requestId ? ` (request ${requestId})` : ''}`)
+    console.error('[SignalMaker] API response error', { method: options.method || 'GET', url, status: res.status, requestId, error: requestError.message })
+    throw requestError
   }
   if (res.status === 204) return null
   try {
     return await res.json()
   } catch {
-    throw new Error(`API returned invalid JSON from ${url}`)
+    const requestError = new Error(`API returned invalid JSON from ${url}`)
+    console.error('[SignalMaker] API parsing error', { method: options.method || 'GET', url, error: requestError.message })
+    throw requestError
   }
 }
 

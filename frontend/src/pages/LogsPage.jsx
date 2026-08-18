@@ -6,6 +6,7 @@ import { fmtDate } from '../lib/format'
 import { isWorkerRunning, MANAGED_WORKERS, WORKERS_BY_CATEGORY } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
+const LOGS = ['application', ...WORKERS]
 
 function dot(running) {
   return (
@@ -201,7 +202,7 @@ function LogViewer({ worker }) {
 }
 
 export default function LogsPage() {
-  const [activeLog, setActiveLog] = useState('momentum_live')
+  const [activeLog, setActiveLog] = useState('application')
   const [refreshKey, setRefreshKey] = useState(0)
   const [actionError, setActionError] = useState('')
 
@@ -259,14 +260,13 @@ export default function LogsPage() {
 
       <section className="panel">
         <h2 style={{ marginBottom: 14 }}>Log viewer</h2>
-        {WORKERS_BY_CATEGORY.map((group) => <div key={group.type} style={{ marginBottom: 10 }}>
-          <div style={{ color: group.type === 'live' ? 'var(--red)' : 'var(--muted)', fontSize: 12, fontWeight: 800, margin: '8px 0 4px' }}>{group.label}</div>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {group.workers.map((worker) => <button key={worker.id} style={{ ...tabStyle(activeLog === worker.id), borderColor: worker.type === 'live' ? 'var(--red)' : undefined }} onClick={() => setActiveLog(worker.id)}>
-              {dot(isWorkerRunning(workers[worker.id]))}{worker.label}{worker.logFile ? ` · ${worker.logFile}` : ''}
-            </button>)}
-          </div>
-        </div>)}
+        <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
+          {LOGS.map((w) => (
+            <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
+              {w === 'application' ? null : dot(isWorkerRunning(workers[w]))}{w.replaceAll('_', ' ')}
+            </button>
+          ))}
+        </div>
         <div style={{ border: '1px solid var(--line)', borderRadius: '0 12px 12px 12px', padding: 16, background: 'var(--panel)' }}>
           <LogViewer key={activeLog} worker={activeLog} />
         </div>
