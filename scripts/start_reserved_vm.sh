@@ -42,7 +42,6 @@ fi
 if [ "${WYCKOFF_LIVE_ENABLED:-false}" = "true" ]; then
   start_worker "wyckoff_live" "scripts/start_wyckoff_live_worker.sh"
 fi
-start_worker "momentum_backtest" "scripts/start_momentum_backtest_worker.sh"
 start_worker "ibkr_ingestion" "scripts/start_ibkr_ingestion_worker.sh"
 start_worker "stock_etf_analysis" "scripts/start_market_analysis_worker.sh"
 start_worker "scheduler" "scripts/start_scheduler_worker.sh"

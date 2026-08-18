@@ -15,7 +15,6 @@ EXPECTED_WORKERS = {
     "momentum_paper",
     "momentum_live",
     "wyckoff_live",
-    "momentum_backtest",
     "kraken_candle_feed",
     "ibkr_ingestion",
     "stock_etf_analysis",

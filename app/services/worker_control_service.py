@@ -26,7 +26,6 @@ WORKERS = {
     "momentum_paper": {"module": "scripts.run_momentum_paper_loop"},
     "momentum_live": {"module": "scripts.run_momentum_live_loop"},
     "wyckoff_live": {"module": "scripts.run_wyckoff_live_loop"},
-    "momentum_backtest": {"module": "scripts.run_momentum_backtest_worker"},
     "ibkr_ingestion": {"module": "scripts.run_ibkr_ingestion_loop"},
     "stock_etf_analysis": {"module": "scripts.run_market_analysis_worker"},
     "scheduler": {"module": "scripts.run_scheduler_loop"},
