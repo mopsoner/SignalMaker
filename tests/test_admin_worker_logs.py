@@ -32,7 +32,20 @@ def test_operations_ui_worker_logs_are_allowed(monkeypatch, tmp_path: Path, work
 
 def test_log_allowlist_matches_every_worker_control_service_worker():
     assert set(WorkerControlService.WORKERS) == EXPECTED_WORKERS
-    assert admin_settings._ALLOWED_LOG_WORKERS == EXPECTED_WORKERS
+    assert admin_settings._ALLOWED_LOG_WORKERS == EXPECTED_WORKERS | {"application"}
+
+
+def test_application_error_log_is_available(monkeypatch, tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    log_file = log_dir / "application.log"
+    log_file.write_text("2026-08-18 ERROR request_failed request_id=abc\n", encoding="utf-8")
+    monkeypatch.setenv("SIGNALMAKER_LOG_DIR", str(log_dir))
+
+    result = admin_settings.get_worker_logs("application", lines=20)
+
+    assert result["path"] == str(log_file)
+    assert result["lines"] == ["2026-08-18 ERROR request_failed request_id=abc"]
 
 
 def test_worker_logs_respect_line_limit(monkeypatch, tmp_path: Path):

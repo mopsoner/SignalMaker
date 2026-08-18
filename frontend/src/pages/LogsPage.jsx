@@ -6,6 +6,7 @@ import { fmtDate } from '../lib/format'
 import { isWorkerRunning, MANAGED_WORKERS } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
+const LOGS = ['application', ...WORKERS]
 
 function dot(running) {
   return (
@@ -198,7 +199,7 @@ function LogViewer({ worker }) {
 }
 
 export default function LogsPage() {
-  const [activeLog, setActiveLog] = useState('pipeline')
+  const [activeLog, setActiveLog] = useState('application')
   const [refreshKey, setRefreshKey] = useState(0)
   const [actionError, setActionError] = useState('')
 
@@ -262,9 +263,9 @@ export default function LogsPage() {
       <section className="panel">
         <h2 style={{ marginBottom: 14 }}>Log viewer</h2>
         <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
-          {WORKERS.map((w) => (
+          {LOGS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {dot(isWorkerRunning(workers[w]))}{w.replaceAll('_', ' ')}
+              {w === 'application' ? null : dot(isWorkerRunning(workers[w]))}{w.replaceAll('_', ' ')}
             </button>
           ))}
         </div>
