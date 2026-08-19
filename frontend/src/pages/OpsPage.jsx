@@ -5,7 +5,7 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
-import { getWorkerMetadata, isWorkerRunning } from '../lib/workerStatus'
+import { getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses } from '../lib/workerStatus'
 
 function fmtSpan(hours) {
   if (hours == null) return '—'
@@ -28,7 +28,8 @@ export default function OpsPage() {
   const { data: workers = {} } = usePollingQuery(useCallback(() => api.workerStatus(), []), 15000)
 
   const serviceRows = services ? Object.entries(services).map(([name, meta]) => ({ id: name, name, ...meta })) : []
-  const workerRows = Object.entries(workers || {}).map(([name, meta]) => ({ id: name, name, ...meta }))
+  const normalizedWorkers = normalizeWorkerStatuses(workers)
+  const workerRows = MANAGED_WORKERS.map((name) => ({ id: name, name, ...(normalizedWorkers[name] || {}) }))
   const serviceColumns = [
     { key: 'name', title: 'Service' },
     { key: 'status', title: 'Status' },
@@ -76,11 +77,11 @@ export default function OpsPage() {
   const dataQualityMetricRows = objectToRows(latestStats.data_quality_counts)
   const structureMetricRows = objectToRows(latestStats.structure_counts)
   const hasAnyMetrics = Boolean(pipelineMetricRows.length || plannerMetricRows.length || dataQualityMetricRows.length || structureMetricRows.length)
-  const runningWorkers = workerRows.filter((row) => row.running).length
+  const runningWorkers = workerRows.filter(isWorkerRunning).length
 
   return <div className="page-stack">
     <PageHeader title="Ops" subtitle="Service health, worker status, fills and market ingestion state" />
-    <div className="stats-grid"><StatCard label="API status" value={health?.status || '—'} hint={healthError || ''} /><StatCard label="Environment" value={health?.env || '—'} /><StatCard label="Database" value={health?.database || '—'} /><StatCard label="Workers running" value={`${runningWorkers} / ${workerRows.length || '—'}`} hint={workers.momentum_paper?.running ? 'Momentum paper running' : 'Momentum paper stopped'} /></div>
+    <div className="stats-grid"><StatCard label="API status" value={health?.status || '—'} hint={healthError || ''} /><StatCard label="Environment" value={health?.env || '—'} /><StatCard label="Database" value={health?.database || '—'} /><StatCard label="Workers running" value={`${runningWorkers} / ${workerRows.length || '—'}`} hint={isWorkerRunning(normalizedWorkers.momentum_paper) ? 'Momentum paper running' : 'Momentum paper stopped'} /></div>
     <div className="stats-grid"><StatCard label="Symbols tracked" value={symbols || '—'} hint={`${totalCandles.toLocaleString()} candles total`} /><StatCard label="Last pipeline run" value={displayRun ? fmtDate(displayRun.started_at) : '—'} hint={displayRun?.run_id || ''} /><StatCard label="Scanned" value={latestStats.symbols_scanned ?? displayRun?.symbols_scanned ?? '—'} hint={`Collected: ${latestStats.symbols_collected ?? '—'} / Requested: ${latestStats.symbols_requested ?? displayRun?.symbols_total ?? '—'}`} /><StatCard label="Candles written" value={latestStats.candles_written ?? '—'} /></div>
     <section className="panel"><h2>Pipeline audit metrics</h2>{!displayRun ? <div>No live run data yet.</div> : null}{displayRun && !hasAnyMetrics ? <div>Latest runs found, but no saved stats yet. Run the pipeline once after backend restart.</div> : null}{displayRun && hasAnyMetrics ? <div className="two-col"><FoldableTable title="Pipeline counts" columns={metricColumns} rows={pipelineMetricRows} empty="No pipeline metrics" /><FoldableTable title="Planner rejection reasons" columns={metricColumns} rows={plannerMetricRows} empty="No planner metrics" /><FoldableTable title="Data quality alerts" columns={metricColumns} rows={dataQualityMetricRows} empty="No data quality alerts" defaultOpen={false} /><FoldableTable title="Structure counters" columns={metricColumns} rows={structureMetricRows} empty="No structure counters" /></div> : null}</section>
     <section className="panel two-col"><FoldableTable title="Workers" columns={workerColumns} rows={workerRows} empty="No worker data" /><FoldableTable title="Service health" columns={serviceColumns} rows={serviceRows} empty="No service data" /></section>
