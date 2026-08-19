@@ -3,7 +3,7 @@ import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
-import { getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus'
+import { isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKER_BY_ID } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
 const LOGS = ['application', ...WORKERS]
@@ -23,7 +23,7 @@ function dot(running) {
 }
 
 function WorkerCard({ worker, info, onAction, onError }) {
-  const { id: name, label, type, logFile } = worker
+  const { id: name, type, logFile } = worker
   const running = isWorkerRunning(info)
   const [busy, setBusy] = useState(false)
 
@@ -43,7 +43,7 @@ function WorkerCard({ worker, info, onAction, onError }) {
     <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: 10, borderColor: type === 'live' ? 'var(--red)' : undefined, boxShadow: type === 'live' ? '0 0 0 1px rgba(239, 68, 68, 0.3)' : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {dot(running)}
-        <span style={{ fontWeight: 700, fontSize: 15 }}>{label}</span>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>{name}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: running ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
           {running ? 'Running' : 'Stopped'}
         </span>
@@ -243,12 +243,15 @@ export default function LogsPage() {
 
       {actionError ? <div className="panel error" role="alert">{actionError}</div> : null}
 
-      {WORKERS_BY_CATEGORY.map((group) => <section key={group.type} aria-labelledby={`workers-${group.type}`}>
-        <h2 id={`workers-${group.type}`} style={{ color: group.type === 'live' ? 'var(--red)' : undefined }}>{group.label}</h2>
+      <section aria-labelledby="workers-heading">
+        <h2 id="workers-heading">Workers</h2>
         <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))' }}>
-          {group.workers.map((worker) => <WorkerCard key={worker.id} worker={worker} info={workers[worker.id]} onAction={handleWorkerAction} onError={setActionError} />)}
+          {WORKERS.map((workerId) => {
+            const worker = WORKER_BY_ID[workerId]
+            return <WorkerCard key={worker.id} worker={worker} info={workers[worker.id]} onAction={handleWorkerAction} onError={setActionError} />
+          })}
         </div>
-      </section>)}
+      </section>
 
       <section className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -263,7 +266,7 @@ export default function LogsPage() {
         <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
           {LOGS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {w === 'application' ? 'Application' : <>{dot(isWorkerRunning(workers[w]))}{getWorkerMetadata(w).label}</>}
+              {w === 'application' ? 'Application' : <>{dot(isWorkerRunning(workers[w]))}{w}</>}
             </button>
           ))}
         </div>
