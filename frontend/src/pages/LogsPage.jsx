@@ -3,7 +3,7 @@ import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
-import { getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus'
+import { isWorkerRunning, MANAGED_WORKERS, WORKERS_BY_CATEGORY } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
 const LOGS = ['application', ...WORKERS]
@@ -212,7 +212,7 @@ export default function LogsPage() {
   const { data: workersRaw, refresh: refreshWorkers } = usePollingQuery(workersLoader, 15000)
   const { data: runs = [] } = usePollingQuery(runsLoader, 30000)
 
-  const workers = normalizeWorkerStatuses(workersRaw)
+  const workers = workersRaw || {}
 
   async function handleWorkerAction() {
     setActionError('')
@@ -263,7 +263,7 @@ export default function LogsPage() {
         <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
           {LOGS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {w === 'application' ? 'Application' : <>{dot(isWorkerRunning(workers[w]))}{getWorkerMetadata(w).label}</>}
+              {w === 'application' ? null : dot(isWorkerRunning(workers[w]))}{w.replaceAll('_', ' ')}
             </button>
           ))}
         </div>

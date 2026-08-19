@@ -19,30 +19,8 @@ export const WORKER_METADATA = [
 export const MANAGED_WORKERS = WORKER_METADATA.map(({ id }) => id)
 export const WORKER_BY_ID = Object.fromEntries(WORKER_METADATA.map((worker) => [worker.id, worker]))
 
-export const LEGACY_WORKER_IDS = {
-  executor: 'wyckoff_paper',
-  momentum_engine: 'momentum_paper',
-}
-
-export function canonicalWorkerId(id) {
-  return LEGACY_WORKER_IDS[id] || id
-}
-
-// Normalize status payloads during rolling deployments, where an older API may
-// still return the worker IDs that predate the paper/live split. A canonical
-// entry always wins if both names are present.
-export function normalizeWorkerStatuses(statuses) {
-  const entries = Object.entries(statuses || {})
-  const normalized = Object.fromEntries(entries.map(([id, info]) => [canonicalWorkerId(id), info]))
-  for (const [id, info] of entries) {
-    if (!LEGACY_WORKER_IDS[id]) normalized[id] = info
-  }
-  return normalized
-}
-
 export function getWorkerMetadata(id) {
-  const canonicalId = canonicalWorkerId(id)
-  return WORKER_BY_ID[canonicalId] || { id: canonicalId, label: canonicalId, type: 'infrastructure' }
+  return WORKER_BY_ID[id] || { id, label: id, type: 'infrastructure' }
 }
 
 export const WORKERS_BY_CATEGORY = Object.keys(WORKER_CATEGORIES).map((type) => ({
