@@ -5,15 +5,15 @@ export const WORKER_CATEGORIES = {
 }
 
 export const WORKER_METADATA = [
-  { id: 'pipeline', label: 'Pipeline', type: 'infrastructure' },
   { id: 'wyckoff_paper', label: 'Wyckoff / SMC — Paper', type: 'paper' },
-  { id: 'kraken_candle_feed', label: 'Kraken — Candle feed', type: 'infrastructure' },
-  { id: 'momentum_paper', label: 'Momentum — Paper', type: 'paper' },
-  { id: 'momentum_live', label: 'Momentum — LIVE (Kraken)', type: 'live', logFile: 'momentum_live.log' },
   { id: 'wyckoff_live', label: 'Wyckoff / SMC — LIVE (Kraken)', type: 'live', logFile: 'wyckoff_live.log' },
-  { id: 'ibkr_ingestion', label: 'IBKR — Ingestion', type: 'infrastructure' },
   { id: 'stock_etf_analysis', label: 'Stocks & ETF — Analysis', type: 'paper' },
   { id: 'scheduler', label: 'Scheduler', type: 'infrastructure' },
+  { id: 'pipeline', label: 'Pipeline', type: 'infrastructure' },
+  { id: 'momentum_paper', label: 'Momentum — Paper', type: 'paper' },
+  { id: 'momentum_live', label: 'Momentum — LIVE (Kraken)', type: 'live', logFile: 'momentum_live.log' },
+  { id: 'kraken_candle_feed', label: 'Kraken — Candle feed', type: 'infrastructure' },
+  { id: 'ibkr_ingestion', label: 'IBKR — Ingestion', type: 'infrastructure' },
 ]
 
 export const MANAGED_WORKERS = WORKER_METADATA.map(({ id }) => id)

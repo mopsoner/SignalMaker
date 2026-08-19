@@ -5,16 +5,20 @@ import { canonicalWorkerId, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS,
 
 test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
-    'pipeline',
     'wyckoff_paper',
-    'kraken_candle_feed',
-    'momentum_paper',
-    'momentum_live',
     'wyckoff_live',
-    'ibkr_ingestion',
     'stock_etf_analysis',
     'scheduler',
+    'pipeline',
+    'momentum_paper',
+    'momentum_live',
+    'kraken_candle_feed',
+    'ibkr_ingestion',
   ])
+})
+
+test('logs page uses the canonical worker identifiers as names', () => {
+  assert.deepEqual(MANAGED_WORKERS.map((id) => getWorkerMetadata(id).id), MANAGED_WORKERS)
 })
 
 test('worker metadata provides unambiguous labels and categories', () => {
@@ -32,11 +36,11 @@ test('worker metadata provides unambiguous labels and categories', () => {
 
 test('live log entries retain exact backend identifiers', () => {
   const liveWorkers = WORKERS_BY_CATEGORY.find(({ type }) => type === 'live').workers
-  assert.deepEqual(liveWorkers.map(({ id }) => id), ['momentum_live', 'wyckoff_live'])
-  assert.deepEqual(liveWorkers.map(({ logFile }) => logFile), ['momentum_live.log', 'wyckoff_live.log'])
+  assert.deepEqual(liveWorkers.map(({ id }) => id), ['wyckoff_live', 'momentum_live'])
+  assert.deepEqual(liveWorkers.map(({ logFile }) => logFile), ['wyckoff_live.log', 'momentum_live.log'])
   assert.deepEqual(liveWorkers.map(({ id }) => `/api/v1/admin/logs/${id}?lines=300`), [
-    '/api/v1/admin/logs/momentum_live?lines=300',
     '/api/v1/admin/logs/wyckoff_live?lines=300',
+    '/api/v1/admin/logs/momentum_live?lines=300',
   ])
 })
 
