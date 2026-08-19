@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
+import { canonicalWorkerId, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
 
 test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
@@ -44,4 +44,26 @@ test('worker state follows the canonical process state', () => {
   assert.equal(isWorkerRunning({ process_state: 'running', running: false, pid: 42 }), true)
   assert.equal(isWorkerRunning({ process_state: 'stopped', running: true, pid: null }), false)
   assert.equal(isWorkerRunning({ running: true }), true)
+})
+
+test('legacy worker names are normalized to the paper worker names', () => {
+  assert.equal(canonicalWorkerId('executor'), 'wyckoff_paper')
+  assert.equal(canonicalWorkerId('momentum_engine'), 'momentum_paper')
+  assert.equal(getWorkerMetadata('executor').label, 'Wyckoff / SMC — Paper')
+
+  const statuses = normalizeWorkerStatuses({
+    executor: { running: true, pid: 12 },
+    momentum_engine: { running: true, pid: 13 },
+  })
+  assert.deepEqual(Object.keys(statuses), ['wyckoff_paper', 'momentum_paper'])
+  assert.equal(statuses.wyckoff_paper.pid, 12)
+  assert.equal(statuses.momentum_paper.pid, 13)
+})
+
+test('canonical worker status takes precedence over a legacy alias', () => {
+  const statuses = normalizeWorkerStatuses({
+    executor: { process_state: 'running', pid: 12 },
+    wyckoff_paper: { process_state: 'stopped', pid: null },
+  })
+  assert.equal(isWorkerRunning(statuses.wyckoff_paper), false)
 })
