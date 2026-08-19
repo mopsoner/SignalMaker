@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import PageHeader from '../components/PageHeader'
 import { api } from '../lib/api'
-import { getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses } from '../lib/workerStatus'
+import { getWorkerMetadata } from '../lib/workerStatus'
 
 // This shell only makes the first render safe. Business defaults come exclusively
 // from the admin settings response, whose backend source is Settings.
@@ -63,7 +63,7 @@ export default function AdminSettingsPage() {
       setSettings(merged)
       setInitialSettings(merged)
       setOverrides(data.overrides || [])
-      setWorkers(normalizeWorkerStatuses(workerData))
+      setWorkers(workerData)
       setMessage('')
     } catch (error) {
       setMessage(error.message || 'Failed to load settings')
@@ -127,7 +127,7 @@ export default function AdminSettingsPage() {
       const result = await action()
       setMessage(JSON.stringify(result))
       const workerData = await api.workerStatus()
-      setWorkers(normalizeWorkerStatuses(workerData))
+      setWorkers(workerData)
     } catch (error) {
       setMessage(error.message || 'Action failed')
     }
@@ -284,10 +284,10 @@ export default function AdminSettingsPage() {
 
       <section className="panel">
         <h2>Workers</h2>
-        <div style={gridStyle}>{MANAGED_WORKERS.map((name) => {
+        <div style={gridStyle}>{['pipeline', 'momentum_paper', 'wyckoff_paper', 'momentum_live', 'wyckoff_live', 'scheduler'].map((name) => {
           const metadata = getWorkerMetadata(name)
           const live = metadata.type === 'live'
-          return <div key={name} className="stat-card" style={{ borderColor: live ? 'var(--red)' : undefined, boxShadow: live ? '0 0 0 1px rgba(239, 68, 68, 0.35)' : undefined }}><div className="stat-label">{metadata.label}</div>{live ? <div className="badge orange" style={{ marginTop: 8, fontWeight: 800 }}>LIVE · CONTRÔLE UNE EXÉCUTION RÉELLE</div> : null}<div className="stat-value">{isWorkerRunning(workers[name]) ? 'Running' : 'Stopped'}</div><div className="page-actions"><button className="button" style={live ? dangerButtonStyle : undefined} onClick={() => doAction(() => api.startWorker(name))}>Start</button><button className="button" style={live ? dangerButtonStyle : undefined} onClick={() => doAction(() => api.stopWorker(name))}>Stop</button></div></div>
+          return <div key={name} className="stat-card" style={{ borderColor: live ? 'var(--red)' : undefined, boxShadow: live ? '0 0 0 1px rgba(239, 68, 68, 0.35)' : undefined }}><div className="stat-label">{metadata.label}</div>{live ? <div className="badge orange" style={{ marginTop: 8, fontWeight: 800 }}>LIVE · CONTRÔLE UNE EXÉCUTION RÉELLE</div> : null}<div className="stat-value">{workers[name]?.running ? 'Running' : 'Stopped'}</div><div className="page-actions"><button className="button" style={live ? dangerButtonStyle : undefined} onClick={() => doAction(() => api.startWorker(name))}>Start</button><button className="button" style={live ? dangerButtonStyle : undefined} onClick={() => doAction(() => api.stopWorker(name))}>Stop</button></div></div>
         })}</div>
       </section>
     </div>
