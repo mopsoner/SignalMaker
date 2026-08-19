@@ -11,7 +11,6 @@ export const WORKER_METADATA = [
   { id: 'momentum_paper', label: 'Momentum — Paper', type: 'paper' },
   { id: 'momentum_live', label: 'Momentum — LIVE (Kraken)', type: 'live', logFile: 'momentum_live.log' },
   { id: 'wyckoff_live', label: 'Wyckoff / SMC — LIVE (Kraken)', type: 'live', logFile: 'wyckoff_live.log' },
-  { id: 'momentum_backtest', label: 'Momentum — Backtest', type: 'infrastructure' },
   { id: 'ibkr_ingestion', label: 'IBKR — Ingestion', type: 'infrastructure' },
   { id: 'stock_etf_analysis', label: 'Stocks & ETF — Analysis', type: 'paper' },
   { id: 'scheduler', label: 'Scheduler', type: 'infrastructure' },

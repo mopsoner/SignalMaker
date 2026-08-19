@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -24,6 +24,40 @@ def test_only_exact_stable_worker_names_are_allowed(tmp_path, monkeypatch):
     for neighboring_name in ("crypto_scheduler", "scheduler_crypto", "stock_etf_analysis_crypto", "stock"):
         with pytest.raises(ValueError, match="Unknown worker"):
             service.start(neighboring_name)
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "canonical_name", "module"),
+    [
+        ("executor", "wyckoff_paper", "scripts.run_wyckoff_paper_loop"),
+        ("momentum_engine", "momentum_paper", "scripts.run_momentum_paper_loop"),
+    ],
+)
+def test_legacy_frontend_worker_names_start_canonical_paper_workers(
+    tmp_path, monkeypatch, legacy_name, canonical_name, module
+):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    process = Mock(pid=4242)
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(control.subprocess, "Popen", popen)
+
+    result = control.WorkerControlService().start(legacy_name)
+
+    assert result == {
+        "worker": canonical_name,
+        "process_state": "running",
+        "pid": 4242,
+        "action": "started",
+    }
+    assert (tmp_path / f"{canonical_name}.pid").read_text() == "4242"
+    assert not (tmp_path / f"{legacy_name}.pid").exists()
+    popen.assert_called_once_with(
+        [control.sys.executable, "-m", module],
+        cwd=control.ROOT_DIR,
+        stdout=ANY,
+        stderr=ANY,
+        start_new_session=True,
+    )
 
 
 def test_double_start_is_idempotent(tmp_path, monkeypatch):

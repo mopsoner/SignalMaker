@@ -31,6 +31,15 @@ WORKERS = {
     "scheduler": {"module": "scripts.run_scheduler_loop"},
 }
 
+# Worker names used by frontend bundles deployed before the paper/live split.
+# Keep these aliases outside WORKERS so status responses and current clients only
+# advertise canonical worker IDs, while a cached browser can still start/stop the
+# equivalent paper worker during a rolling deployment.
+LEGACY_WORKER_ALIASES = {
+    "executor": "wyckoff_paper",
+    "momentum_engine": "momentum_paper",
+}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -50,6 +59,10 @@ class WorkerControlService:
         if name not in WORKERS:  # deliberately exact; never fuzzy/prefix matching
             raise ValueError(f"Unknown worker: {name}")
         return WORKERS[name]
+
+    @staticmethod
+    def _canonical_name(name: str) -> str:
+        return LEGACY_WORKER_ALIASES.get(name, name)
 
     def _read_pid(self, name: str) -> int | None:
         try:
@@ -105,6 +118,7 @@ class WorkerControlService:
         return result
 
     def start(self, name: str) -> dict:
+        name = self._canonical_name(name)
         definition = self._definition(name)
         pid_file, _, state_file, _ = self._paths(name)
         log_dir = get_log_dir()
@@ -125,6 +139,7 @@ class WorkerControlService:
         return {"worker": name, "process_state": "running", "pid": process.pid, "action": "started"}
 
     def stop(self, name: str) -> dict:
+        name = self._canonical_name(name)
         self._definition(name)
         pid_file, _, state_file, _ = self._paths(name)
         pid = self._read_pid(name)
