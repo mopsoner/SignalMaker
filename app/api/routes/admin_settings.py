@@ -15,7 +15,7 @@ from app.services.runtime_settings import (
     load_runtime_settings_admin,
     persist_runtime_settings,
 )
-from app.services.worker_control_service import WorkerControlService
+from app.services.worker_control_service import LEGACY_WORKER_ALIASES, WorkerControlService
 
 router = APIRouter()
 
@@ -125,6 +125,10 @@ _ALLOWED_LOG_WORKERS = frozenset((*WorkerControlService.WORKERS, "application"))
 
 @router.get('/admin/logs/{worker_name}')
 def get_worker_logs(worker_name: str, lines: int = Query(default=200, ge=1, le=2_000)) -> dict:
+    # A browser can retain the pre-paper/live-split bundle while the API is
+    # upgraded. Resolve those stable legacy IDs just as the worker controls do
+    # so log polling continues to work throughout a rolling deployment.
+    worker_name = LEGACY_WORKER_ALIASES.get(worker_name, worker_name)
     if worker_name not in _ALLOWED_LOG_WORKERS:
         raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
 
