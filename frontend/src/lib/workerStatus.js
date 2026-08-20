@@ -55,3 +55,8 @@ export const WORKERS_BY_CATEGORY = Object.keys(WORKER_CATEGORIES).map((type) => 
 export function isWorkerRunning(info) {
   return info?.process_state ? info.process_state === 'running' : Boolean(info?.running)
 }
+
+export function failedStartMessage(worker, error) {
+  const detail = error?.message || String(error)
+  return `${detail} Select the canonical "${worker.id}" log tab for startup diagnostics.`
+}

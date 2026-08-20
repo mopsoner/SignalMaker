@@ -38,10 +38,11 @@ def test_legacy_frontend_worker_names_start_canonical_paper_workers(
 ):
     monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
     process = Mock(pid=4242)
+    process.poll.return_value = None
     popen = Mock(return_value=process)
     monkeypatch.setattr(control.subprocess, "Popen", popen)
 
-    result = control.WorkerControlService().start(legacy_name)
+    result = control.WorkerControlService(startup_timeout=0).start(legacy_name)
 
     assert result == {
         "worker": canonical_name,
@@ -63,15 +64,34 @@ def test_legacy_frontend_worker_names_start_canonical_paper_workers(
 def test_double_start_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
     process = Mock(pid=4242)
+    process.poll.return_value = None
     popen = Mock(return_value=process)
     monkeypatch.setattr(control.subprocess, "Popen", popen)
-    service = control.WorkerControlService()
+    service = control.WorkerControlService(startup_timeout=0)
     monkeypatch.setattr(service, "_owns_pid", lambda name, pid: pid == 4242)
     first = service.start("scheduler")
     second = service.start("scheduler")
     assert first["action"] == "started"
     assert second == {"worker": "scheduler", "process_state": "running", "pid": 4242, "action": "noop"}
     popen.assert_called_once()
+
+
+def test_immediate_exit_fails_start_and_removes_pid_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    log_dir = tmp_path / "canonical-logs"
+    monkeypatch.setattr(control, "get_log_dir", lambda: log_dir)
+    process = Mock(pid=4242)
+    process.poll.return_value = 17
+    monkeypatch.setattr(control.subprocess, "Popen", Mock(return_value=process))
+
+    with pytest.raises(control.WorkerStartupError) as raised:
+        control.WorkerControlService(startup_timeout=0.25).start("executor")
+
+    assert not (tmp_path / "wyckoff_paper.pid").exists()
+    message = str(raised.value)
+    assert "Worker wyckoff_paper" in message
+    assert "exit code 17" in message
+    assert str((log_dir / "wyckoff_paper.log").resolve()) in message
 
 
 def test_status_exposes_frontend_running_flag(tmp_path, monkeypatch):

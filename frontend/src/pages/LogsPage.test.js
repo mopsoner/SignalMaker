@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { canonicalWorkerId, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
+import { canonicalWorkerId, failedStartMessage, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
 
 test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
@@ -70,4 +70,14 @@ test('canonical worker status takes precedence over a legacy alias', () => {
     wyckoff_paper: { process_state: 'stopped', pid: null },
   })
   assert.equal(isWorkerRunning(statuses.wyckoff_paper), false)
+})
+
+test('failed worker start presents the API diagnostic and canonical log guidance', () => {
+  const worker = getWorkerMetadata('wyckoff_paper')
+  const apiError = new Error('503 Service Unavailable: Worker wyckoff_paper exited during startup with exit code 1.')
+
+  assert.equal(
+    failedStartMessage(worker, apiError),
+    '503 Service Unavailable: Worker wyckoff_paper exited during startup with exit code 1. Select the canonical "wyckoff_paper" log tab for startup diagnostics.',
+  )
 })

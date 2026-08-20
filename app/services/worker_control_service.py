@@ -31,6 +31,11 @@ WORKERS = {
     "scheduler": {"module": "scripts.run_scheduler_loop"},
 }
 
+
+class WorkerStartupError(RuntimeError):
+    """Raised when a managed worker exits during its startup check."""
+
+
 # Worker names used by frontend bundles deployed before the paper/live split.
 # Keep these aliases outside WORKERS so status responses and current clients only
 # advertise canonical worker IDs, while a cached browser can still start/stop the
@@ -48,9 +53,10 @@ def _utc_now() -> str:
 class WorkerControlService:
     WORKERS = WORKERS
 
-    def __init__(self, db=None, *, stop_timeout: float = 10.0):
+    def __init__(self, db=None, *, stop_timeout: float = 10.0, startup_timeout: float = 0.25):
         self.db = db
         self.stop_timeout = stop_timeout
+        self.startup_timeout = startup_timeout
 
     def _paths(self, name: str) -> tuple[Path, Path, Path, Path]:
         return tuple(RUNTIME_DIR / f"{name}.{suffix}" for suffix in ("pid", "log", "state.json", "heartbeat.json"))
@@ -133,6 +139,21 @@ class WorkerControlService:
                                    stdout=log_handle, stderr=log_handle, start_new_session=True)
         log_handle.close()
         pid_file.write_text(str(process.pid))
+
+        deadline = time.monotonic() + self.startup_timeout
+        while True:
+            exit_code = process.poll()
+            if exit_code is not None:
+                pid_file.unlink(missing_ok=True)
+                raise WorkerStartupError(
+                    f"Worker {name} exited during startup with exit code {exit_code}. "
+                    f"Inspect the canonical log at {log_file.resolve()}."
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
+
         state = self._json(state_file)
         state.update(started_at=_utc_now())
         state_file.write_text(json.dumps(state))

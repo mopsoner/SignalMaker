@@ -15,7 +15,11 @@ from app.services.runtime_settings import (
     load_runtime_settings_admin,
     persist_runtime_settings,
 )
-from app.services.worker_control_service import LEGACY_WORKER_ALIASES, WorkerControlService
+from app.services.worker_control_service import (
+    LEGACY_WORKER_ALIASES,
+    WorkerControlService,
+    WorkerStartupError,
+)
 
 router = APIRouter()
 
@@ -106,6 +110,8 @@ def get_worker_status(db: Session = Depends(get_db)) -> dict:
 def start_worker(worker_name: str) -> dict:
     try:
         return WorkerControlService().start(worker_name)
+    except WorkerStartupError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

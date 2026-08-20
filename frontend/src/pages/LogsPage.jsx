@@ -3,7 +3,7 @@ import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate } from '../lib/format'
-import { isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKER_BY_ID } from '../lib/workerStatus'
+import { failedStartMessage, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKER_BY_ID } from '../lib/workerStatus'
 
 const WORKERS = MANAGED_WORKERS
 const LOGS = ['application', ...WORKERS]
@@ -27,13 +27,13 @@ function WorkerCard({ worker, info, onAction, onError }) {
   const running = isWorkerRunning(info)
   const [busy, setBusy] = useState(false)
 
-  async function act(fn) {
+  async function act(fn, starting = false) {
     setBusy(true)
     try {
       await fn()
       await onAction()
     } catch (error) {
-      onError(error?.message || String(error))
+      onError(starting ? failedStartMessage(worker, error) : (error?.message || String(error)))
     } finally {
       setBusy(false)
     }
@@ -43,7 +43,7 @@ function WorkerCard({ worker, info, onAction, onError }) {
     <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: 10, borderColor: type === 'live' ? 'var(--red)' : undefined, boxShadow: type === 'live' ? '0 0 0 1px rgba(239, 68, 68, 0.3)' : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {dot(running)}
-        <span style={{ fontWeight: 700, fontSize: 15 }}>{name}</span>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>{worker.label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: running ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
           {running ? 'Running' : 'Stopped'}
         </span>
@@ -56,7 +56,7 @@ function WorkerCard({ worker, info, onAction, onError }) {
           className="button"
           style={{ flex: 1, padding: '8px 10px', fontSize: 13, background: running ? 'var(--line)' : 'var(--green)', color: 'white' }}
           disabled={busy || running}
-          onClick={() => act(() => api.startWorker(name))}
+          onClick={() => act(() => api.startWorker(name), true)}
         >Start</button>
         <button
           className="button"
