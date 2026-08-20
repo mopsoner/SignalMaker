@@ -35,6 +35,26 @@ def test_log_allowlist_matches_every_worker_control_service_worker():
     assert admin_settings._ALLOWED_LOG_WORKERS == EXPECTED_WORKERS | {"application"}
 
 
+@pytest.mark.parametrize(
+    ("legacy_name", "canonical_name"),
+    [("executor", "wyckoff_paper"), ("momentum_engine", "momentum_paper")],
+)
+def test_legacy_worker_log_names_resolve_to_paper_workers(
+    monkeypatch, tmp_path: Path, legacy_name: str, canonical_name: str
+):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    log_file = log_dir / f"{canonical_name}.log"
+    log_file.write_text(f"{canonical_name} output\n", encoding="utf-8")
+    monkeypatch.setenv("SIGNALMAKER_LOG_DIR", str(log_dir))
+
+    result = admin_settings.get_worker_logs(legacy_name, lines=300)
+
+    assert result["worker"] == canonical_name
+    assert result["path"] == str(log_file)
+    assert result["lines"] == [f"{canonical_name} output"]
+
+
 def test_application_error_log_is_available(monkeypatch, tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
