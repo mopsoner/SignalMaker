@@ -219,7 +219,7 @@ class ExecutorService:
             mark_price=candidate.entry_price,
             stop_price=candidate.stop_price,
             target_price=target_price,
-            meta={"candidate_id": candidate.candidate_id, "mode": "paper", **target_plan},
+            meta={"candidate_id": candidate.candidate_id, "execution_mode": "paper", **target_plan},
         )
         order = self.orders.create_order(
             candidate_id=candidate.candidate_id,
@@ -231,10 +231,9 @@ class ExecutorService:
             requested_price=candidate.entry_price,
             filled_price=candidate.entry_price,
             status="filled",
-            meta={"mode": "paper", **target_plan},
+            meta={"execution_mode": "paper", **target_plan},
         )
         fill = self.fills.create_fill(order_id=order.order_id, position_id=position.position_id, symbol=candidate.symbol, side=candidate.side, quantity=quantity, price=candidate.entry_price)
-        self.candidates.mark_executed(candidate.candidate_id)
         return {"candidate_id": candidate.candidate_id, "position_id": position.position_id, "order_id": order.order_id, "fill_id": fill.fill_id, "mode": "paper", "target_price": target_price, "raw_target_price": target_plan.get('raw_target_price')}
 
     def _execute_live_candidate(self, candidate, quantity: float) -> dict:
@@ -265,7 +264,6 @@ class ExecutorService:
                 quote_amount=min(requested_notional, max_notional),
                 mode=mode,
             )
-        self.candidates.mark_executed(candidate.candidate_id)
         return {
             "candidate_id": candidate.candidate_id,
             "mode": "live",
@@ -279,9 +277,12 @@ class ExecutorService:
         executed = []
         skipped = []
         requested_mode = (mode or 'paper').lower()
-        for candidate in self.candidates.get_open_candidates(limit=limit):
+        if requested_mode not in {'paper', 'live'}:
+            raise ValueError('execution mode must be paper or live')
+        for candidate in self.candidates.claim_open_candidates(execution_mode=requested_mode, limit=limit):
             if candidate.entry_price is None:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
+                self.candidates.release_claim(candidate.candidate_id, execution_mode=requested_mode)
                 continue
             try:
                 target_plan = self._hierarchical_target_plan(candidate)
@@ -295,13 +296,18 @@ class ExecutorService:
                         'stop_price': candidate.stop_price,
                         'target_price': target_price,
                     })
+                    self.candidates.release_claim(candidate.candidate_id, execution_mode=requested_mode)
                     continue
                 if requested_mode == 'live':
                     result = self._execute_live_candidate(candidate, quantity)
                 else:
                     result = self._execute_paper_candidate(candidate, quantity)
+                self.candidates.finish_execution(candidate.candidate_id, execution_mode=requested_mode)
                 executed.append(result)
             except Exception as exc:
+                self.candidates.finish_execution(
+                    candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
+                )
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
 
