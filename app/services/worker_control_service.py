@@ -20,15 +20,15 @@ RUNTIME_DIR.mkdir(exist_ok=True)
 # Public, stable identifiers.  In particular none of these aliases resolve by
 # prefix, so an operation on a stock/ETF worker can never hit a crypto process.
 WORKERS = {
-    "pipeline": {"module": "scripts.run_pipeline_loop"},
-    "wyckoff_paper": {"module": "scripts.run_wyckoff_paper_loop"},
-    "kraken_candle_feed": {"module": "scripts.run_kraken_candle_feed_loop"},
-    "momentum_paper": {"module": "scripts.run_momentum_paper_loop"},
-    "momentum_live": {"module": "scripts.run_momentum_live_loop"},
-    "wyckoff_live": {"module": "scripts.run_wyckoff_live_loop"},
-    "ibkr_ingestion": {"module": "scripts.run_ibkr_ingestion_loop"},
-    "stock_etf_analysis": {"module": "scripts.run_market_analysis_worker"},
-    "scheduler": {"module": "scripts.run_scheduler_loop"},
+    "pipeline": {"module": "scripts.run_pipeline_loop", "systemd_unit": "signalmaker-pipeline.service"},
+    "wyckoff_paper": {"module": "scripts.run_wyckoff_paper_loop", "systemd_unit": "signalmaker-wyckoff-paper.service"},
+    "kraken_candle_feed": {"module": "scripts.run_kraken_candle_feed_loop", "systemd_unit": "signalmaker-kraken-candle-feed.service"},
+    "momentum_paper": {"module": "scripts.run_momentum_paper_loop", "systemd_unit": "signalmaker-momentum-paper.service"},
+    "momentum_live": {"module": "scripts.run_momentum_live_loop", "systemd_unit": "signalmaker-momentum-live.service"},
+    "wyckoff_live": {"module": "scripts.run_wyckoff_live_loop", "systemd_unit": "signalmaker-wyckoff-live.service"},
+    "ibkr_ingestion": {"module": "scripts.run_ibkr_ingestion_loop", "systemd_unit": "signalmaker-ibkr-ingestion.service"},
+    "stock_etf_analysis": {"module": "scripts.run_market_analysis_worker", "systemd_unit": "signalmaker-market-analysis.service"},
+    "scheduler": {"module": "scripts.run_scheduler_loop", "systemd_unit": "signalmaker-scheduler.service"},
 }
 
 
@@ -53,10 +53,14 @@ def _utc_now() -> str:
 class WorkerControlService:
     WORKERS = WORKERS
 
-    def __init__(self, db=None, *, stop_timeout: float = 10.0, startup_timeout: float = 0.25):
+    def __init__(self, db=None, *, stop_timeout: float = 10.0, startup_timeout: float = 0.25,
+                 supervisor: str | None = None):
         self.db = db
         self.stop_timeout = stop_timeout
         self.startup_timeout = startup_timeout
+        self.supervisor = supervisor or os.getenv("SIGNALMAKER_WORKER_SUPERVISOR", "local")
+        if self.supervisor not in {"local", "systemd"}:
+            raise ValueError("SIGNALMAKER_WORKER_SUPERVISOR must be 'local' or 'systemd'")
 
     def _paths(self, name: str) -> tuple[Path, Path, Path, Path]:
         return tuple(RUNTIME_DIR / f"{name}.{suffix}" for suffix in ("pid", "log", "state.json", "heartbeat.json"))
@@ -81,10 +85,12 @@ class WorkerControlService:
             return False
         try:
             os.kill(pid, 0)
-            command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+            arguments = [part.decode() for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
         except (OSError, UnicodeError):
             return False
-        return self._definition(name)["module"] in command
+        module = self._definition(name)["module"]
+        return any(argument == "-m" and index + 1 < len(arguments) and arguments[index + 1] == module
+                   for index, argument in enumerate(arguments))
 
     @staticmethod
     def _json(path: Path) -> dict:
@@ -107,17 +113,41 @@ class WorkerControlService:
                 "counts": counts, "job_heartbeat_at": str(running["heartbeat_at"]) if running else None,
                 "last_error": next((row["last_error"] for row in rows if row["last_error"]), None)}
 
+    def _systemd_state(self, name: str) -> tuple[str, int | None]:
+        unit = self._definition(name)["systemd_unit"]
+        completed = subprocess.run(
+            ["systemctl", "show", unit, "--property=ActiveState", "--property=MainPID"],
+            check=False, capture_output=True, text=True,
+        )
+        if completed.returncode != 0:
+            return "unknown", None
+        values = dict(line.split("=", 1) for line in completed.stdout.splitlines() if "=" in line)
+        try:
+            pid = int(values.get("MainPID", "0")) or None
+        except ValueError:
+            pid = None
+        return values.get("ActiveState", "unknown"), pid
+
+    def _process_state(self, name: str) -> tuple[str, int | None, bool]:
+        if self.supervisor == "systemd":
+            state, pid = self._systemd_state(name)
+            owned = state == "active" and self._owns_pid(name, pid)
+            return state, pid if owned else None, owned
+        pid = self._read_pid(name)
+        owned = self._owns_pid(name, pid)
+        return "running" if owned else "stopped", pid if owned else None, owned
+
     def status(self) -> dict:
         result = {}
         for name, definition in WORKERS.items():
-            pid = self._read_pid(name)
-            owned = self._owns_pid(name, pid)
+            supervisor_state, pid, owned = self._process_state(name)
             _, _, state_path, heartbeat_path = self._paths(name)
             state, heartbeat = self._json(state_path), self._json(heartbeat_path)
             result[name] = {
                 "worker_id": name, "command": [sys.executable, "-m", definition["module"]],
                 "pid": pid if owned else None, "running": owned,
                 "process_state": "running" if owned else "stopped",
+                "supervisor": self.supervisor, "supervisor_state": supervisor_state,
                 "heartbeat_at": heartbeat.get("at"), "started_at": state.get("started_at"),
                 "last_stopped_at": state.get("last_stopped_at"), "queue": self._queue_status(name),
             }
@@ -126,6 +156,15 @@ class WorkerControlService:
     def start(self, name: str) -> dict:
         name = self._canonical_name(name)
         definition = self._definition(name)
+        if self.supervisor == "systemd":
+            state, pid, owned = self._process_state(name)
+            if owned:
+                return {"worker": name, "process_state": "running", "pid": pid, "action": "noop"}
+            subprocess.run(["systemctl", "start", definition["systemd_unit"]], check=True)
+            state, pid, owned = self._process_state(name)
+            if not owned:
+                raise WorkerStartupError(f"Worker {name} systemd unit did not become active with its expected module")
+            return {"worker": name, "process_state": "running", "pid": pid, "action": "started"}
         pid_file, _, state_file, _ = self._paths(name)
         log_dir = get_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +200,13 @@ class WorkerControlService:
 
     def stop(self, name: str) -> dict:
         name = self._canonical_name(name)
-        self._definition(name)
+        definition = self._definition(name)
+        if self.supervisor == "systemd":
+            _state, pid, owned = self._process_state(name)
+            if not owned:
+                return {"worker": name, "process_state": "stopped", "pid": None, "action": "noop"}
+            subprocess.run(["systemctl", "stop", definition["systemd_unit"]], check=True)
+            return {"worker": name, "process_state": "stopped", "pid": None, "action": "stopped"}
         pid_file, _, state_file, _ = self._paths(name)
         pid = self._read_pid(name)
         if not self._owns_pid(name, pid):
