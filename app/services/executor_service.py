@@ -1,3 +1,5 @@
+from typing import Literal
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -8,6 +10,9 @@ from app.services.position_service import PositionService
 from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
 from app.services.execution.kraken_execution_service import KrakenExecutionService
+from app.services.execution.live_configuration import assert_wyckoff_live_configuration
+
+ExecutionMode = Literal["paper", "live"]
 
 
 class ExecutorService:
@@ -273,12 +278,17 @@ class ExecutorService:
             "stop_price": candidate.stop_price,
         }
 
-    def execute_open_candidates(self, limit: int = 100, quantity: float = 1.0, mode: str = 'paper') -> dict:
+    def execute_open_candidates(
+        self, limit: int = 100, quantity: float = 1.0, mode: ExecutionMode = "paper"
+    ) -> dict:
         executed = []
         skipped = []
-        requested_mode = (mode or 'paper').lower()
+        requested_mode = mode
         if requested_mode not in {'paper', 'live'}:
             raise ValueError('execution mode must be paper or live')
+        if requested_mode == "live":
+            # Validate before claiming candidates or constructing a Kraken client.
+            assert_wyckoff_live_configuration(settings)
         for candidate in self.candidates.claim_open_candidates(execution_mode=requested_mode, limit=limit):
             if candidate.entry_price is None:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})

@@ -18,7 +18,15 @@ class FakeKrakenExecution:
 def test_live_bull_candidate_submits_to_kraken_and_records_live_mode(monkeypatch):
     FakeKrakenExecution.calls = []
     monkeypatch.setattr(module, "KrakenExecutionService", FakeKrakenExecution)
-    monkeypatch.setattr(module, "settings", SimpleNamespace(wyckoff_live_mode="spot"))
+    monkeypatch.setattr(module, "settings", SimpleNamespace(
+        wyckoff_live_enabled=True,
+        wyckoff_live_mode="spot",
+        kraken_execution_enabled=True,
+        kraken_dry_run=False,
+        kraken_api_key="key",
+        kraken_secret_key="secret",
+        kraken_margin_execution_enabled=False,
+    ))
     monkeypatch.setattr(
         module,
         "load_runtime_settings",
@@ -59,6 +67,16 @@ def test_paper_and_live_cycles_do_not_consume_each_others_claim(monkeypatch):
     service._current_price_for_candidate = lambda _candidate, *, requested_mode: 100.0
     service._execute_paper_candidate = lambda row, quantity: {"candidate_id": row.candidate_id, "mode": "paper"}
     service._execute_live_candidate = lambda row, quantity: {"candidate_id": row.candidate_id, "mode": "live"}
+
+    monkeypatch.setattr(module, "settings", SimpleNamespace(
+        wyckoff_live_enabled=True,
+        wyckoff_live_mode="spot",
+        kraken_execution_enabled=True,
+        kraken_dry_run=False,
+        kraken_api_key="key",
+        kraken_secret_key="secret",
+        kraken_margin_execution_enabled=False,
+    ))
 
     assert service.execute_open_candidates(mode="paper")["executed"][0]["mode"] == "paper"
     assert service.execute_open_candidates(mode="live")["executed"][0]["mode"] == "live"
