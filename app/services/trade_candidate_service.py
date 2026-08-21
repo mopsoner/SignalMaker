@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, literal, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from app.models.candidate_execution import CandidateExecution
 from app.models.trade_candidate import TradeCandidate
 
 
@@ -18,6 +21,12 @@ class TradeCandidateService:
         return list(self.db.scalars(stmt).all())
 
     def clear_candidates(self, status: str | None = None) -> int:
+        candidate_ids = select(TradeCandidate.candidate_id)
+        if status:
+            candidate_ids = candidate_ids.where(TradeCandidate.status == status)
+        self.db.execute(
+            delete(CandidateExecution).where(CandidateExecution.candidate_id.in_(candidate_ids))
+        )
         stmt = delete(TradeCandidate)
         if status:
             stmt = stmt.where(TradeCandidate.status == status)
@@ -31,6 +40,72 @@ class TradeCandidateService:
         # open candidates from being starved when the executor limit is reached.
         stmt = select(TradeCandidate).where(TradeCandidate.status == "open").order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
+
+    def claim_open_candidates(self, *, execution_mode: str, limit: int = 100) -> list[TradeCandidate]:
+        """Atomically reserve open candidates which this environment has not consumed.
+
+        The unique candidate/mode key is the concurrency primitive: concurrent
+        workers may select the same rows, but only one can insert each claim.
+        """
+        mode = execution_mode.lower()
+        if mode not in {"paper", "live"}:
+            raise ValueError("execution mode must be paper or live")
+        candidate_ids = (
+            select(TradeCandidate.candidate_id)
+            .where(TradeCandidate.status == "open")
+            .order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc())
+            .limit(limit)
+        )
+        values = select(
+            TradeCandidate.candidate_id + "-" + mode,
+            TradeCandidate.candidate_id,
+        ).where(TradeCandidate.candidate_id.in_(candidate_ids))
+        values = values.add_columns(
+            # Literals are supplied by INSERT defaults only for single-row inserts.
+            literal(mode),
+            literal("claimed"),
+            literal(datetime.now(timezone.utc)),
+        )
+        columns = ["execution_id", "candidate_id", "execution_mode", "status", "claimed_at"]
+        dialect = self.db.get_bind().dialect.name
+        insert = sqlite_insert(CandidateExecution) if dialect == "sqlite" else postgresql_insert(CandidateExecution)
+        statement = insert.from_select(columns, values).on_conflict_do_nothing(
+            index_elements=["candidate_id", "execution_mode"]
+        ).returning(CandidateExecution.candidate_id)
+        claimed_ids = list(self.db.scalars(statement).all())
+        self.db.commit()
+        if not claimed_ids:
+            return []
+        stmt = select(TradeCandidate).where(TradeCandidate.candidate_id.in_(claimed_ids)).order_by(
+            TradeCandidate.created_at.asc(), TradeCandidate.score.desc()
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def finish_execution(self, candidate_id: str, *, execution_mode: str, error: str | None = None) -> None:
+        self.db.execute(
+            update(CandidateExecution)
+            .where(
+                CandidateExecution.candidate_id == candidate_id,
+                CandidateExecution.execution_mode == execution_mode,
+                CandidateExecution.status == "claimed",
+            )
+            .values(
+                status="failed" if error else "executed",
+                completed_at=datetime.now(timezone.utc),
+                error=error,
+            )
+        )
+        self.db.commit()
+
+    def release_claim(self, candidate_id: str, *, execution_mode: str) -> None:
+        self.db.execute(
+            delete(CandidateExecution).where(
+                CandidateExecution.candidate_id == candidate_id,
+                CandidateExecution.execution_mode == execution_mode,
+                CandidateExecution.status == "claimed",
+            )
+        )
+        self.db.commit()
 
     def upsert_open_candidate(self, *, symbol: str, side: str, stage: str, score: float, entry_price: float | None, stop_price: float | None, target_price: float | None, rr_ratio: float | None, execution_target: dict | None, liquidity_context: dict | None, notes: str | None, payload: dict | None) -> TradeCandidate:
         candidate_id = f"{symbol.upper()}-open"
@@ -56,15 +131,6 @@ class TradeCandidateService:
         row.liquidity_context = liquidity_context
         row.notes = notes
         row.payload = payload
-        self.db.commit()
-        self.db.refresh(row)
-        return row
-
-    def mark_executed(self, candidate_id: str) -> TradeCandidate | None:
-        row = self.db.get(TradeCandidate, candidate_id)
-        if row is None:
-            return None
-        row.status = "executed"
         self.db.commit()
         self.db.refresh(row)
         return row
