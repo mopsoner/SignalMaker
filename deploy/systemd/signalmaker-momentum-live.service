@@ -8,6 +8,7 @@ Type=simple
 WorkingDirectory=/opt/signalmaker
 EnvironmentFile=/opt/signalmaker/.env
 Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+Environment=SIGNALMAKER_WORKER_SUPERVISOR=systemd
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_momentum_live_worker.sh
 StandardOutput=append:/opt/signalmaker/logs/momentum_live.log
 StandardError=append:/opt/signalmaker/logs/momentum_live.log

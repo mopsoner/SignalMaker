@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/signalmaker
 Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+Environment=SIGNALMAKER_WORKER_SUPERVISOR=systemd
 ExecStart=/bin/bash /opt/signalmaker/scripts/start_api.sh
 Restart=always
 RestartSec=5

@@ -109,6 +109,54 @@ def test_status_exposes_frontend_running_flag(tmp_path, monkeypatch):
     assert statuses["pipeline"]["process_state"] == "stopped"
 
 
+def test_systemd_active_worker_does_not_require_runtime_pid_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    service = control.WorkerControlService(supervisor="systemd")
+    systemctl = Mock(return_value=Mock(
+        returncode=0, stdout="ActiveState=active\nMainPID=4242\n"
+    ))
+    monkeypatch.setattr(control.subprocess, "run", systemctl)
+    monkeypatch.setattr(service, "_owns_pid", lambda name, pid: name == "scheduler" and pid == 4242)
+
+    status = service.status()["scheduler"]
+
+    assert not (tmp_path / "scheduler.pid").exists()
+    assert status["running"] is True
+    assert status["pid"] == 4242
+    assert status["supervisor_state"] == "active"
+    systemctl.assert_any_call(
+        ["systemctl", "show", "signalmaker-scheduler.service", "--property=ActiveState", "--property=MainPID"],
+        check=False, capture_output=True, text=True,
+    )
+
+
+def test_stopped_systemd_service_is_reported_stopped(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    service = control.WorkerControlService(supervisor="systemd")
+    monkeypatch.setattr(control.subprocess, "run", Mock(return_value=Mock(
+        returncode=0, stdout="ActiveState=inactive\nMainPID=0\n"
+    )))
+
+    status = service.status()["scheduler"]
+
+    assert status["running"] is False
+    assert status["pid"] is None
+    assert status["process_state"] == "stopped"
+    assert status["supervisor_state"] == "inactive"
+
+
+def test_stale_local_pid_file_is_ignored_and_removed_on_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "RUNTIME_DIR", tmp_path)
+    pid_file = tmp_path / "scheduler.pid"
+    pid_file.write_text("4242")
+    service = control.WorkerControlService(supervisor="local")
+    monkeypatch.setattr(service, "_owns_pid", lambda _name, _pid: False)
+
+    assert service.status()["scheduler"]["running"] is False
+    assert service.stop("scheduler")["action"] == "noop"
+    assert not pid_file.exists()
+
+
 def test_stopping_current_job_requeues_claim_cleanly():
     class DB:
         def commit(self): pass
