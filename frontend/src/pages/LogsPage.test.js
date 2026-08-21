@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { canonicalWorkerId, failedStartMessage, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
+import { canonicalWorkerId, DEPRECATED_WORKER_ALIASES, failedStartMessage, getWorkerMetadata, isWorkerRunning, MANAGED_WORKERS, normalizeWorkerStatuses, WORKERS_BY_CATEGORY } from '../lib/workerStatus.js'
 
 test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
@@ -51,6 +51,8 @@ test('worker state follows the canonical process state', () => {
 })
 
 test('legacy worker names are normalized to the paper worker names', () => {
+  assert.deepEqual(DEPRECATED_WORKER_ALIASES.executor, { canonicalId: 'wyckoff_paper', deprecated: true })
+  assert.deepEqual(DEPRECATED_WORKER_ALIASES.momentum_engine, { canonicalId: 'momentum_paper', deprecated: true })
   assert.equal(canonicalWorkerId('executor'), 'wyckoff_paper')
   assert.equal(canonicalWorkerId('momentum_engine'), 'momentum_paper')
   assert.equal(getWorkerMetadata('executor').label, 'Wyckoff / SMC — Paper')
@@ -72,12 +74,28 @@ test('canonical worker status takes precedence over a legacy alias', () => {
   assert.equal(isWorkerRunning(statuses.wyckoff_paper), false)
 })
 
+test('normalization never merges paper aliases with live worker statuses', () => {
+  const statuses = normalizeWorkerStatuses({
+    executor: { process_state: 'running', pid: 12 },
+    wyckoff_live: { process_state: 'stopped', pid: null },
+    momentum_engine: { process_state: 'stopped', pid: null },
+    momentum_live: { process_state: 'running', pid: 99 },
+  })
+
+  assert.equal(isWorkerRunning(statuses.wyckoff_paper), true)
+  assert.equal(isWorkerRunning(statuses.wyckoff_live), false)
+  assert.equal(isWorkerRunning(statuses.momentum_paper), false)
+  assert.equal(isWorkerRunning(statuses.momentum_live), true)
+  assert.notEqual(statuses.wyckoff_paper, statuses.wyckoff_live)
+  assert.notEqual(statuses.momentum_paper, statuses.momentum_live)
+})
+
 test('failed worker start presents the API diagnostic and canonical log guidance', () => {
   const worker = getWorkerMetadata('wyckoff_paper')
   const apiError = new Error('503 Service Unavailable: Worker wyckoff_paper exited during startup with exit code 1.')
 
   assert.equal(
     failedStartMessage(worker, apiError),
-    '503 Service Unavailable: Worker wyckoff_paper exited during startup with exit code 1. Select the canonical "wyckoff_paper" log tab for startup diagnostics.',
+    '503 Service Unavailable: Worker Wyckoff / SMC — Paper exited during startup with exit code 1. Select the “Wyckoff / SMC — Paper” log tab for startup diagnostics.',
   )
 })

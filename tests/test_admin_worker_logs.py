@@ -27,7 +27,15 @@ def test_operations_ui_worker_logs_are_allowed(monkeypatch, tmp_path: Path, work
 
     result = admin_settings.get_worker_logs(worker_name, lines=300)
 
-    assert result == {"worker": worker_name, "path": None, "lines": [], "size_bytes": 0}
+    assert result == {
+        "worker": worker_name,
+        "requested_worker_id": worker_name,
+        "canonical_worker_id": worker_name,
+        "deprecated_alias": False,
+        "path": None,
+        "lines": [],
+        "size_bytes": 0,
+    }
 
 
 def test_log_allowlist_matches_every_worker_control_service_worker():
@@ -51,6 +59,10 @@ def test_legacy_worker_log_names_resolve_to_paper_workers(
     result = admin_settings.get_worker_logs(legacy_name, lines=300)
 
     assert result["worker"] == canonical_name
+    assert result["requested_worker_id"] == legacy_name
+    assert result["canonical_worker_id"] == canonical_name
+    assert result["deprecated_alias"] is True
+    assert result["canonical_worker_id"] not in {"wyckoff_live", "momentum_live"}
     assert result["path"] == str(log_file)
     assert result["lines"] == [f"{canonical_name} output"]
 

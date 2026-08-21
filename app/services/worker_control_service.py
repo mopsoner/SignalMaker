@@ -46,6 +46,12 @@ LEGACY_WORKER_ALIASES = {
 }
 
 
+def resolve_worker_id(requested_worker_id: str) -> tuple[str, bool]:
+    """Resolve an exact legacy ID, which is permanently pinned to paper mode."""
+    canonical_worker_id = LEGACY_WORKER_ALIASES.get(requested_worker_id, requested_worker_id)
+    return canonical_worker_id, requested_worker_id in LEGACY_WORKER_ALIASES
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,7 +78,15 @@ class WorkerControlService:
 
     @staticmethod
     def _canonical_name(name: str) -> str:
-        return LEGACY_WORKER_ALIASES.get(name, name)
+        return resolve_worker_id(name)[0]
+
+    @staticmethod
+    def _identity(requested_worker_id: str, canonical_worker_id: str) -> dict:
+        return {
+            "requested_worker_id": requested_worker_id,
+            "canonical_worker_id": canonical_worker_id,
+            "deprecated_alias": requested_worker_id in LEGACY_WORKER_ALIASES,
+        }
 
     def _read_pid(self, name: str) -> int | None:
         try:
@@ -154,24 +168,26 @@ class WorkerControlService:
         return result
 
     def start(self, name: str) -> dict:
-        name = self._canonical_name(name)
+        requested_name = name
+        name = self._canonical_name(requested_name)
+        identity = self._identity(requested_name, name)
         definition = self._definition(name)
         if self.supervisor == "systemd":
             state, pid, owned = self._process_state(name)
             if owned:
-                return {"worker": name, "process_state": "running", "pid": pid, "action": "noop"}
+                return {"worker": name, "process_state": "running", "pid": pid, "action": "noop", **identity}
             subprocess.run(["systemctl", "start", definition["systemd_unit"]], check=True)
             state, pid, owned = self._process_state(name)
             if not owned:
                 raise WorkerStartupError(f"Worker {name} systemd unit did not become active with its expected module")
-            return {"worker": name, "process_state": "running", "pid": pid, "action": "started"}
+            return {"worker": name, "process_state": "running", "pid": pid, "action": "started", **identity}
         pid_file, _, state_file, _ = self._paths(name)
         log_dir = get_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"{name}.log"
         pid = self._read_pid(name)
         if self._owns_pid(name, pid):
-            return {"worker": name, "process_state": "running", "pid": pid, "action": "noop"}
+            return {"worker": name, "process_state": "running", "pid": pid, "action": "noop", **identity}
         pid_file.unlink(missing_ok=True)
         log_handle = open(log_file, "ab")
         process = subprocess.Popen([sys.executable, "-m", definition["module"]], cwd=ROOT_DIR,
@@ -196,22 +212,24 @@ class WorkerControlService:
         state = self._json(state_file)
         state.update(started_at=_utc_now())
         state_file.write_text(json.dumps(state))
-        return {"worker": name, "process_state": "running", "pid": process.pid, "action": "started"}
+        return {"worker": name, "process_state": "running", "pid": process.pid, "action": "started", **identity}
 
     def stop(self, name: str) -> dict:
-        name = self._canonical_name(name)
+        requested_name = name
+        name = self._canonical_name(requested_name)
+        identity = self._identity(requested_name, name)
         definition = self._definition(name)
         if self.supervisor == "systemd":
             _state, pid, owned = self._process_state(name)
             if not owned:
-                return {"worker": name, "process_state": "stopped", "pid": None, "action": "noop"}
+                return {"worker": name, "process_state": "stopped", "pid": None, "action": "noop", **identity}
             subprocess.run(["systemctl", "stop", definition["systemd_unit"]], check=True)
-            return {"worker": name, "process_state": "stopped", "pid": None, "action": "stopped"}
+            return {"worker": name, "process_state": "stopped", "pid": None, "action": "stopped", **identity}
         pid_file, _, state_file, _ = self._paths(name)
         pid = self._read_pid(name)
         if not self._owns_pid(name, pid):
             pid_file.unlink(missing_ok=True)
-            return {"worker": name, "process_state": "stopped", "pid": None, "action": "noop"}
+            return {"worker": name, "process_state": "stopped", "pid": None, "action": "noop", **identity}
         os.kill(pid, signal.SIGTERM)
         deadline = time.monotonic() + self.stop_timeout
         while time.monotonic() < deadline and self._owns_pid(name, pid):
@@ -222,4 +240,4 @@ class WorkerControlService:
         state = self._json(state_file)
         state.update(last_stopped_at=_utc_now())
         state_file.write_text(json.dumps(state))
-        return {"worker": name, "process_state": "stopped", "pid": None, "action": "stopped"}
+        return {"worker": name, "process_state": "stopped", "pid": None, "action": "stopped", **identity}

@@ -16,9 +16,9 @@ from app.services.runtime_settings import (
     persist_runtime_settings,
 )
 from app.services.worker_control_service import (
-    LEGACY_WORKER_ALIASES,
     WorkerControlService,
     WorkerStartupError,
+    resolve_worker_id,
 )
 
 router = APIRouter()
@@ -134,14 +134,21 @@ def get_worker_logs(worker_name: str, lines: int = Query(default=200, ge=1, le=2
     # A browser can retain the pre-paper/live-split bundle while the API is
     # upgraded. Resolve those stable legacy IDs just as the worker controls do
     # so log polling continues to work throughout a rolling deployment.
-    worker_name = LEGACY_WORKER_ALIASES.get(worker_name, worker_name)
+    requested_worker_id = worker_name
+    worker_name, deprecated_alias = resolve_worker_id(requested_worker_id)
     if worker_name not in _ALLOWED_LOG_WORKERS:
-        raise HTTPException(status_code=400, detail=f"Unknown worker: {worker_name}")
+        raise HTTPException(status_code=400, detail=f"Unknown worker: {requested_worker_id}")
+
+    identity = {
+        "requested_worker_id": requested_worker_id,
+        "canonical_worker_id": worker_name,
+        "deprecated_alias": deprecated_alias,
+    }
 
     existing_logs = [path for path in worker_log_candidates(worker_name) if path.is_file()]
     log_path = max(existing_logs, key=lambda path: path.stat().st_mtime_ns, default=None)
     if log_path is None:
-        return {"worker": worker_name, "path": None, "lines": [], "size_bytes": 0}
+        return {"worker": worker_name, "path": None, "lines": [], "size_bytes": 0, **identity}
     try:
         with log_path.open("r", errors="replace") as fh:
             tail = list(deque(fh, maxlen=lines))
@@ -150,6 +157,7 @@ def get_worker_logs(worker_name: str, lines: int = Query(default=200, ge=1, le=2
             "path": str(log_path),
             "lines": [line.rstrip("\n") for line in tail],
             "size_bytes": log_path.stat().st_size,
+            **identity,
         }
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
