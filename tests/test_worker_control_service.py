@@ -46,6 +46,9 @@ def test_legacy_frontend_worker_names_start_canonical_paper_workers(
 
     assert result == {
         "worker": canonical_name,
+        "requested_worker_id": legacy_name,
+        "canonical_worker_id": canonical_name,
+        "deprecated_alias": True,
         "process_state": "running",
         "pid": 4242,
         "action": "started",
@@ -72,7 +75,10 @@ def test_double_start_is_idempotent(tmp_path, monkeypatch):
     first = service.start("scheduler")
     second = service.start("scheduler")
     assert first["action"] == "started"
-    assert second == {"worker": "scheduler", "process_state": "running", "pid": 4242, "action": "noop"}
+    assert second == {
+        "worker": "scheduler", "process_state": "running", "pid": 4242, "action": "noop",
+        "requested_worker_id": "scheduler", "canonical_worker_id": "scheduler", "deprecated_alias": False,
+    }
     popen.assert_called_once()
 
 

@@ -19,13 +19,13 @@ export const WORKER_METADATA = [
 export const MANAGED_WORKERS = WORKER_METADATA.map(({ id }) => id)
 export const WORKER_BY_ID = Object.fromEntries(WORKER_METADATA.map((worker) => [worker.id, worker]))
 
-export const LEGACY_WORKER_IDS = {
-  executor: 'wyckoff_paper',
-  momentum_engine: 'momentum_paper',
+export const DEPRECATED_WORKER_ALIASES = {
+  executor: { canonicalId: 'wyckoff_paper', deprecated: true },
+  momentum_engine: { canonicalId: 'momentum_paper', deprecated: true },
 }
 
 export function canonicalWorkerId(id) {
-  return LEGACY_WORKER_IDS[id] || id
+  return DEPRECATED_WORKER_ALIASES[id]?.canonicalId || id
 }
 
 // Normalize status payloads during rolling deployments, where an older API may
@@ -35,7 +35,7 @@ export function normalizeWorkerStatuses(statuses) {
   const entries = Object.entries(statuses || {})
   const normalized = Object.fromEntries(entries.map(([id, info]) => [canonicalWorkerId(id), info]))
   for (const [id, info] of entries) {
-    if (!LEGACY_WORKER_IDS[id]) normalized[id] = info
+    if (!DEPRECATED_WORKER_ALIASES[id]) normalized[id] = info
   }
   return normalized
 }
@@ -57,6 +57,6 @@ export function isWorkerRunning(info) {
 }
 
 export function failedStartMessage(worker, error) {
-  const detail = error?.message || String(error)
-  return `${detail} Select the canonical "${worker.id}" log tab for startup diagnostics.`
+  const detail = (error?.message || String(error)).replaceAll(worker.id, worker.label)
+  return `${detail} Select the “${worker.label}” log tab for startup diagnostics.`
 }

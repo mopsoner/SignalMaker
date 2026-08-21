@@ -266,7 +266,7 @@ export default function LogsPage() {
         <div style={{ display: 'flex', gap: 4, marginBottom: -1, flexWrap: 'wrap' }}>
           {LOGS.map((w) => (
             <button key={w} style={tabStyle(activeLog === w)} onClick={() => setActiveLog(w)}>
-              {w === 'application' ? 'Application' : <>{dot(isWorkerRunning(workers[w]))}{w}</>}
+              {w === 'application' ? 'Application' : <>{dot(isWorkerRunning(workers[w]))}{WORKER_BY_ID[w].label}</>}
             </button>
           ))}
         </div>
