@@ -560,11 +560,15 @@ class MarketDataRepository:
         LEFT JOIN market_universes u ON u.id = a.universe_id
         WHERE r.id = (SELECT r2.id FROM market_analysis_results r2
           WHERE r2.asset_id=r.asset_id AND r2.engine_name=r.engine_name AND r2.timeframe=r.timeframe
-            AND (:selected_payload_version IS NULL OR r2.payload_version=:selected_payload_version)
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if payload_version is not None:
+            query += " AND r2.payload_version = :payload_version"
+            params["payload_version"] = payload_version
+        query += """
           ORDER BY r2.created_at DESC, r2.id DESC LIMIT 1)
           AND a.enabled = true
         """
-        params: dict[str, Any] = {"limit": limit, "selected_payload_version": payload_version}
         if engine_name:
             query += " AND r.engine_name = :engine_name"; params["engine_name"] = engine_name
         if universe_name:
@@ -572,7 +576,7 @@ class MarketDataRepository:
         if asset_type:
             query += " AND a.asset_type = :asset_type"; params["asset_type"] = asset_type
         if payload_version is not None:
-            query += " AND r.payload_version = :payload_version"; params["payload_version"] = payload_version
+            query += " AND r.payload_version = :payload_version"
         query = self._asset_filters(query, params, filters)
         query += " ORDER BY r.created_at DESC, a.priority ASC, a.symbol ASC LIMIT :limit"
         rows = [_row(r) for r in self.db.execute(text(query), params).all()]

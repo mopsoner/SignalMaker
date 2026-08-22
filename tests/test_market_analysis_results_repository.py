@@ -1,7 +1,9 @@
 import asyncio
 import json
+from unittest.mock import Mock
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from signalmaker.market_data.repository import MarketDataRepository
@@ -56,6 +58,66 @@ def test_legacy_rows_and_payload_version_filter_are_compatible():
     ))[0]
     assert row["schema_version"] == 1
     assert row["payload"] == {"schema_version": 1, "score": 4}
+
+
+def test_latest_result_across_versions_when_payload_version_is_omitted():
+    db, repository, asset_id = _repository()
+    db.execute(text("""
+        INSERT INTO market_analysis_results
+          (asset_id, engine_name, timeframe, signal, payload_version, payload, created_at)
+        VALUES
+          (:asset, 'momentum', '1d', 'BUY', 1, :version_one, '2026-01-01'),
+          (:asset, 'momentum', '1d', 'SELL', 2, :version_two, '2026-01-02')
+    """), {
+        "asset": asset_id,
+        "version_one": json.dumps({"score": 4}),
+        "version_two": json.dumps({"schema_version": 2, "score": 8}),
+    })
+    db.commit()
+
+    row = asyncio.run(repository.latest_analysis_results(engine_name="momentum"))[0]
+
+    assert row["signal"] == "SELL"
+    assert row["payload_version"] == 2
+
+
+def test_latest_result_for_explicit_payload_version():
+    db, repository, asset_id = _repository()
+    db.execute(text("""
+        INSERT INTO market_analysis_results
+          (asset_id, engine_name, timeframe, signal, payload_version, payload, created_at)
+        VALUES
+          (:asset, 'momentum', '1d', 'BUY', 1, :version_one, '2026-01-01'),
+          (:asset, 'momentum', '1d', 'SELL', 2, :version_two, '2026-01-02')
+    """), {
+        "asset": asset_id,
+        "version_one": json.dumps({"score": 4}),
+        "version_two": json.dumps({"schema_version": 2, "score": 8}),
+    })
+    db.commit()
+
+    row = asyncio.run(repository.latest_analysis_results(
+        engine_name="momentum", payload_version=1
+    ))[0]
+
+    assert row["signal"] == "BUY"
+    assert row["payload_version"] == 1
+
+
+def test_omitted_payload_version_has_no_postgresql_parameter():
+    result = Mock()
+    result.all.return_value = []
+    db = Mock()
+    db.execute.return_value = result
+    repository = MarketDataRepository(db)
+
+    assert asyncio.run(repository.latest_analysis_results(engine_name="momentum")) == []
+
+    statement, params = db.execute.call_args.args
+    compiled = statement.compile(dialect=postgresql.dialect())
+    assert "payload_version" not in str(compiled)
+    assert "payload_version" not in compiled.params
+    assert "payload_version" not in params
 
 
 def test_results_are_isolated_from_crypto_tables_and_other_universes():
