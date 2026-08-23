@@ -81,6 +81,21 @@ class TradeCandidateService:
         )
         return list(self.db.scalars(stmt).all())
 
+    def get_pending_candidates(self, *, execution_mode: str, limit: int = 100) -> list[TradeCandidate]:
+        """Return previously claimed work so exchange-pending orders can be reconciled."""
+        stmt = (
+            select(TradeCandidate)
+            .join(CandidateExecution, CandidateExecution.candidate_id == TradeCandidate.candidate_id)
+            .where(
+                CandidateExecution.execution_mode == execution_mode,
+                CandidateExecution.status == "claimed",
+                TradeCandidate.status == "open",
+            )
+            .order_by(CandidateExecution.claimed_at.asc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt).all())
+
     def finish_execution(self, candidate_id: str, *, execution_mode: str, error: str | None = None) -> None:
         self.db.execute(
             update(CandidateExecution)
@@ -94,6 +109,18 @@ class TradeCandidateService:
                 completed_at=datetime.now(timezone.utc),
                 error=error,
             )
+        )
+        self.db.commit()
+
+    def record_pending_error(self, candidate_id: str, *, execution_mode: str, error: str) -> None:
+        self.db.execute(
+            update(CandidateExecution)
+            .where(
+                CandidateExecution.candidate_id == candidate_id,
+                CandidateExecution.execution_mode == execution_mode,
+                CandidateExecution.status == "claimed",
+            )
+            .values(error=error)
         )
         self.db.commit()
 

@@ -37,10 +37,10 @@ class KrakenExecutionService:
         if not settings.kraken_dry_run and not self.client.is_configured():
             raise ExecutionConfigurationError("Kraken credentials are required for real execution")
 
-    def _record(self, result: dict, symbol: str, side: str, quantity: float, mode: str) -> dict:
+    def _record(self, result: dict, symbol: str, side: str, quantity: float, mode: str, order_type: str = "market") -> dict:
         order_id = str(result.get("order_id") or uuid4())
         if self.db.get(Order, order_id) is None:
-            self.db.add(Order(order_id=order_id, symbol=symbol.upper(), side=side, order_type="market", status=str(result.get("status", "pending")), quantity=quantity, meta={"exchange": "kraken", "execution_mode": mode, "dry_run": bool(result.get("dry_run")), "response": result}))
+            self.db.add(Order(order_id=order_id, symbol=symbol.upper(), side=side, order_type=order_type, status=str(result.get("status", "pending")), quantity=quantity, meta={"exchange": "kraken", "execution_mode": mode, "dry_run": bool(result.get("dry_run")), "response": result}))
             self.db.commit()
         return result
 
@@ -104,9 +104,19 @@ class KrakenExecutionService:
         self._guard(mode)
         return self.client.cancel_order(symbol, order_id)
 
-    def get_order(self, symbol: str, order_id: str) -> dict:
-        self._guard()
+    def get_order(self, symbol: str, order_id: str, *, mode: str = "spot") -> dict:
+        self._guard(mode)
         return self.client.get_order(symbol, order_id)
+
+    def place_take_profit(self, symbol: str, side: str, quantity: float, price: float, *, mode: str = "spot", leverage: int | None = None) -> dict:
+        self._guard(mode)
+        normalized = self.rules.normalize_market_quantity(symbol, quantity)
+        if mode == "margin":
+            lev, _ = self._margin_leverage(symbol, side, leverage)
+            result = self.margin.close_limit(symbol, side, normalized, price, lev)
+        else:
+            result = self.client.place_exit_limit(symbol, side, normalized, price)
+        return self._record(result, symbol, side, float(normalized), mode, "limit")
 
     def account_summary(self) -> dict:
         self._guard()
