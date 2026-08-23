@@ -26,3 +26,7 @@ class CandidateExecution(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    entry_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_order_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    take_profit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    take_profit_order_status: Mapped[str | None] = mapped_column(String(32), nullable=True)

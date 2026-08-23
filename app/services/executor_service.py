@@ -1,5 +1,6 @@
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -11,6 +12,8 @@ from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
 from app.services.execution.kraken_execution_service import KrakenExecutionService
 from app.services.execution.live_configuration import assert_wyckoff_live_configuration
+from app.models.candidate_execution import CandidateExecution
+from app.models.order import Order
 
 ExecutionMode = Literal["paper", "live"]
 
@@ -252,7 +255,16 @@ class ExecutorService:
 
         mode = settings.wyckoff_live_mode.lower()
         execution = KrakenExecutionService(self.db)
-        if self._is_short_side(candidate.side):
+        state = self.db.scalar(
+            select(CandidateExecution).where(
+                CandidateExecution.candidate_id == candidate.candidate_id,
+                CandidateExecution.execution_mode == "live",
+            )
+        )
+        exchange_order = None
+        if state is not None and state.entry_order_id:
+            entry_order_id = state.entry_order_id
+        elif self._is_short_side(candidate.side):
             if mode == "spot":
                 raise ValueError("bearish Wyckoff candidates require margin mode")
             exchange_order = execution.sell_market(
@@ -269,11 +281,90 @@ class ExecutorService:
                 quote_amount=min(requested_notional, max_notional),
                 mode=mode,
             )
+        if exchange_order is not None:
+            entry_order_id = str(exchange_order["order_id"])
+            if state is not None:
+                state.entry_order_id = entry_order_id
+                state.entry_order_status = str(exchange_order.get("status") or "pending")
+                self.db.commit()
+
+        entry = execution.get_order(candidate.symbol, entry_order_id, mode=mode)
+        entry_status = str(entry.get("status") or "unknown").lower()
+        executed_quantity = float(entry.get("executed_quantity") or 0)
+        average_price = float(entry.get("average_price") or 0)
+        persisted_entry = self.db.get(Order, entry_order_id)
+        if persisted_entry is not None:
+            persisted_entry.status = entry_status
+            persisted_entry.filled_price = average_price or None
+            persisted_entry.quantity = executed_quantity or persisted_entry.quantity
+        if state is not None:
+            state.entry_order_status = entry_status
+        self.db.commit()
+        if entry_status != "filled":
+            return {
+                "candidate_id": candidate.candidate_id,
+                "mode": "live",
+                "exchange": "kraken",
+                "exchange_order": exchange_order or entry,
+                "entry_order_id": entry_order_id,
+                "entry_order_status": entry_status,
+                "executed_quantity": executed_quantity,
+                "protection_installed": False,
+                "pending": True,
+                "target_price": target_plan.get("target_price"),
+                "stop_price": candidate.stop_price,
+            }
+        if executed_quantity <= 0 or average_price <= 0:
+            raise RuntimeError("Kraken reported a filled entry without executed quantity and average price")
+
+        exit_side = "buy" if self._is_short_side(candidate.side) else "sell"
+        leverage = (exchange_order or entry).get("effective_leverage") or entry.get("leverage")
+        if state is not None and state.take_profit_order_id:
+            take_profit = {"order_id": state.take_profit_order_id, "status": state.take_profit_order_status}
+        else:
+            take_profit = execution.place_take_profit(
+                candidate.symbol, exit_side, executed_quantity, float(target_plan["target_price"]),
+                mode=mode, leverage=leverage,
+            )
+            if state is not None:
+                state.take_profit_order_id = str(take_profit["order_id"])
+                state.take_profit_order_status = str(take_profit.get("status") or "pending")
+                self.db.commit()
+        position = self.positions.create_position(
+            symbol=candidate.symbol,
+            side=candidate.side,
+            quantity=executed_quantity,
+            entry_price=average_price,
+            mark_price=average_price,
+            stop_price=candidate.stop_price,
+            target_price=target_plan["target_price"],
+            meta={"candidate_id": candidate.candidate_id, "execution_mode": "live", **target_plan},
+        )
+        position.entry_order_id = entry_order_id
+        position.entry_order_status = entry_status
+        position.take_profit_order_id = str(take_profit["order_id"])
+        position.take_profit_order_status = str(take_profit.get("status") or "pending")
+        for order_id in (entry_order_id, position.take_profit_order_id):
+            row = self.db.get(Order, order_id)
+            if row is not None:
+                row.candidate_id = candidate.candidate_id
+                row.position_id = position.position_id
+        if state is not None:
+            state.take_profit_order_id = position.take_profit_order_id
+            state.take_profit_order_status = position.take_profit_order_status
+        self.db.commit()
         return {
             "candidate_id": candidate.candidate_id,
             "mode": "live",
             "exchange": "kraken",
             "exchange_order": exchange_order,
+            "entry_order_id": entry_order_id,
+            "take_profit_order_id": position.take_profit_order_id,
+            "position_id": position.position_id,
+            "executed_quantity": executed_quantity,
+            "average_price": average_price,
+            "protection_installed": True,
+            "pending": False,
             "target_price": target_plan.get("target_price"),
             "stop_price": candidate.stop_price,
         }
@@ -289,7 +380,15 @@ class ExecutorService:
         if requested_mode == "live":
             # Validate before claiming candidates or constructing a Kraken client.
             assert_wyckoff_live_configuration(settings)
-        for candidate in self.candidates.claim_open_candidates(execution_mode=requested_mode, limit=limit):
+        candidates = []
+        if requested_mode == "live":
+            candidates = self.candidates.get_pending_candidates(execution_mode=requested_mode, limit=limit)
+        remaining = max(0, limit - len(candidates))
+        if remaining:
+            candidates.extend(
+                self.candidates.claim_open_candidates(execution_mode=requested_mode, limit=remaining)
+            )
+        for candidate in candidates:
             if candidate.entry_price is None:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
                 self.candidates.release_claim(candidate.candidate_id, execution_mode=requested_mode)
@@ -312,12 +411,18 @@ class ExecutorService:
                     result = self._execute_live_candidate(candidate, quantity)
                 else:
                     result = self._execute_paper_candidate(candidate, quantity)
-                self.candidates.finish_execution(candidate.candidate_id, execution_mode=requested_mode)
+                if requested_mode != "live" or result.get("protection_installed"):
+                    self.candidates.finish_execution(candidate.candidate_id, execution_mode=requested_mode)
                 executed.append(result)
             except Exception as exc:
-                self.candidates.finish_execution(
-                    candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
-                )
+                if requested_mode == "live":
+                    self.candidates.record_pending_error(
+                        candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
+                    )
+                else:
+                    self.candidates.finish_execution(
+                        candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
+                    )
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
 

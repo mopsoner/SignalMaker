@@ -232,17 +232,21 @@ class KrakenClient:
             "raw_result": result,
         }
 
-    def place_exit_limit(self, symbol: str, side: str, quantity: float | str, price: float | str) -> dict[str, Any]:
-        return self._place_price_order(symbol, side, quantity, "limit", price)
+    def place_exit_limit(self, symbol: str, side: str, quantity: float | str, price: float | str, *, leverage: int | None = None, reduce_only: bool = False) -> dict[str, Any]:
+        return self._place_price_order(symbol, side, quantity, "limit", price, leverage=leverage, reduce_only=reduce_only)
 
     def place_stop_loss(self, symbol: str, side: str, quantity: float | str, stop_price: float | str) -> dict[str, Any]:
         return self._place_price_order(symbol, side, quantity, "stop-loss", stop_price)
 
-    def _place_price_order(self, symbol: str, side: str, quantity: float | str, ordertype: str, price: float | str) -> dict[str, Any]:
+    def _place_price_order(self, symbol: str, side: str, quantity: float | str, ordertype: str, price: float | str, *, leverage: int | None = None, reduce_only: bool = False) -> dict[str, Any]:
         side = side.strip().lower()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be buy or sell")
         payload = {"pair": self.pair_info(symbol)["pair_key"], "type": side, "ordertype": ordertype, "volume": str(quantity), "price": str(price)}
+        if leverage is not None:
+            payload["leverage"] = str(leverage)
+        if reduce_only:
+            payload["reduce_only"] = "true"
         if self.dry_run:
             return {"order_id": f"dry-{uuid.uuid4()}", "status": "simulated", "dry_run": True, "payload": payload}
         result = self._signed("POST", "/0/private/AddOrder", payload)
@@ -254,7 +258,7 @@ class KrakenClient:
         rows = self._signed("POST", "/0/private/QueryOrders", {"txid": order_id, "trades": True})
         row = rows.get(order_id, {})
         status = str(row.get("status") or "unknown").lower()
-        return {"order_id": order_id, "status": "filled" if status == "closed" else status, "symbol": symbol.upper(), "side": row.get("type"), "requested_quantity": str(row.get("vol") or 0), "executed_quantity": str(row.get("vol_exec") or 0), "average_price": float(row.get("price") or 0), "dry_run": False, "raw_result": row}
+        return {"order_id": order_id, "status": "filled" if status == "closed" else status, "symbol": symbol.upper(), "side": row.get("type"), "requested_quantity": str(row.get("vol") or 0), "executed_quantity": str(row.get("vol_exec") or 0), "average_price": float(row.get("price") or 0), "leverage": int(row.get("leverage") or 1), "dry_run": False, "raw_result": row}
 
     def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         if self.dry_run:

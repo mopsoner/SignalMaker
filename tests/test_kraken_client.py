@@ -115,3 +115,30 @@ def test_validate_market_entry_uses_kraken_validate_flag_even_in_dry_run():
     )
     assert result["status"] == "validated"
     assert result["submitted"] is False
+
+
+def test_margin_exit_limit_uses_leverage_and_reduce_only():
+    client = KrakenClient(dry_run=True)
+    client.pair_info = Mock(return_value={"pair_key": "XXBTZUSD"})
+
+    result = client.place_exit_limit("BTCUSD", "sell", "0.25", "120", leverage=3, reduce_only=True)
+
+    assert result["payload"] == {
+        "pair": "XXBTZUSD", "type": "sell", "ordertype": "limit",
+        "volume": "0.25", "price": "120", "leverage": "3", "reduce_only": "true",
+    }
+
+
+def test_query_order_exposes_real_fill_quantity_average_and_leverage():
+    client = KrakenClient(api_key="key", secret_key=base64.b64encode(b"secret").decode())
+    client._signed = Mock(return_value={"entry-1": {
+        "status": "closed", "type": "buy", "vol": "3", "vol_exec": "1.75",
+        "price": "101.25", "leverage": "2",
+    }})
+
+    result = client.get_order("BTCUSD", "entry-1")
+
+    assert result["status"] == "filled"
+    assert result["executed_quantity"] == "1.75"
+    assert result["average_price"] == 101.25
+    assert result["leverage"] == 2

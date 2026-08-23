@@ -21,6 +21,10 @@ class KrakenMarginClient:
     def get_margin_order(self, symbol: str, order_id: str) -> dict[str, Any]:
         return self.client.get_order(symbol, order_id)
 
+    def close_limit(self, symbol: str, side: str, quantity: float | str, price: float | str, leverage: int) -> dict[str, Any]:
+        self.rules.validate_leverage(symbol, side, leverage)
+        return self.client.place_exit_limit(symbol, side, quantity, price, leverage=leverage, reduce_only=True)
+
     def open_positions(self) -> dict[str, Any]:
         return self.client.open_margin_positions()
 
