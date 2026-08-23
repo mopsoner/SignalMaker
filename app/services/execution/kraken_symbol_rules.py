@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any
 
 from .kraken_client import KrakenClient
@@ -43,6 +43,23 @@ class KrakenSymbolRules:
         quantity = self.normalize_market_quantity(symbol, Decimal(str(quote_amount)) / Decimal(str(current_price)))
         self.ensure_notional(symbol, quantity, current_price)
         return quantity
+
+    def quantity_for_total_notional(
+        self, symbol: str, total_notional: float, current_price: float, minimum_total_notional: float
+    ) -> str:
+        """Normalize a quantity without allowing floor rounding below the live minimum."""
+        info = self.symbol_info(symbol)
+        decimals = int(info.get("lot_decimals", 8))
+        price = Decimal(str(current_price))
+        minimum = Decimal(str(minimum_total_notional))
+        raw = Decimal(str(total_notional)) / price
+        quantity = Decimal(self._floor(raw, decimals))
+        if quantity * price < minimum:
+            step = Decimal(1).scaleb(-max(decimals, 0))
+            quantity = (minimum / price).quantize(step, rounding=ROUND_UP)
+        normalized = format(quantity, "f")
+        self.ensure_notional(symbol, normalized, price)
+        return normalized
 
     def ensure_notional(self, symbol: str, quantity: float | str, price: float | str) -> None:
         info = self.symbol_info(symbol)

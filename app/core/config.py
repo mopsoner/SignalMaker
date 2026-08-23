@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     def validate_entry_rsi_timeframe(cls, v: str) -> str:
         value = str(v or "1h").strip().lower()
         return value if value in {"1h", "4h"} else "1h"
+
+    @model_validator(mode="after")
+    def validate_live_notional_range(self) -> "Settings":
+        if self.live_min_total_notional_per_trade <= 0:
+            raise ValueError("LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE must be strictly positive")
+        if self.live_min_total_notional_per_trade > self.live_max_notional_per_trade:
+            raise ValueError(
+                "LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE must be less than or equal to "
+                "LIVE_MAX_NOTIONAL_PER_TRADE"
+            )
+        return self
 
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
@@ -67,6 +78,7 @@ class Settings(BaseSettings):
 
     live_spot_allow_shorts: bool = Field(default=False, alias="LIVE_SPOT_ALLOW_SHORTS")
     live_max_open_positions: int = Field(default=3, alias="LIVE_MAX_OPEN_POSITIONS")
+    live_min_total_notional_per_trade: float = Field(default=150.0, alias="LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE")
     live_max_notional_per_trade: float = Field(default=250.0, alias="LIVE_MAX_NOTIONAL_PER_TRADE")
     live_require_tp_sl: bool = Field(default=True, alias="LIVE_REQUIRE_TP_SL")
     live_reconcile_enabled: bool = Field(default=True, alias="LIVE_RECONCILE_ENABLED")

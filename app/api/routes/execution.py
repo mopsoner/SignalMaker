@@ -14,7 +14,7 @@ router = APIRouter(dependencies=[Depends(require_operator)])
 
 class BuyRequest(BaseModel):
     symbol: str
-    quote_amount: float | None = Field(default=None, gt=0)
+    total_notional: float | None = Field(default=None, gt=0)
     mode: Literal["spot", "margin"] = "spot"
     leverage: int | None = Field(default=None, ge=2)
 
@@ -46,7 +46,7 @@ def _call(operation):
 
 @router.post("/execution/kraken/buy")
 def buy(request: BuyRequest, db: Session = Depends(get_db)):
-    return _call(lambda: KrakenExecutionService(db).buy_market(request.symbol, request.quote_amount, mode=request.mode, leverage=request.leverage))
+    return _call(lambda: KrakenExecutionService(db).buy_market(request.symbol, request.total_notional, mode=request.mode, leverage=request.leverage))
 
 
 @router.post("/execution/kraken/sell")

@@ -19,8 +19,8 @@ class FakeKrakenExecution:
     def __init__(self, _db):
         pass
 
-    def buy_market(self, symbol, quote_amount, *, mode):
-        self.calls.append(("buy", symbol, quote_amount, mode))
+    def buy_market(self, symbol, total_notional, *, mode):
+        self.calls.append(("buy", symbol, total_notional, mode))
         return {"status": "filled", "order_id": "kraken-1"}
 
     def sell_market(self, symbol, quantity, *, mode, intent):
@@ -55,7 +55,7 @@ def _live_service(monkeypatch, tmp_path, side="bull"):
     monkeypatch.setattr(
         module,
         "load_runtime_settings",
-        lambda _db: {"live": {"live_require_tp_sl": True, "live_max_notional_per_trade": 250}},
+        lambda _db: {"live": {"live_require_tp_sl": True, "live_min_total_notional_per_trade": 150, "live_max_notional_per_trade": 250}},
     )
     engine = create_engine(f"sqlite:///{tmp_path / (side + '.db')}")
     Base.metadata.create_all(engine)
@@ -80,6 +80,16 @@ def test_live_bull_candidate_waits_for_fill_then_persists_protection(monkeypatch
     assert (position.entry_order_id, position.take_profit_order_id) == ("kraken-1", "kraken-tp")
     state = db.scalar(select(CandidateExecution))
     assert (state.entry_order_id, state.take_profit_order_id) == ("kraken-1", "kraken-tp")
+    assert ("buy", "BTCUSD", 250.0, "spot") in FakeKrakenExecution.calls
+
+
+def test_low_price_candidate_uses_minimum_total_notional(monkeypatch, tmp_path):
+    service, candidate, _db = _live_service(monkeypatch, tmp_path)
+    candidate.entry_price = 0.01
+
+    service._execute_live_candidate(candidate, quantity=3)
+
+    assert ("buy", "BTCUSD", 150.0, "spot") in FakeKrakenExecution.calls
 
 
 def test_partial_fill_stays_pending_without_exit_orders(monkeypatch, tmp_path):
