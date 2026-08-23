@@ -54,26 +54,33 @@ class KrakenExecutionService:
             raise ValueError("requested leverage exceeds configured maximum")
         return self.rules.validate_leverage(symbol, side, effective), supported
 
-    def buy_market(self, symbol: str, quote_amount: float | None = None, *, mode: str = "spot", leverage: int | None = None) -> dict:
+    def buy_market(self, symbol: str, total_notional: float | None = None, *, mode: str = "spot", leverage: int | None = None) -> dict:
         self._guard(mode)
-        desired = float(quote_amount or settings.kraken_order_quote_amount)
-        if desired < settings.kraken_min_buy_notional:
-            raise ValueError("buy notional is below configured minimum")
+        desired_total = float(total_notional or settings.kraken_order_quote_amount)
+        minimum_total = float(settings.live_min_total_notional_per_trade)
+        if desired_total < minimum_total:
+            raise ValueError(f"requested total notional {desired_total:.2f} is below required minimum {minimum_total:.2f}")
         price = self.client.current_price(symbol)
-        own_quote = desired
-        if not settings.kraken_dry_run:
-            free = self.client.free_balance(self.rules.quote_asset(symbol))
-            own_quote = min(desired, max(0.0, (free - settings.kraken_quote_reserve) * settings.kraken_buy_balance_ratio))
-        if own_quote < settings.kraken_min_buy_notional:
-            raise ValueError("insufficient usable quote balance")
         effective_leverage = 1
         supported_leverages: tuple[int, ...] = ()
         if mode == "margin":
             effective_leverage, supported_leverages = self._margin_leverage(symbol, "buy", leverage)
-        total = own_quote * effective_leverage
-        quantity = self.rules.quantity_from_quote(symbol, total, price)
+        quantity = self.rules.quantity_for_total_notional(symbol, desired_total, price, minimum_total)
+        normalized_total = float(quantity) * price
+        normalized_own_quote = normalized_total / effective_leverage
+        usable_balance = normalized_own_quote
+        if not settings.kraken_dry_run:
+            free = self.client.free_balance(self.rules.quote_asset(symbol))
+            usable_balance = max(0.0, (free - settings.kraken_quote_reserve) * settings.kraken_buy_balance_ratio)
+            possible_total = usable_balance * effective_leverage
+            if usable_balance < normalized_own_quote:
+                raise ValueError(
+                    f"insufficient balance for required minimum total notional {minimum_total:.2f}; "
+                    f"possible total notional {possible_total:.2f}, effective leverage {effective_leverage}, "
+                    f"usable quote balance {usable_balance:.2f}"
+                )
         result = self.client.place_market_entry(symbol, "buy", quantity) if mode == "spot" else self.margin.margin_order(symbol, "buy", quantity, effective_leverage)
-        result.update({"mode": mode, "own_quote_amount": own_quote, "borrowed_notional": total - own_quote, "total_notional": total, "price": price})
+        result.update({"mode": mode, "own_quote_amount": normalized_own_quote, "borrowed_notional": normalized_total - normalized_own_quote, "total_notional": normalized_total, "price": price})
         if mode == "margin":
             result.update({"configured_max_leverage": settings.kraken_margin_max_leverage, "supported_leverages": list(supported_leverages), "effective_leverage": effective_leverage})
         return self._record(result, symbol, "buy", float(quantity), mode)

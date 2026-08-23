@@ -147,6 +147,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "live": {
         "live_spot_allow_shorts": base_settings.live_spot_allow_shorts,
         "live_max_open_positions": base_settings.live_max_open_positions,
+        "live_min_total_notional_per_trade": base_settings.live_min_total_notional_per_trade,
         "live_max_notional_per_trade": base_settings.live_max_notional_per_trade,
         "live_require_tp_sl": base_settings.live_require_tp_sl,
         "live_reconcile_enabled": base_settings.live_reconcile_enabled,
@@ -235,6 +236,21 @@ def validate_stock_etf_settings(config: dict[str, Any]) -> None:
         raise ValueError("; ".join(errors))
 
 
+def validate_live_settings(config: dict[str, Any]) -> None:
+    try:
+        minimum = float(config.get("live_min_total_notional_per_trade"))
+        maximum = float(config.get("live_max_notional_per_trade"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("live trade notional limits must be numeric") from exc
+    if minimum <= 0:
+        raise ValueError("live_min_total_notional_per_trade must be strictly positive")
+    if minimum > maximum:
+        raise ValueError(
+            "live_min_total_notional_per_trade must be less than or equal to "
+            "live_max_notional_per_trade"
+        )
+
+
 def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]]:
     owns_session = db is None
     if db is None:
@@ -273,6 +289,7 @@ def load_runtime_settings(db: Session | None = None) -> dict[str, dict[str, Any]
             default=True,
         )
         momentum[MOMENTUM_CADENCE_KEY] = _momentum_cadence(momentum.get(MOMENTUM_CADENCE_KEY))
+        validate_live_settings(payload["live"])
         return payload
     finally:
         if owns_session:
@@ -339,6 +356,12 @@ def persist_runtime_settings(db: Session, payload: dict[str, dict[str, Any]]) ->
         validate_stock_etf_settings(merged_stock_etf)
         # Validate the effective configuration, but persist only fields supplied
         # by the caller below.
+
+    live = payload.get("live")
+    if isinstance(live, dict):
+        merged_live = deepcopy(load_runtime_settings(db)["live"])
+        merged_live.update(live)
+        validate_live_settings(merged_live)
 
     for category, values in payload.items():
         if not isinstance(values, dict):

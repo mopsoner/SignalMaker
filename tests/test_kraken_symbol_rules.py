@@ -50,3 +50,12 @@ def test_explicit_unsupported_leverage_is_rejected():
 
     with pytest.raises(ValueError, match="leverage 4 is not supported"):
         rules.validate_leverage("BTCUSD", "buy", 4)
+
+
+def test_quantity_rounding_up_never_drops_below_total_notional_minimum():
+    rules = rules_with(lot_decimals=2, ordermin="0.01", costmin="5")
+
+    quantity = rules.quantity_for_total_notional("BTCUSD", 150, 7, 150)
+
+    assert quantity == "21.43"
+    assert float(quantity) * 7 >= 150

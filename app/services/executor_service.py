@@ -274,11 +274,15 @@ class ExecutorService:
                 intent="open_short",
             )
         else:
-            requested_notional = float(candidate.entry_price) * quantity
-            max_notional = float(live.get("live_max_notional_per_trade", requested_notional))
+            raw_notional = float(candidate.entry_price) * quantity
+            min_notional = float(live["live_min_total_notional_per_trade"])
+            max_notional = float(live["live_max_notional_per_trade"])
+            if min_notional <= 0 or min_notional > max_notional:
+                raise ValueError("invalid live total notional range")
+            requested_notional = min(max(raw_notional, min_notional), max_notional)
             exchange_order = execution.buy_market(
                 candidate.symbol,
-                quote_amount=min(requested_notional, max_notional),
+                total_notional=requested_notional,
                 mode=mode,
             )
         if exchange_order is not None:
