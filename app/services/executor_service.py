@@ -10,7 +10,11 @@ from app.services.order_service import OrderService
 from app.services.position_service import PositionService
 from app.services.runtime_settings import load_runtime_settings
 from app.services.trade_candidate_service import TradeCandidateService
-from app.services.execution.kraken_execution_service import KrakenExecutionService
+from app.services.execution.kraken_execution_service import (
+    CorrectableExecutionError,
+    KrakenExecutionService,
+)
+from app.services.execution.kraken_symbol_rules import KrakenRuleError
 from app.services.execution.live_configuration import assert_wyckoff_live_configuration
 from app.models.candidate_execution import CandidateExecution
 from app.models.order import Order
@@ -287,10 +291,10 @@ class ExecutorService:
             )
         if exchange_order is not None:
             entry_order_id = str(exchange_order["order_id"])
-            if state is not None:
-                state.entry_order_id = entry_order_id
-                state.entry_order_status = str(exchange_order.get("status") or "pending")
-                self.db.commit()
+            self.candidates.mark_submitted(
+                candidate.candidate_id, execution_mode="live", order_id=entry_order_id,
+                status=str(exchange_order.get("status") or "pending"),
+            )
 
         entry = execution.get_order(candidate.symbol, entry_order_id, mode=mode)
         entry_status = str(entry.get("status") or "unknown").lower()
@@ -334,6 +338,11 @@ class ExecutorService:
                 state.take_profit_order_id = str(take_profit["order_id"])
                 state.take_profit_order_status = str(take_profit.get("status") or "pending")
                 self.db.commit()
+            self.candidates.mark_protected(
+                candidate.candidate_id, execution_mode="live",
+                order_id=str(take_profit["order_id"]),
+                status=str(take_profit.get("status") or "pending"),
+            )
         position = self.positions.create_position(
             symbol=candidate.symbol,
             side=candidate.side,
@@ -418,15 +427,18 @@ class ExecutorService:
                 if requested_mode != "live" or result.get("protection_installed"):
                     self.candidates.finish_execution(candidate.candidate_id, execution_mode=requested_mode)
                 executed.append(result)
+            except (CorrectableExecutionError, KrakenRuleError) as exc:
+                self.candidates.retry_execution(
+                    candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
+                )
+                skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc), 'retryable': True})
             except Exception as exc:
-                if requested_mode == "live":
-                    self.candidates.record_pending_error(
-                        candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
-                    )
-                else:
-                    self.candidates.finish_execution(
-                        candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
-                    )
+                # Unclassified failures are terminal. If submission already
+                # happened, the retained order id makes manual reconciliation
+                # possible and the failed state prevents a duplicate entry.
+                self.candidates.finish_execution(
+                    candidate.candidate_id, execution_mode=requested_mode, error=str(exc)
+                )
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': str(exc)})
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
 

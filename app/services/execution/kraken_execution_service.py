@@ -20,6 +20,18 @@ class ExecutionConfigurationError(RuntimeError):
     pass
 
 
+class CorrectableExecutionError(ValueError):
+    """A pre-submission rejection which can become valid on a later attempt."""
+
+
+class InsufficientNotionalError(CorrectableExecutionError):
+    pass
+
+
+class InsufficientBalanceError(CorrectableExecutionError):
+    pass
+
+
 class KrakenExecutionService:
     def __init__(self, db: Session, *, client: KrakenClient | None = None, rules: KrakenSymbolRules | None = None) -> None:
         self.db = db
@@ -63,7 +75,7 @@ class KrakenExecutionService:
         )
         minimum_total = float(settings.live_min_total_notional_per_trade)
         if desired_total < minimum_total:
-            raise ValueError(f"requested total notional {desired_total:.2f} is below required minimum {minimum_total:.2f}")
+            raise InsufficientNotionalError(f"requested total notional {desired_total:.2f} is below required minimum {minimum_total:.2f}")
         price = self.client.current_price(symbol)
         effective_leverage = 1
         supported_leverages: tuple[int, ...] = ()
@@ -78,7 +90,7 @@ class KrakenExecutionService:
             usable_balance = max(0.0, (free - settings.kraken_quote_reserve) * settings.kraken_buy_balance_ratio)
             possible_total = usable_balance * effective_leverage
             if usable_balance < normalized_own_quote:
-                raise ValueError(
+                raise InsufficientBalanceError(
                     f"insufficient balance for required minimum total notional {minimum_total:.2f}; "
                     f"possible total notional {possible_total:.2f}, effective leverage {effective_leverage}, "
                     f"usable quote balance {usable_balance:.2f}"

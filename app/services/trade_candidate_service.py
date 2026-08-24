@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -50,11 +50,23 @@ class TradeCandidateService:
         mode = execution_mode.lower()
         if mode not in {"paper", "live"}:
             raise ValueError("execution mode must be paper or live")
+        now = datetime.now(timezone.utc)
+        retry_ids = list(self.db.scalars(
+            update(CandidateExecution)
+            .where(
+                CandidateExecution.execution_mode == mode,
+                CandidateExecution.status == "retryable",
+                CandidateExecution.next_attempt_at <= now,
+            )
+            .values(status="claimed", claimed_at=now, next_attempt_at=None, error=None)
+            .execution_options(synchronize_session=False)
+            .returning(CandidateExecution.candidate_id)
+        ).all())[:limit]
         candidate_ids = (
             select(TradeCandidate.candidate_id)
             .where(TradeCandidate.status == "open")
             .order_by(TradeCandidate.created_at.asc(), TradeCandidate.score.desc())
-            .limit(limit)
+            .limit(max(0, limit - len(retry_ids)))
         )
         values = select(
             TradeCandidate.candidate_id + "-" + mode,
@@ -64,7 +76,7 @@ class TradeCandidateService:
             # Literals are supplied by INSERT defaults only for single-row inserts.
             literal(mode),
             literal("claimed"),
-            literal(datetime.now(timezone.utc)),
+            literal(now),
         )
         columns = ["execution_id", "candidate_id", "execution_mode", "status", "claimed_at"]
         dialect = self.db.get_bind().dialect.name
@@ -72,7 +84,9 @@ class TradeCandidateService:
         statement = insert.from_select(columns, values).on_conflict_do_nothing(
             index_elements=["candidate_id", "execution_mode"]
         ).returning(CandidateExecution.candidate_id)
-        claimed_ids = list(self.db.scalars(statement).all())
+        claimed_ids = retry_ids
+        if len(claimed_ids) < limit:
+            claimed_ids.extend(list(self.db.scalars(statement).all()))
         self.db.commit()
         if not claimed_ids:
             return []
@@ -88,7 +102,7 @@ class TradeCandidateService:
             .join(CandidateExecution, CandidateExecution.candidate_id == TradeCandidate.candidate_id)
             .where(
                 CandidateExecution.execution_mode == execution_mode,
-                CandidateExecution.status == "claimed",
+                CandidateExecution.status.in_(("claimed", "submitted", "protected")),
                 TradeCandidate.status == "open",
             )
             .order_by(CandidateExecution.claimed_at.asc())
@@ -102,10 +116,10 @@ class TradeCandidateService:
             .where(
                 CandidateExecution.candidate_id == candidate_id,
                 CandidateExecution.execution_mode == execution_mode,
-                CandidateExecution.status == "claimed",
+                CandidateExecution.status.in_(("claimed", "submitted", "protected")),
             )
             .values(
-                status="failed" if error else "executed",
+                status="failed" if error else "completed",
                 completed_at=datetime.now(timezone.utc),
                 error=error,
             )
@@ -121,6 +135,40 @@ class TradeCandidateService:
                 CandidateExecution.status == "claimed",
             )
             .values(error=error)
+        )
+        self.db.commit()
+
+    def mark_submitted(self, candidate_id: str, *, execution_mode: str, order_id: str, status: str) -> None:
+        self.db.execute(
+            update(CandidateExecution)
+            .where(CandidateExecution.candidate_id == candidate_id,
+                   CandidateExecution.execution_mode == execution_mode,
+                   CandidateExecution.status == "claimed")
+            .values(status="submitted", entry_order_id=order_id, entry_order_status=status,
+                    submitted_at=datetime.now(timezone.utc), error=None)
+        )
+        self.db.commit()
+
+    def mark_protected(self, candidate_id: str, *, execution_mode: str, order_id: str, status: str) -> None:
+        self.db.execute(
+            update(CandidateExecution)
+            .where(CandidateExecution.candidate_id == candidate_id,
+                   CandidateExecution.execution_mode == execution_mode,
+                   CandidateExecution.status == "submitted")
+            .values(status="protected", take_profit_order_id=order_id,
+                    take_profit_order_status=status, error=None)
+        )
+        self.db.commit()
+
+    def retry_execution(self, candidate_id: str, *, execution_mode: str, error: str,
+                        delay_seconds: int = 0) -> None:
+        self.db.execute(
+            update(CandidateExecution)
+            .where(CandidateExecution.candidate_id == candidate_id,
+                   CandidateExecution.execution_mode == execution_mode,
+                   CandidateExecution.status == "claimed")
+            .values(status="retryable", error=error,
+                    next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=delay_seconds))
         )
         self.db.commit()
 
