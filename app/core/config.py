@@ -1,3 +1,4 @@
+import warnings
 from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
@@ -38,6 +39,40 @@ class Settings(BaseSettings):
                 "LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE must be less than or equal to "
                 "LIVE_MAX_NOTIONAL_PER_TRADE"
             )
+        if self.kraken_default_total_notional is None:
+            if self.legacy_kraken_order_quote_amount is not None:
+                warnings.warn(
+                    "KRAKEN_ORDER_QUOTE_AMOUNT is deprecated; rename it to "
+                    "KRAKEN_DEFAULT_TOTAL_NOTIONAL.",
+                    FutureWarning,
+                    stacklevel=2,
+                )
+                self.kraken_default_total_notional = self.legacy_kraken_order_quote_amount
+            else:
+                self.kraken_default_total_notional = 150.0
+        elif self.legacy_kraken_order_quote_amount is not None:
+            warnings.warn(
+                "KRAKEN_ORDER_QUOTE_AMOUNT is deprecated and ignored because "
+                "KRAKEN_DEFAULT_TOTAL_NOTIONAL is set.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if self.legacy_kraken_min_buy_notional is not None:
+            warnings.warn(
+                "KRAKEN_MIN_BUY_NOTIONAL is deprecated and ignored; "
+                "LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE is the execution minimum.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if not (
+            self.live_min_total_notional_per_trade
+            <= self.kraken_default_total_notional
+            <= self.live_max_notional_per_trade
+        ):
+            raise ValueError(
+                "KRAKEN_DEFAULT_TOTAL_NOTIONAL must be between "
+                "LIVE_MIN_TOTAL_NOTIONAL_PER_TRADE and LIVE_MAX_NOTIONAL_PER_TRADE"
+            )
         return self
 
     app_name: str = Field(default="SignalMaker", alias="APP_NAME")
@@ -56,9 +91,10 @@ class Settings(BaseSettings):
     kraken_base_url: str = Field(default="https://api.kraken.com", alias="KRAKEN_BASE_URL")
     kraken_api_key: str = Field(default="", alias="KRAKEN_API_KEY")
     kraken_secret_key: str = Field(default="", alias="KRAKEN_SECRET_KEY")
-    kraken_order_quote_amount: float = Field(default=50.0, alias="KRAKEN_ORDER_QUOTE_AMOUNT")
+    kraken_default_total_notional: float | None = Field(default=None, alias="KRAKEN_DEFAULT_TOTAL_NOTIONAL")
+    legacy_kraken_order_quote_amount: float | None = Field(default=None, alias="KRAKEN_ORDER_QUOTE_AMOUNT", exclude=True)
     kraken_quote_assets: str = Field(default="USD", alias="KRAKEN_QUOTE_ASSETS")
-    kraken_min_buy_notional: float = Field(default=5.0, alias="KRAKEN_MIN_BUY_NOTIONAL")
+    legacy_kraken_min_buy_notional: float | None = Field(default=None, alias="KRAKEN_MIN_BUY_NOTIONAL", exclude=True)
     kraken_quote_reserve: float = Field(default=1.0, alias="KRAKEN_QUOTE_RESERVE")
     kraken_buy_balance_ratio: float = Field(default=0.995, alias="KRAKEN_BUY_BALANCE_RATIO")
     kraken_margin_execution_enabled: bool = Field(default=False, alias="KRAKEN_MARGIN_EXECUTION_ENABLED")

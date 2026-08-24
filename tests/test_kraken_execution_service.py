@@ -13,7 +13,7 @@ def _service(monkeypatch, *, dry_run=True, free_balance=1_000):
         kraken_base_url="", kraken_api_key="", kraken_secret_key="", kraken_dry_run=dry_run,
         kraken_quote_assets="USD", kraken_execution_enabled=True,
         kraken_margin_execution_enabled=True, kraken_margin_max_leverage=10,
-        kraken_order_quote_amount=150.0, live_min_total_notional_per_trade=150.0,
+        kraken_default_total_notional=150.0, live_min_total_notional_per_trade=150.0,
         kraken_quote_reserve=1.0, kraken_buy_balance_ratio=1.0,
         kraken_margin_shorts_enabled=False,
     ))

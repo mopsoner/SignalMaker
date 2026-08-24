@@ -81,6 +81,30 @@ def test_signal_configuration_defaults_and_environment_overrides(monkeypatch) ->
     assert configured_runtime["entry_rsi"] == {"min": 52.5, "max": 67.5, "timeframe": "1h"}
 
 
+def test_kraken_default_total_notional_is_within_live_range() -> None:
+    configured = Settings(_env_file=None)
+
+    assert configured.kraken_default_total_notional == 150.0
+    with pytest.raises(ValueError, match="KRAKEN_DEFAULT_TOTAL_NOTIONAL must be between"):
+        Settings(_env_file=None, KRAKEN_DEFAULT_TOTAL_NOTIONAL=149)
+    with pytest.raises(ValueError, match="KRAKEN_DEFAULT_TOTAL_NOTIONAL must be between"):
+        Settings(_env_file=None, KRAKEN_DEFAULT_TOTAL_NOTIONAL=251)
+
+
+def test_legacy_kraken_notional_settings_emit_migration_warnings() -> None:
+    with pytest.warns(FutureWarning) as recorded:
+        configured = Settings(
+            _env_file=None,
+            KRAKEN_ORDER_QUOTE_AMOUNT=175,
+            KRAKEN_MIN_BUY_NOTIONAL=5,
+        )
+
+    messages = [str(item.message) for item in recorded]
+    assert configured.kraken_default_total_notional == 175
+    assert any("rename it to KRAKEN_DEFAULT_TOTAL_NOTIONAL" in message for message in messages)
+    assert any("deprecated and ignored" in message for message in messages)
+
+
 def test_runtime_signal_config_uses_new_rsi_fallback(monkeypatch) -> None:
     strategy = Settings(_env_file=None).model_dump()
     strategy.pop("signal_entry_rsi_min")

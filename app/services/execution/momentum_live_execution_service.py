@@ -57,7 +57,12 @@ class MomentumLiveExecutionService:
             raise ValueError("MOMENTUM_LIVE_MODE must be spot or margin")
         if action == "BUY":
             symbol = decision.get("buy_symbol") or decision.get("symbol")
-            result = {"status": "executed", "action": action, "orders": [self.execution.buy_market(self._symbol(symbol), mode=mode)]}
+            order = self.execution.buy_market(
+                self._symbol(symbol),
+                total_notional=settings.kraken_default_total_notional,
+                mode=mode,
+            )
+            result = {"status": "executed", "action": action, "orders": [order]}
             return self._record_execution(decision_id, result)
         if action == "SELL":
             symbol = decision.get("sell_symbol") or decision.get("symbol")
@@ -66,7 +71,11 @@ class MomentumLiveExecutionService:
         sell = self.execution.sell_market(self._symbol(decision.get("sell_symbol")), mode=mode, intent="close_long")
         if sell.get("status") not in {"filled", "simulated"}:
             return self._record_execution(decision_id, {"status": "pending", "action": action, "orders": [sell]})
-        buy = self.execution.buy_market(self._symbol(decision.get("buy_symbol")), mode=mode)
+        buy = self.execution.buy_market(
+            self._symbol(decision.get("buy_symbol")),
+            total_notional=settings.kraken_default_total_notional,
+            mode=mode,
+        )
         return self._record_execution(decision_id, {"status": "executed", "action": action, "orders": [sell, buy]})
 
     @staticmethod

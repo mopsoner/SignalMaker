@@ -56,7 +56,11 @@ class KrakenExecutionService:
 
     def buy_market(self, symbol: str, total_notional: float | None = None, *, mode: str = "spot", leverage: int | None = None) -> dict:
         self._guard(mode)
-        desired_total = float(total_notional or settings.kraken_order_quote_amount)
+        desired_total = float(
+            settings.kraken_default_total_notional
+            if total_notional is None
+            else total_notional
+        )
         minimum_total = float(settings.live_min_total_notional_per_trade)
         if desired_total < minimum_total:
             raise ValueError(f"requested total notional {desired_total:.2f} is below required minimum {minimum_total:.2f}")

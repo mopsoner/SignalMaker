@@ -122,7 +122,7 @@ def check_workflow(symbol: str, quote_amount: float, modes: list[str]) -> list[C
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Safely verify live Kraken calls used by the trading workflow.")
     parser.add_argument("--symbol", default="BTCUSD")
-    parser.add_argument("--quote-amount", type=float, default=settings.kraken_order_quote_amount)
+    parser.add_argument("--quote-amount", type=float, default=settings.kraken_default_total_notional)
     parser.add_argument("--mode", action="append", choices=("spot", "margin"), dest="modes")
     args = parser.parse_args(argv)
     modes = args.modes or [settings.momentum_live_mode]
