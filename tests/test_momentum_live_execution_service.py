@@ -14,7 +14,7 @@ class FakeExecution:
         self.calls = []
 
     def buy_market(self, symbol, **kwargs):
-        self.calls.append(("buy", symbol))
+        self.calls.append(("buy", symbol, kwargs.get("total_notional")))
         return {"status": "simulated"}
 
     def sell_market(self, symbol, **kwargs):
@@ -32,13 +32,13 @@ def test_non_transactional_decisions_do_not_construct_exchange(action):
 @pytest.mark.parametrize(
     ("decision", "calls"),
     [
-        ({"action": "BUY", "buy_symbol": "BTCUSD"}, [("buy", "BTCUSD")]),
+        ({"action": "BUY", "buy_symbol": "BTCUSD"}, [("buy", "BTCUSD", 150.0)]),
         ({"action": "SELL", "sell_symbol": "ETHUSD"}, [("sell", "ETHUSD")]),
-        ({"action": "ROTATE", "sell_symbol": "ETHUSD", "buy_symbol": "BTCUSD"}, [("sell", "ETHUSD"), ("buy", "BTCUSD")]),
+        ({"action": "ROTATE", "sell_symbol": "ETHUSD", "buy_symbol": "BTCUSD"}, [("sell", "ETHUSD"), ("buy", "BTCUSD", 150.0)]),
     ],
 )
 def test_transactional_decisions_call_execution_in_order(monkeypatch, decision, calls):
-    monkeypatch.setattr(module, "settings", SimpleNamespace(momentum_live_enabled=True, momentum_live_mode="spot"))
+    monkeypatch.setattr(module, "settings", SimpleNamespace(momentum_live_enabled=True, momentum_live_mode="spot", kraken_default_total_notional=150.0))
     execution = FakeExecution()
     result = MomentumLiveExecutionService(SimpleNamespace(), execution_service=execution).execute_decision(decision)
     assert result["status"] == "executed"
@@ -46,7 +46,7 @@ def test_transactional_decisions_call_execution_in_order(monkeypatch, decision, 
 
 
 def test_not_due_decision_does_not_place_order(monkeypatch):
-    monkeypatch.setattr(module, "settings", SimpleNamespace(momentum_live_enabled=True, momentum_live_mode="spot"))
+    monkeypatch.setattr(module, "settings", SimpleNamespace(momentum_live_enabled=True, momentum_live_mode="spot", kraken_default_total_notional=150.0))
     execution = FakeExecution()
     result = MomentumLiveExecutionService(SimpleNamespace(), execution_service=execution).execute_decision({"action": "BUY", "symbol": "BTCUSD", "due_now": False})
     assert result["reason"] == "not_due"
@@ -61,6 +61,7 @@ def test_live_decision_is_submitted_only_once(monkeypatch):
             momentum_live_enabled=True,
             momentum_live_mode="spot",
             kraken_dry_run=False,
+            kraken_default_total_notional=150.0,
         ),
     )
     engine = create_engine("sqlite:///:memory:")
@@ -74,4 +75,4 @@ def test_live_decision_is_submitted_only_once(monkeypatch):
 
     assert first["status"] == "executed"
     assert second["reason"] == "decision_already_submitted"
-    assert execution.calls == [("buy", "BTCUSD")]
+    assert execution.calls == [("buy", "BTCUSD", 150.0)]
