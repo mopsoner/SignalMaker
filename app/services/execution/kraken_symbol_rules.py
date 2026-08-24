@@ -6,6 +6,18 @@ from typing import Any
 from .kraken_client import KrakenClient
 
 
+class KrakenRuleError(ValueError):
+    """A correctable local Kraken rule rejection raised before submission."""
+
+
+class KrakenMinimumQuantityError(KrakenRuleError):
+    pass
+
+
+class KrakenPrecisionError(KrakenRuleError):
+    pass
+
+
 class KrakenSymbolRules:
     def __init__(self, client: KrakenClient, quote_assets: list[str] | None = None) -> None:
         self.client = client
@@ -31,7 +43,7 @@ class KrakenSymbolRules:
     def normalize_market_quantity(self, symbol: str, quantity: float | str | Decimal) -> str:
         result = self._floor(Decimal(str(quantity)), int(self.symbol_info(symbol).get("lot_decimals", 8)))
         if Decimal(result) <= 0:
-            raise ValueError("normalized quantity is zero")
+            raise KrakenPrecisionError("normalized quantity is zero")
         return result
 
     normalize_exit_quantity = normalize_market_quantity
@@ -65,9 +77,9 @@ class KrakenSymbolRules:
         info = self.symbol_info(symbol)
         qty = Decimal(str(quantity))
         if qty < Decimal(str(info.get("ordermin") or 0)):
-            raise ValueError("quantity below Kraken order minimum")
+            raise KrakenMinimumQuantityError("quantity below Kraken order minimum")
         if qty * Decimal(str(price)) < Decimal(str(info.get("costmin") or 0)):
-            raise ValueError("notional below Kraken cost minimum")
+            raise KrakenMinimumQuantityError("notional below Kraken cost minimum")
 
     def supported_leverages(self, symbol: str, side: str) -> tuple[int, ...]:
         normalized_side = side.strip().lower()

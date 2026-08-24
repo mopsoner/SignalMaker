@@ -9,6 +9,7 @@ from app.models.base import Base
 from app.models.candidate_execution import CandidateExecution
 from app.models.position import Position
 from app.models.trade_candidate import TradeCandidate
+from app.services.execution.kraken_symbol_rules import KrakenMinimumQuantityError
 
 
 class FakeKrakenExecution:
@@ -108,14 +109,52 @@ def test_short_uses_buy_side_for_margin_protection(monkeypatch, tmp_path):
     assert any(call[:3] == ("tp", "BTCUSD", "buy") for call in FakeKrakenExecution.calls)
 
 
-def test_take_profit_failure_leaves_execution_unfinished(monkeypatch, tmp_path):
+def test_take_profit_failure_leaves_submitted_execution_for_reconciliation(monkeypatch, tmp_path):
     service, candidate, db = _live_service(monkeypatch, tmp_path)
     FakeKrakenExecution.fail_tp = True
     import pytest
     with pytest.raises(RuntimeError, match="tp rejected"):
         service._execute_live_candidate(candidate, quantity=3)
     state = db.scalar(select(CandidateExecution))
-    assert state.status == "claimed"
+    assert state.status == "submitted"
+    assert state.entry_order_id == "kraken-1"
+
+
+def test_minimum_quantity_rejection_can_be_retried_after_rule_change(monkeypatch, tmp_path):
+    service, _candidate, db = _live_service(monkeypatch, tmp_path)
+    attempts = []
+
+    def execute(candidate, quantity):
+        attempts.append(candidate.candidate_id)
+        if len(attempts) == 1:
+            raise KrakenMinimumQuantityError("quantity below Kraken order minimum")
+        return {"candidate_id": candidate.candidate_id, "mode": "live", "protection_installed": True}
+
+    service._execute_live_candidate = execute
+    first = service.execute_open_candidates(mode="live")
+    state = db.scalar(select(CandidateExecution))
+    assert first["skipped"][0]["retryable"] is True
+    assert state.status == "retryable"
+    assert state.next_attempt_at is not None
+
+    second = service.execute_open_candidates(mode="live")
+    assert len(second["executed"]) == 1
+    assert db.scalar(select(CandidateExecution)).status == "completed"
+    assert attempts == ["candidate-1", "candidate-1"]
+
+
+def test_submitted_entry_is_never_submitted_twice(monkeypatch, tmp_path):
+    service, _candidate, db = _live_service(monkeypatch, tmp_path)
+    FakeKrakenExecution.order = {"status": "open", "executed_quantity": "0", "average_price": 0}
+
+    service.execute_open_candidates(mode="live")
+    service.execute_open_candidates(mode="live")
+
+    assert [call for call in FakeKrakenExecution.calls if call[0] == "buy"] == [
+        ("buy", "BTCUSD", 150.0, "spot")
+    ]
+    state = db.scalar(select(CandidateExecution))
+    assert state.status == "submitted"
     assert state.entry_order_id == "kraken-1"
 
 

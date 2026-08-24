@@ -58,4 +58,4 @@ def test_claims_are_isolated_by_execution_mode(tmp_path):
             row.execution_mode: row.status
             for row in db.scalars(select(CandidateExecution)).all()
         }
-        assert states == {"paper": "executed", "live": "claimed"}
+        assert states == {"paper": "completed", "live": "claimed"}
