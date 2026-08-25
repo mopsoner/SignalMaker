@@ -12,7 +12,7 @@ from starlette.requests import Request
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_error_logging
-from app.db.base import init_db
+from app.db.base import apply_compatible_schema_upgrades, init_db
 from app.db.session import SessionLocal, rollback_and_close
 from signalmaker.market_data.repository import MarketDataRepository
 
@@ -24,6 +24,10 @@ error_logger = configure_error_logging()
 async def lifespan(_: FastAPI):
     if settings.create_tables_on_boot:
         init_db()
+    else:
+        # Existing production databases still need additive, idempotent upgrades.
+        # CREATE_TABLES_ON_BOOT only controls SQLAlchemy's create_all behavior.
+        apply_compatible_schema_upgrades()
     db = SessionLocal()
     try:
         MarketDataRepository(db).ensure_schema()
