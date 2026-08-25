@@ -19,11 +19,11 @@ from app.models.momentum_engine_current_decision import MomentumEngineCurrentDec
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
-    _apply_compatible_schema_upgrades()
+    apply_compatible_schema_upgrades()
 
 
-def _apply_compatible_schema_upgrades() -> None:
-    """Apply small idempotent schema upgrades for deployments using create_all only."""
+def apply_compatible_schema_upgrades() -> None:
+    """Apply small idempotent upgrades to an existing PostgreSQL schema."""
     if engine.dialect.name != "postgresql":
         return
 

@@ -1,5 +1,7 @@
+import asyncio
 from types import SimpleNamespace
 
+from app import main
 from app.db import base
 
 
@@ -30,9 +32,40 @@ def test_compatible_schema_upgrade_adds_candidate_execution_lifecycle_columns(mo
     )
     monkeypatch.setattr(base, "engine", engine)
 
-    base._apply_compatible_schema_upgrades()
+    base.apply_compatible_schema_upgrades()
 
     statements = "\n".join(connection.statements)
     assert "ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ" in statements
     assert "ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ" in statements
     assert "SET status = 'completed' WHERE status = 'executed'" in statements
+
+
+def test_startup_applies_compatible_upgrades_when_create_all_is_disabled(monkeypatch):
+    calls = []
+
+    class _Session:
+        def close(self):
+            calls.append("close")
+
+    class _Repository:
+        def __init__(self, _db):
+            pass
+
+        def ensure_schema(self):
+            calls.append("market_schema")
+
+    monkeypatch.setattr(main.settings, "create_tables_on_boot", False)
+    monkeypatch.setattr(main, "init_db", lambda: calls.append("create_all"))
+    monkeypatch.setattr(
+        main, "apply_compatible_schema_upgrades", lambda: calls.append("upgrades")
+    )
+    monkeypatch.setattr(main, "SessionLocal", _Session)
+    monkeypatch.setattr(main, "MarketDataRepository", _Repository)
+
+    async def run_lifespan():
+        async with main.lifespan(main.app):
+            pass
+
+    asyncio.run(run_lifespan())
+
+    assert calls == ["upgrades", "market_schema", "close"]
