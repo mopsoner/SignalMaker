@@ -34,6 +34,24 @@ def execute_live_candidates(
     return ExecutorService(db).execute_open_candidates(limit=limit, quantity=quantity, mode="live")
 
 
+@router.post("/executor/live/candidates/{candidate_id}", dependencies=[Depends(require_operator)])
+def execute_live_candidate(
+    candidate_id: str,
+    quantity: float = Query(default=1.0, gt=0),
+    confirmation: str | None = Header(default=None, alias="X-Confirm-Live-Execution"),
+    db: Session = Depends(get_db),
+) -> dict:
+    if confirmation != "EXECUTE-WYCKOFF-LIVE":
+        raise HTTPException(status_code=400, detail="explicit live execution confirmation required")
+    try:
+        assert_wyckoff_live_configuration(settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ExecutorService(db).execute_open_candidates(
+        limit=1, quantity=quantity, mode="live", candidate_id=candidate_id
+    )
+
+
 @router.post('/executor/reconcile')
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
     return ExecutorService(db).reconcile_live_positions()

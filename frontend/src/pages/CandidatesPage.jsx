@@ -105,6 +105,7 @@ function exportCandidatesCsv(rows) {
 export default function CandidatesPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [runningCandidateId, setRunningCandidateId] = useState(null)
   const loadCandidates = useCallback(() => api.candidates('?limit=1000'), [])
   const { data: rows = [], loading, error } = usePollingQuery(loadCandidates, 10000)
   async function runPipeline() {
@@ -115,7 +116,24 @@ export default function CandidatesPage() {
     } catch (err) { setMessage(err.message || String(err)) }
     finally { setBusy(false) }
   }
+  async function runLive(row) {
+    if (!window.confirm(`Execute ${row.symbol} ${row.side} LIVE on Kraken?`)) return
+    setRunningCandidateId(row.candidate_id); setMessage('')
+    try {
+      const result = await api.runLiveCandidate(row.candidate_id, 1)
+      if (result.executed?.length) {
+        const execution = result.executed[0]
+        setMessage(execution.pending
+          ? `${row.symbol}: live order submitted; the position will appear after the fill is confirmed.`
+          : `${row.symbol}: live trade executed. The position is now available on the Positions page.`)
+      } else {
+        setMessage(`${row.symbol}: ${result.skipped?.[0]?.reason || 'live execution skipped'}`)
+      }
+    } catch (err) { setMessage(err.message || String(err)) }
+    finally { setRunningCandidateId(null) }
+  }
   const columns = [
+    { key: 'run_live', title: 'Live', sortable: false, render: (row) => <button type="button" className="button run-live-button" disabled={row.status !== 'open' || runningCandidateId !== null} onClick={() => runLive(row)}>{runningCandidateId === row.candidate_id ? 'RUNNING…' : 'RUN LIVE'}</button> },
     { key: 'symbol', title: 'Symbol' },
     { key: 'side', title: 'Side' },
     { key: 'stage', title: 'Stage', render: (row) => <span className={stageBadgeClass(row.stage)}>{safeText(row.stage)}</span> },

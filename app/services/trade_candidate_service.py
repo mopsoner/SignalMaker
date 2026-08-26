@@ -95,6 +95,44 @@ class TradeCandidateService:
         )
         return list(self.db.scalars(stmt).all())
 
+    def claim_candidate(self, candidate_id: str, *, execution_mode: str) -> TradeCandidate | None:
+        """Atomically reserve one explicitly selected open candidate."""
+        mode = execution_mode.lower()
+        if mode not in {"paper", "live"}:
+            raise ValueError("execution mode must be paper or live")
+        candidate = self.db.get(TradeCandidate, candidate_id)
+        if candidate is None or candidate.status != "open":
+            return None
+        now = datetime.now(timezone.utc)
+        values = {
+            "execution_id": f"{candidate_id}-{mode}",
+            "candidate_id": candidate_id,
+            "execution_mode": mode,
+            "status": "claimed",
+            "claimed_at": now,
+        }
+        dialect = self.db.get_bind().dialect.name
+        insert = sqlite_insert(CandidateExecution) if dialect == "sqlite" else postgresql_insert(CandidateExecution)
+        claimed_id = self.db.scalar(
+            insert.values(**values).on_conflict_do_nothing(
+                index_elements=["candidate_id", "execution_mode"]
+            ).returning(CandidateExecution.candidate_id)
+        )
+        self.db.commit()
+        return candidate if claimed_id else None
+
+    def get_pending_candidate(self, candidate_id: str, *, execution_mode: str) -> TradeCandidate | None:
+        return self.db.scalar(
+            select(TradeCandidate)
+            .join(CandidateExecution, CandidateExecution.candidate_id == TradeCandidate.candidate_id)
+            .where(
+                TradeCandidate.candidate_id == candidate_id,
+                TradeCandidate.status == "open",
+                CandidateExecution.execution_mode == execution_mode,
+                CandidateExecution.status.in_(("claimed", "submitted", "protected")),
+            )
+        )
+
     def get_pending_candidates(self, *, execution_mode: str, limit: int = 100) -> list[TradeCandidate]:
         """Return previously claimed work so exchange-pending orders can be reconciled."""
         stmt = (

@@ -383,7 +383,8 @@ class ExecutorService:
         }
 
     def execute_open_candidates(
-        self, limit: int = 100, quantity: float = 1.0, mode: ExecutionMode = "paper"
+        self, limit: int = 100, quantity: float = 1.0, mode: ExecutionMode = "paper",
+        candidate_id: str | None = None,
     ) -> dict:
         executed = []
         skipped = []
@@ -394,13 +395,31 @@ class ExecutorService:
             # Validate before claiming candidates or constructing a Kraken client.
             assert_wyckoff_live_configuration(settings)
         candidates = []
-        if requested_mode == "live":
+        if candidate_id and requested_mode == "live":
+            pending = self.candidates.get_pending_candidate(
+                candidate_id, execution_mode=requested_mode
+            )
+            if pending is not None:
+                candidates = [pending]
+        elif requested_mode == "live":
             candidates = self.candidates.get_pending_candidates(execution_mode=requested_mode, limit=limit)
         remaining = max(0, limit - len(candidates))
-        if remaining:
+        if remaining and candidate_id:
+            selected = self.candidates.claim_candidate(
+                candidate_id, execution_mode=requested_mode
+            )
+            if selected is not None:
+                candidates.append(selected)
+        elif remaining:
             candidates.extend(
                 self.candidates.claim_open_candidates(execution_mode=requested_mode, limit=remaining)
             )
+        if candidate_id and not candidates:
+            return {
+                'mode': requested_mode,
+                'executed': [],
+                'skipped': [{'candidate_id': candidate_id, 'reason': 'candidate_not_open_or_already_executed'}],
+            }
         for candidate in candidates:
             if candidate.entry_price is None:
                 skipped.append({'candidate_id': candidate.candidate_id, 'reason': 'missing_entry_price'})
