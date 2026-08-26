@@ -82,6 +82,7 @@ export const api = {
   candleSummary: (params = '') => request(`/api/v1/market-data/candles/summary${params}`),
   runPipeline: (limit = 5) => request(`/api/v1/pipeline/run-once?limit=${limit}`, { method: 'POST' }),
   runExecutor: (limit = 10, quantity = 1) => request(`/api/v1/executor/run-once?limit=${limit}&quantity=${quantity}`, { method: 'POST' }),
+  runLiveCandidate: (candidateId, quantity = 1) => request(`/api/v1/executor/live/candidates/${encodeURIComponent(candidateId)}?quantity=${quantity}`, { method: 'POST', headers: { 'X-Confirm-Live-Execution': 'EXECUTE-WYCKOFF-LIVE' } }),
   adminSettings: () => request('/api/v1/admin/settings'),
   updateAdminSettings: (payload) => request('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   deleteAdminSettingOverride: (category, key) => request(`/api/v1/admin/settings/${encodeURIComponent(category)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),

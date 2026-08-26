@@ -69,3 +69,23 @@ def test_live_route_rejects_unsafe_configuration_before_execution(monkeypatch):
     assert response.status_code == 503
     assert "KRAKEN_DRY_RUN must be false" in response.json()["detail"]
     assert RecordingExecutor.calls == []
+
+
+def test_selected_live_candidate_route_executes_only_requested_candidate(monkeypatch):
+    test_client = client(monkeypatch)
+    monkeypatch.setattr(route, "assert_wyckoff_live_configuration", lambda _settings: None)
+    response = test_client.post(
+        "/api/v1/executor/live/candidates/BTCUSD-open?quantity=2.5",
+        headers={
+            "X-Operator-Key": "changeme-admin-token",
+            "X-Confirm-Live-Execution": "EXECUTE-WYCKOFF-LIVE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert RecordingExecutor.calls == [{
+        "limit": 1,
+        "quantity": 2.5,
+        "mode": "live",
+        "candidate_id": "BTCUSD-open",
+    }]
