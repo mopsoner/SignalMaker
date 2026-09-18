@@ -13,3 +13,8 @@ test('each candidate row exposes an explicitly confirmed live execution action',
   assert.match(api, /executor\/live\/candidates/)
   assert.match(api, /X-Confirm-Live-Execution.*EXECUTE-WYCKOFF-LIVE/)
 })
+
+test('candidates are sorted by newest creation date by default', () => {
+  assert.match(page, /defaultSortKey="created_at"/)
+  assert.match(page, /defaultSortDir="desc"/)
+})
