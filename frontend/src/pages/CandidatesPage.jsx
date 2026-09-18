@@ -160,6 +160,6 @@ export default function CandidatesPage() {
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading candidates…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
-    <FoldableTable title="Open and executed candidates" columns={columns} rows={rows} empty="No trade candidates yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
+    <FoldableTable title="Open and executed candidates" columns={columns} rows={rows} empty="No trade candidates yet" defaultSortKey="created_at" defaultSortDir="desc" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
   </div>
 }
