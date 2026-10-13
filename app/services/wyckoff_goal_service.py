@@ -27,7 +27,7 @@ class WyckoffGoalService:
                 "profitUsd": total if verified else None, "positionCount": len(rows),
                 "verified": verified, "closing": any(row.status == "closing" or
                 (row.meta or {}).get("goal_triggered") for row in rows),
-                "lastCheckedAt": min(((row.meta or {}).get("goal_verified_at", "") for row in rows), default=None),
+                "lastCheckedAt": min(((row.meta or {}).get("goal_verified_at") for row in rows), default=None) if verified else None,
                 "errors": [(row.meta or {}).get("goal_error") for row in rows if (row.meta or {}).get("goal_error")]}
 
     def _meta(self, row, **values):
