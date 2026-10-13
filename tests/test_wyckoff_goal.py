@@ -124,3 +124,52 @@ def test_summary_handles_missing_and_null_verification_dates(setup, timestamps):
     assert summary["verified"] == verified
     assert summary["lastCheckedAt"] == (min(timestamps) if verified and timestamps else None)
     assert summary["profitUsd"] == (10 * len(timestamps) if verified else None)
+
+
+def test_margin_scan_repairs_stale_local_entry_price(setup):
+    ex = Exchange(50)
+    service = WyckoffGoalService(setup, ex)
+    service.run()
+    row = setup.get(Position, "kraken-external")
+    row.entry_price = 0
+    setup.commit()
+    result = service.run()
+    assert row.entry_price == 100
+    assert result["goal"]["profitUsd"] == 50
+    assert result["goal"]["errors"] == []
+
+
+@pytest.mark.parametrize("price", [0, -1, float("nan"), float("inf"), None])
+def test_invalid_mark_price_identifies_symbol_and_field(setup, price):
+    ex = Exchange(100)
+    ex.current_price = lambda symbol: price
+    result = WyckoffGoalService(setup, ex).run()
+    assert "BTCUSD: invalid Kraken mark price" in result["goal"]["errors"][0]
+    assert result["goal"]["profitUsd"] is None
+    assert ex.calls == []
+
+
+def test_spot_scan_refreshes_entry_from_confirmed_order(setup):
+    ex = Exchange(100)
+    ex.get_order = lambda *args, **kwargs: {"status": "filled", "executed_quantity": "2", "average_price": "100"}
+    row = Position(position_id="spot", symbol="BTCUSD", side="long", status="open",
+                   quantity=2, entry_price=0, entry_order_id="spot-entry",
+                   meta={"execution_mode": "live", "kraken_mode": "spot"})
+    setup.add(row)
+    setup.commit()
+    WyckoffGoalService(setup, ex)._scan(row, {})
+    assert row.entry_price == 100
+    assert row.unrealized_pnl == 100
+
+
+def test_inconsistent_margin_volume_cannot_close_local_position(setup):
+    ex = Exchange(50)
+    service = WyckoffGoalService(setup, ex)
+    service.run()
+    positions = ex.open_margin_positions()
+    positions["external"]["vol_closed"] = "3"
+    ex.open_margin_positions = lambda: positions
+    result = service.run()
+    assert "invalid Kraken closed volume" in result["goal"]["errors"][0]
+    assert setup.get(Position, "kraken-external").status == "open"
+    assert ex.calls == []
