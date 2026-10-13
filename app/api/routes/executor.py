@@ -52,6 +52,6 @@ def execute_live_candidate(
     )
 
 
-@router.post('/executor/reconcile')
+@router.post('/executor/reconcile', dependencies=[Depends(require_operator)])
 def reconcile_executor(db: Session = Depends(get_db)) -> dict:
     return ExecutorService(db).reconcile_live_positions()

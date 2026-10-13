@@ -351,7 +351,7 @@ class ExecutorService:
             mark_price=average_price,
             stop_price=candidate.stop_price,
             target_price=target_plan["target_price"],
-            meta={"candidate_id": candidate.candidate_id, "execution_mode": "live", **target_plan},
+            meta={"candidate_id": candidate.candidate_id, "execution_mode": "live", "kraken_mode": mode, **target_plan},
         )
         position.entry_order_id = entry_order_id
         position.entry_order_status = entry_status
@@ -394,6 +394,11 @@ class ExecutorService:
         if requested_mode == "live":
             # Validate before claiming candidates or constructing a Kraken client.
             assert_wyckoff_live_configuration(settings)
+            reconciliation = self.reconcile_live_positions()
+            if reconciliation.get("blockEntries"):
+                return {"mode": "live", "executed": [],
+                        "skipped": [{"reason": "global_goal_liquidation_or_unverified_positions"}],
+                        "goal": reconciliation.get("goal")}
         candidates = []
         if candidate_id and requested_mode == "live":
             pending = self.candidates.get_pending_candidate(
@@ -462,10 +467,5 @@ class ExecutorService:
         return {'mode': requested_mode, 'executed': executed, 'skipped': skipped}
 
     def reconcile_live_positions(self) -> dict:
-        return {
-            'enabled': False,
-            'checked': 0,
-            'closed': [],
-            'updated': [],
-            'reason': 'Live exchange reconciliation is handled by the Raspberry Executor',
-        }
+        from app.services.wyckoff_goal_service import WyckoffGoalService
+        return WyckoffGoalService(self.db).run()

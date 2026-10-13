@@ -16,7 +16,8 @@ def assert_live_configuration() -> None:
 
 def run_once() -> dict:
     with SessionLocal() as db:
-        result = ExecutorService(db).execute_open_candidates(
+        executor = ExecutorService(db)
+        result = executor.execute_open_candidates(
             limit=settings.wyckoff_live_limit,
             quantity=settings.wyckoff_live_quantity,
             mode="live",

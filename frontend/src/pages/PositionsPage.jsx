@@ -56,9 +56,11 @@ function hasTriggeredStop(row) {
 function effectivePnlPrice(row) {
   const mark = numericValue(row?.mark_price), stop = numericValue(row?.stop_price)
   if (mark === null) return null
+  if (row?.meta?.execution_mode === 'live') return mark
   return hasTriggeredStop(row) && stop !== null ? stop : mark
 }
 function pnlValue(row) {
+  if (row?.meta?.execution_mode === 'live' && row.unrealized_pnl != null) return numericValue(row.unrealized_pnl)
   const entry = numericValue(row?.entry_price), effectivePrice = effectivePnlPrice(row), qty = numericValue(row?.quantity)
   if (entry === null || effectivePrice === null || qty === null || !isPnlSide(row)) return null
   return isShort(row) ? (entry - effectivePrice) * qty : (effectivePrice - entry) * qty
@@ -112,6 +114,7 @@ export default function PositionsPage() {
   const [message, setMessage] = useState('')
   const { data: positions = [], loading, error } = usePollingQuery(useCallback(() => api.positions('?limit=1000'), []), 15000)
   const { data: pnlSummary = EMPTY_PNL_SUMMARY, loading: summaryLoading, error: summaryError } = usePollingQuery(useCallback(() => api.positionsSummary(), []), 30000)
+  const { data: goal, error: goalError } = usePollingQuery(useCallback(() => api.positionsGoal(), []), 15000)
   const { data: orders = [] } = usePollingQuery(useCallback(() => api.orders('?limit=50'), []), 15000)
 
   async function runExecutor() {
@@ -144,12 +147,20 @@ export default function PositionsPage() {
   ]
 
   return <div className="page-stack">
-    <PageHeader title="Positions" subtitle="Wyckoff / SMC paper state, orders, fills, PnL and strategy quality metrics" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run Wyckoff / SMC paper'}</button>} />
+    <PageHeader title="Positions" subtitle="Wyckoff / SMC positions, orders, PnL and global live profit goal" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run Wyckoff / SMC paper'}</button>} />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
     {summaryLoading ? <div className="panel">Loading PnL summary…</div> : null}
     {error ? <div className="panel error">{error}</div> : null}
     {summaryError ? <div className="panel error">{summaryError}</div> : null}
+
+    {goalError ? <div className="panel error">{goalError}</div> : null}
+    {goal ? <div className="stat-card">
+      <div className="stat-label">Goal · Kraken</div>
+      <div className="stat-value">{goal.verified ? fmtNumber(goal.profitUsd, 2) : '—'} / {fmtNumber(goal.targetUsd, 2)} USD</div>
+      <div className="stat-hint">{goal.positionCount} open live positions · {goal.closing ? 'Closing positions…' : 'Global profit target'} · {goal.lastCheckedAt ? `Checked ${fmtDate(goal.lastCheckedAt)}` : 'Awaiting Kraken scan'}</div>
+      {goal.errors?.map((error, index) => <div className="panel error" key={index}>{error}</div>)}
+    </div> : null}
 
     <div className="stats-grid">
       <PnlMetricCard label="Net PnL" value={pnlSummary.totalPnlValue} toneValue={pnlSummary.totalPnlValue} decimals={4} hint={`Total ${formatSignedNumber(pnlSummary.totalPnlPercent, 2)}% · ${pnlSummary.count} positions`} />
@@ -172,7 +183,7 @@ export default function PositionsPage() {
       <PnlMetricCard label="SL/TP Model" value={pnlSummary.slTpExpectancyPercent} toneValue={pnlSummary.slTpExpectancyPercent} suffix="%" hint={`PF ${formatProfitFactor(pnlSummary.slTpProfitFactor)} · total ${formatSignedNumber(pnlSummary.slTpTotalPnlPercent, 2)}%`} />
     </div>
 
-    <FoldableTable title="Open positions" columns={positionColumns} rows={positions} empty="No positions yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
+    <FoldableTable title="Open positions" columns={positionColumns} rows={positions.filter((row) => ['open', 'closing'].includes(row.status))} empty="No positions yet" paginated initialPageSize={25} pageSizeOptions={[25, 50, 100, 250]} />
     <FoldableTable title="Recent orders" columns={orderColumns} rows={orders} empty="No orders yet" />
   </div>
 }

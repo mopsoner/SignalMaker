@@ -208,3 +208,26 @@ momentum worker on its next tick.
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.
+
+### Goal global Kraken
+
+`WYCKOFF_LIVE_GOAL_USD=100` définit le seuil global (strictement positif).
+Le scheduler, lorsque `LIVE_RECONCILE_ENABLED=true`, et le worker Wyckoff live
+scannent Kraken sans dépendre de l'ouverture de la page Positions. La carte Goal
+somme les profits latents des positions sur marge de tout le compte et des
+positions spot live suivies localement. Les positions sur marge externes sont
+importées dans Positions. Les profits en devises autres que USD sont convertis
+au cours Kraken ; une conversion indisponible bloque le déclenchement.
+Les soldes spot externes ne constituent pas des positions avec prix d'entrée et
+ne sont pas vendus automatiquement. Le profit est brut, avant frais et slippage.
+
+À partir du seuil, les ordres de sortie sont annulés puis des ordres au marché
+sont soumis (reduce-only sur marge). La clôture est confirmée après exécution,
+et les nouvelles entrées du worker sont suspendues pendant la liquidation.
+`KRAKEN_EXECUTION_ENABLED=true`, `KRAKEN_DRY_RUN=false` et
+`WYCKOFF_LIVE_ENABLED=true` sont requis. Les accès Kraken du serveur et un
+worker actif sont nécessaires ; le Raspberry Executor externe doit coordonner
+ses nouvelles entrées avec cette liquidation. Le GET `/api/v1/positions/goal`
+est en lecture seule ; `/api/v1/executor/reconcile` exige la clé opérateur.
+En cas de réponse perdue lors d'une soumission, la position reste `closing`
+avec une erreur pour réconciliation manuelle, afin de ne pas répéter une vente.

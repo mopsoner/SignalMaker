@@ -59,3 +59,17 @@ def test_insufficient_balance_does_not_silently_reduce_total(monkeypatch):
 
     with pytest.raises(ValueError, match=r"minimum total notional 150.00.*possible total notional 95.00.*effective leverage 5.*usable quote balance 19.00"):
         service.buy_market("LOWUSD", total_notional=150, mode="margin", leverage=5)
+
+
+def test_goal_margin_close_is_reduce_only_and_exact_quantity(monkeypatch):
+    service = _service(monkeypatch)
+    service.close_market("LOWUSD", "buy", 2.5, mode="margin", leverage=3)
+    kwargs = service.client.place_market_entry.call_args.kwargs
+    assert kwargs == {"leverage": 3, "reduce_only": True}
+    assert float(service.client.place_market_entry.call_args.args[2]) == 2.5
+
+
+def test_goal_spot_close_does_not_borrow(monkeypatch):
+    service = _service(monkeypatch)
+    service.close_market("LOWUSD", "sell", 2.5, mode="spot")
+    assert service.client.place_market_entry.call_args.kwargs == {"leverage": None, "reduce_only": False}

@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     momentum_live_balance_confirm_attempts: int = Field(default=8, alias="MOMENTUM_LIVE_BALANCE_CONFIRM_ATTEMPTS")
     momentum_live_balance_confirm_sleep: float = Field(default=1.0, alias="MOMENTUM_LIVE_BALANCE_CONFIRM_SLEEP")
     momentum_live_interval_seconds: float = Field(default=60.0, alias="MOMENTUM_LIVE_INTERVAL_SECONDS")
+    wyckoff_live_goal_usd: float = Field(default=100.0, gt=0, allow_inf_nan=False, alias="WYCKOFF_LIVE_GOAL_USD")
+
     wyckoff_live_enabled: bool = Field(default=False, alias="WYCKOFF_LIVE_ENABLED")
     wyckoff_live_mode: str = Field(default="spot", alias="WYCKOFF_LIVE_MODE")
     wyckoff_live_interval_seconds: float = Field(default=60.0, alias="WYCKOFF_LIVE_INTERVAL_SECONDS")

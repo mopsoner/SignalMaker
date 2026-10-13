@@ -8,6 +8,12 @@ from app.services.position_service import PositionService
 router = APIRouter()
 
 
+@router.get("/goal")
+def positions_goal(db: Session = Depends(get_db)) -> dict:
+    from app.services.wyckoff_goal_service import WyckoffGoalService
+    return WyckoffGoalService(db).summary()
+
+
 @router.get("/summary")
 def positions_summary(
     status: str | None = Query(default=None),
