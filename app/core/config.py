@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     momentum_live_balance_confirm_attempts: int = Field(default=8, alias="MOMENTUM_LIVE_BALANCE_CONFIRM_ATTEMPTS")
     momentum_live_balance_confirm_sleep: float = Field(default=1.0, alias="MOMENTUM_LIVE_BALANCE_CONFIRM_SLEEP")
     momentum_live_interval_seconds: float = Field(default=60.0, alias="MOMENTUM_LIVE_INTERVAL_SECONDS")
+    kraken_profit_worker_enabled: bool = Field(default=False, alias="KRAKEN_PROFIT_WORKER_ENABLED")
+    kraken_profit_worker_interval_seconds: float = Field(default=15.0, gt=0, allow_inf_nan=False, alias="KRAKEN_PROFIT_WORKER_INTERVAL_SECONDS")
+
     wyckoff_live_goal_usd: float = Field(default=100.0, gt=0, allow_inf_nan=False, alias="WYCKOFF_LIVE_GOAL_USD")
 
     wyckoff_live_enabled: bool = Field(default=False, alias="WYCKOFF_LIVE_ENABLED")

@@ -17,6 +17,7 @@ def test_only_exact_stable_worker_names_are_allowed(tmp_path, monkeypatch):
         "momentum_paper",
         "momentum_live",
         "wyckoff_live",
+        "kraken_profit",
         "ibkr_ingestion",
         "stock_etf_analysis",
         "scheduler",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scheduler worker — runs lightweight periodic orchestration.
-It currently performs live position reconciliation when enabled.
+Profit monitoring runs separately in the dedicated Kraken profit worker.
 """
 import os
 import sys
@@ -14,7 +14,6 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from app.db.session import SessionLocal
-from app.services.executor_service import ExecutorService
 from app.services.runtime_settings import load_runtime_settings
 from app.services.scheduler_service import SchedulerService
 from signalmaker.market_data.repository import MarketDataRepository
@@ -32,7 +31,6 @@ def run_scheduler_tick(session_factory=SessionLocal) -> int:
     try:
         runtime = load_runtime_settings(db)
         bot = runtime.get('bot', {})
-        live_cfg = runtime.get('live', {})
         interval = int(bot.get('bot_scheduler_interval_sec', DEFAULT_INTERVAL))
         schedule_result = {"queued": [], "recovered": 0}
         if bot.get('bot_scheduler_enabled', True):
@@ -41,17 +39,12 @@ def run_scheduler_tick(session_factory=SessionLocal) -> int:
             schedule_result = asyncio.run(SchedulerService(repo).tick(runtime))
             db.commit()
             heartbeat("scheduler", state="running")
-        if bot.get('bot_scheduler_enabled', True) and live_cfg.get('live_reconcile_enabled', True):
-            result = ExecutorService(db).reconcile_live_positions()
-            db.commit()
-            print(f'Scheduler reconcile tick: {result}', flush=True)
+        if bot.get('bot_scheduler_enabled', True):
             print(f'Scheduler workflow tick: {schedule_result}', flush=True)
-        elif not bot.get('bot_scheduler_enabled', True):
-            interval = 30
-            print('Scheduler disabled', flush=True)
         else:
+            interval = 30
             db.rollback()
-            print('Scheduler tick: live reconciliation disabled', flush=True)
+            print('Scheduler disabled', flush=True)
     except Exception:
         db.rollback()
         raise

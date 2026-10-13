@@ -23,7 +23,8 @@ class WyckoffGoalService:
         rows = self.rows()
         verified = all((row.meta or {}).get("goal_verified_at") for row in rows)
         total = sum(row.unrealized_pnl or 0 for row in rows)
-        return {"targetUsd": settings.wyckoff_live_goal_usd,
+        return {"monitoringEnabled": settings.kraken_profit_worker_enabled,
+                "targetUsd": settings.wyckoff_live_goal_usd,
                 "profitUsd": total if verified else None, "positionCount": len(rows),
                 "verified": verified, "closing": any(row.status == "closing" or
                 (row.meta or {}).get("goal_triggered") for row in rows),
@@ -34,35 +35,55 @@ class WyckoffGoalService:
         row.meta = {**(row.meta or {}), **values}
         self.db.commit()
 
+    @staticmethod
+    def _number(value, *, symbol, field, positive=False):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{symbol}: invalid Kraken {field} ({value!r})") from None
+        if not math.isfinite(number) or (positive and number <= 0):
+            raise ValueError(f"{symbol}: invalid Kraken {field} ({value!r})")
+        return number
+
     def _scan(self, row, margin_positions):
         ex = self.execution
         mode = (row.meta or {}).get("kraken_mode", settings.wyckoff_live_mode)
         quote = ex.rules.quote_asset(row.symbol)
-        fx = 1.0 if quote in {"USD", "ZUSD"} else float(ex.client.current_price(f"{quote}USD"))
+        fx = 1.0 if quote in {"USD", "ZUSD"} else self._number(ex.client.current_price(f"{quote}USD"), symbol=row.symbol, field="USD conversion rate", positive=True)
         if mode == "margin":
             matches = [p for p in margin_positions.values() if p.get("ordertxid") == row.entry_order_id]
-            quantity = sum(float(p["vol"]) - float(p.get("vol_closed", 0)) for p in matches)
+            volumes = [self._number(p.get("vol"), symbol=row.symbol, field="entry volume", positive=True) for p in matches]
+            closed = [self._number(p.get("vol_closed", 0), symbol=row.symbol, field="closed volume") for p in matches]
+            if any(c < 0 or c > v for c, v in zip(closed, volumes)):
+                raise ValueError(f"{row.symbol}: invalid Kraken closed volume relative to entry volume")
+            quantity = sum(v - c for v, c in zip(volumes, closed))
+            if quantity > 0:
+                costs = [self._number(p.get("cost"), symbol=row.symbol, field="entry cost", positive=True) for p in matches]
+                entry_price = sum(costs) / sum(volumes)
         else:
             entry = ex.get_order(row.symbol, row.entry_order_id, mode=mode)
             if entry.get("status") not in {"filled", "open", "canceled", "expired"}:
                 raise ValueError("Kraken entry order could not be verified")
-            quantity = float(entry["executed_quantity"])
+            quantity = self._number(entry.get("executed_quantity"), symbol=row.symbol, field="executed quantity")
             if row.take_profit_order_id:
                 tp = ex.get_order(row.symbol, row.take_profit_order_id, mode=mode)
                 row.take_profit_order_status = tp["status"]
                 quantity -= float(tp.get("executed_quantity", 0))
             quantity -= float((row.meta or {}).get("goal_closed_quantity", 0))
-        if quantity <= 0:
+        if not math.isfinite(quantity) or quantity < 0:
+            raise ValueError(f"{row.symbol}: invalid Kraken remaining quantity ({quantity!r})")
+        if quantity == 0:
             row.status = "closed"
             row.closed_at = datetime.now(timezone.utc)
             self.db.commit()
             return
-        mark = float(ex.client.current_price(row.symbol))
-        entry_price = float(row.entry_price)
+        if mode != "margin":
+            entry_price = self._number(entry.get("average_price"), symbol=row.symbol, field="average entry price", positive=True)
+        mark = self._number(ex.client.current_price(row.symbol), symbol=row.symbol, field="mark price", positive=True)
         short = row.side.lower() in {"short", "sell", "bear", "bear_watch"}
         pnl = (entry_price - mark if short else mark - entry_price) * quantity * fx
-        if not all(math.isfinite(v) for v in (mark, entry_price, quantity, pnl)) or min(mark, entry_price) <= 0:
-            raise ValueError("Invalid Kraken position prices or quantity")
+        pnl = self._number(pnl, symbol=row.symbol, field="profit")
+        row.entry_price = entry_price
         row.quantity, row.mark_price, row.unrealized_pnl = quantity, mark, pnl
         self._meta(row, goal_verified_at=datetime.now(timezone.utc).isoformat(), goal_error=None)
 
@@ -117,8 +138,16 @@ class WyckoffGoalService:
                                 mode=mode, leverage=entry.get("leverage"))
         self._meta(row, goal_close_order_id=order["order_id"], goal_error=None)
 
+    def entry_blocked(self):
+        rows = self.rows()
+        return any(row.status == "closing" or (row.meta or {}).get("goal_triggered") for row in rows) or (
+            settings.kraken_profit_worker_enabled and any(
+                not (row.meta or {}).get("goal_verified_at") or (row.meta or {}).get("goal_error") for row in rows
+            )
+        )
+
     def run(self):
-        if not settings.wyckoff_live_enabled or not settings.kraken_execution_enabled or settings.kraken_dry_run:
+        if not settings.kraken_profit_worker_enabled or not settings.kraken_execution_enabled or settings.kraken_dry_run:
             return {"enabled": False, "goal": self.summary()}
         self.execution = self.execution or KrakenExecutionService(self.db)
         margin = self.execution.client.open_margin_positions()
@@ -135,7 +164,7 @@ class WyckoffGoalService:
             if row is None:
                 row = Position(position_id=local_id, symbol=item["pair"],
                                side="long" if item["type"] == "buy" else "short",
-                               quantity=quantity, entry_price=float(item["cost"]) / float(item["vol"]),
+                               quantity=quantity, entry_price=None,
                                entry_order_id=item["ordertxid"], status="open",
                                meta={"execution_mode": "live", "kraken_mode": "margin", "goal_imported": True})
                 self.db.add(row)

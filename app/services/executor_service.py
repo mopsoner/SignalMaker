@@ -394,11 +394,12 @@ class ExecutorService:
         if requested_mode == "live":
             # Validate before claiming candidates or constructing a Kraken client.
             assert_wyckoff_live_configuration(settings)
-            reconciliation = self.reconcile_live_positions()
-            if reconciliation.get("blockEntries"):
+            from app.services.wyckoff_goal_service import WyckoffGoalService
+            goal_service = WyckoffGoalService(self.db)
+            if goal_service.entry_blocked():
                 return {"mode": "live", "executed": [],
                         "skipped": [{"reason": "global_goal_liquidation_or_unverified_positions"}],
-                        "goal": reconciliation.get("goal")}
+                        "goal": goal_service.summary()}
         candidates = []
         if candidate_id and requested_mode == "live":
             pending = self.candidates.get_pending_candidate(

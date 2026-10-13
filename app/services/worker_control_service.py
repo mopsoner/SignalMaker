@@ -25,6 +25,7 @@ WORKERS = {
     "kraken_candle_feed": {"module": "scripts.run_kraken_candle_feed_loop", "systemd_unit": "signalmaker-kraken-candle-feed.service"},
     "momentum_paper": {"module": "scripts.run_momentum_paper_loop", "systemd_unit": "signalmaker-momentum-paper.service"},
     "momentum_live": {"module": "scripts.run_momentum_live_loop", "systemd_unit": "signalmaker-momentum-live.service"},
+    "kraken_profit": {"module": "scripts.run_kraken_profit_loop", "systemd_unit": "signalmaker-kraken-profit.service"},
     "wyckoff_live": {"module": "scripts.run_wyckoff_live_loop", "systemd_unit": "signalmaker-wyckoff-live.service"},
     "ibkr_ingestion": {"module": "scripts.run_ibkr_ingestion_loop", "systemd_unit": "signalmaker-ibkr-ingestion.service"},
     "stock_etf_analysis": {"module": "scripts.run_market_analysis_worker", "systemd_unit": "signalmaker-market-analysis.service"},

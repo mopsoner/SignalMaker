@@ -7,6 +7,7 @@ export const WORKER_CATEGORIES = {
 export const WORKER_METADATA = [
   { id: 'wyckoff_paper', label: 'Wyckoff / SMC — Paper', type: 'paper' },
   { id: 'wyckoff_live', label: 'Wyckoff / SMC — LIVE (Kraken)', type: 'live', logFile: 'wyckoff_live.log' },
+  { id: 'kraken_profit', label: 'Kraken — Profit / Goal', type: 'live', logFile: 'kraken_profit.log' },
   { id: 'stock_etf_analysis', label: 'Stocks & ETF — Analysis', type: 'paper' },
   { id: 'scheduler', label: 'Scheduler', type: 'infrastructure' },
   { id: 'pipeline', label: 'Pipeline', type: 'infrastructure' },

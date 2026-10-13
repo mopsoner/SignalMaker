@@ -212,8 +212,8 @@ momentum worker on its next tick.
 ### Goal global Kraken
 
 `WYCKOFF_LIVE_GOAL_USD=100` définit le seuil global (strictement positif).
-Le scheduler, lorsque `LIVE_RECONCILE_ENABLED=true`, et le worker Wyckoff live
-scannent Kraken sans dépendre de l'ouverture de la page Positions. La carte Goal
+Le worker dédié `kraken_profit`, activé par `KRAKEN_PROFIT_WORKER_ENABLED=true`,
+scanne Kraken sans dépendre de l'ouverture de la page Positions. La carte Goal
 somme les profits latents des positions sur marge de tout le compte et des
 positions spot live suivies localement. Les positions sur marge externes sont
 importées dans Positions. Les profits en devises autres que USD sont convertis
@@ -225,9 +225,33 @@ ne sont pas vendus automatiquement. Le profit est brut, avant frais et slippage.
 sont soumis (reduce-only sur marge). La clôture est confirmée après exécution,
 et les nouvelles entrées du worker sont suspendues pendant la liquidation.
 `KRAKEN_EXECUTION_ENABLED=true`, `KRAKEN_DRY_RUN=false` et
-`WYCKOFF_LIVE_ENABLED=true` sont requis. Les accès Kraken du serveur et un
-worker actif sont nécessaires ; le Raspberry Executor externe doit coordonner
+`KRAKEN_PROFIT_WORKER_ENABLED=true` sont requis. Les accès Kraken du serveur et un
+worker profit actif sont nécessaires ; le Raspberry Executor externe doit coordonner
 ses nouvelles entrées avec cette liquidation. Le GET `/api/v1/positions/goal`
 est en lecture seule ; `/api/v1/executor/reconcile` exige la clé opérateur.
 En cas de réponse perdue lors d'une soumission, la position reste `closing`
 avec une erreur pour réconciliation manuelle, afin de ne pas répéter une vente.
+
+### Worker profit indépendant
+
+La surveillance et les clôtures automatiques sont désactivées par défaut :
+
+```dotenv
+KRAKEN_PROFIT_WORKER_ENABLED=false
+KRAKEN_PROFIT_WORKER_INTERVAL_SECONDS=15
+WYCKOFF_LIVE_GOAL_USD=100
+```
+
+Pour activer, passez `KRAKEN_PROFIT_WORKER_ENABLED=true`, puis lancez
+`bash run.sh kraken-profit-loop` (ou `kraken-profit-once` pour un seul passage).
+Le worker dispose d'une session DB par passage, d'un heartbeat et de logs dédiés.
+Il continue après une erreur Kraken. Il est également disponible dans Ops/Logs
+sous `kraken_profit` et via `deploy/systemd/signalmaker-kraken-profit.service`.
+Le scheduler et l'executor Wyckoff ne scannent plus Kraken pour le Goal ;
+l'executor conserve un contrôle local des liquidations avant toute nouvelle entrée.
+Le profit worker peut surveiller le compte même si `WYCKOFF_LIVE_ENABLED=false`.
+
+Après une modification du `.env`, redémarrez le worker et l'API pour recharger
+la configuration. Avec le flag désactivé, le worker sort sans interroger Kraken
+et l'endpoint de réconciliation ne déclenche aucune clôture. Arrêter le worker
+ne révoque pas les ordres déjà envoyés à Kraken.

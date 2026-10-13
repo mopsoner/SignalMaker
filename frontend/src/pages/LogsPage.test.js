@@ -7,6 +7,7 @@ test('logs page displays every managed worker', () => {
   assert.deepEqual(MANAGED_WORKERS, [
     'wyckoff_paper',
     'wyckoff_live',
+    'kraken_profit',
     'stock_etf_analysis',
     'scheduler',
     'pipeline',
@@ -36,10 +37,11 @@ test('worker metadata provides unambiguous labels and categories', () => {
 
 test('live log entries retain exact backend identifiers', () => {
   const liveWorkers = WORKERS_BY_CATEGORY.find(({ type }) => type === 'live').workers
-  assert.deepEqual(liveWorkers.map(({ id }) => id), ['wyckoff_live', 'momentum_live'])
-  assert.deepEqual(liveWorkers.map(({ logFile }) => logFile), ['wyckoff_live.log', 'momentum_live.log'])
+  assert.deepEqual(liveWorkers.map(({ id }) => id), ['wyckoff_live', 'kraken_profit', 'momentum_live'])
+  assert.deepEqual(liveWorkers.map(({ logFile }) => logFile), ['wyckoff_live.log', 'kraken_profit.log', 'momentum_live.log'])
   assert.deepEqual(liveWorkers.map(({ id }) => `/api/v1/admin/logs/${id}?lines=300`), [
     '/api/v1/admin/logs/wyckoff_live?lines=300',
+    '/api/v1/admin/logs/kraken_profit?lines=300',
     '/api/v1/admin/logs/momentum_live?lines=300',
   ])
 })

@@ -90,6 +90,12 @@ PY
   momentum-live-loop)
     python -m scripts.run_momentum_live_loop
     ;;
+  kraken-profit-once)
+    python -m scripts.run_kraken_profit_loop --once
+    ;;
+  kraken-profit-loop)
+    python -m scripts.run_kraken_profit_loop
+    ;;
   wyckoff-live-once)
     python -m scripts.run_wyckoff_live_loop --once
     ;;
@@ -97,7 +103,7 @@ PY
     python -m scripts.run_wyckoff_live_loop
     ;;
   *)
-    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|wyckoff-paper-once|pipeline-loop|wyckoff-paper-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-preflight|kraken-buy|kraken-sell|momentum-live-once|momentum-live-loop|wyckoff-live-once|wyckoff-live-loop]"
+    echo "Usage: bash run.sh [api|dev|init-db|pipeline-once|wyckoff-paper-once|pipeline-loop|wyckoff-paper-loop|scheduler-loop|kraken-candle-feed-once|kraken-candle-feed-loop|kraken-account|kraken-preflight|kraken-buy|kraken-sell|momentum-live-once|momentum-live-loop|wyckoff-live-once|wyckoff-live-loop|kraken-profit-once|kraken-profit-loop]"
     exit 1
     ;;
 esac

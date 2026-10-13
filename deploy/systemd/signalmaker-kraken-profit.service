@@ -1,0 +1,18 @@
+[Unit]
+Description=SignalMaker independent Kraken profit monitor
+After=network-online.target signalmaker-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/signalmaker
+EnvironmentFile=/opt/signalmaker/.env
+Environment=SIGNALMAKER_LOG_DIR=/opt/signalmaker/logs
+Environment=SIGNALMAKER_WORKER_SUPERVISOR=systemd
+ExecStart=/bin/bash /opt/signalmaker/scripts/start_kraken_profit_worker.sh
+StandardOutput=append:/opt/signalmaker/logs/kraken_profit.log
+StandardError=append:/opt/signalmaker/logs/kraken_profit.log
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

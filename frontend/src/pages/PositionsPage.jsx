@@ -158,7 +158,7 @@ export default function PositionsPage() {
     {goal ? <div className="stat-card">
       <div className="stat-label">Goal · Kraken</div>
       <div className="stat-value">{goal.verified ? fmtNumber(goal.profitUsd, 2) : '—'} / {fmtNumber(goal.targetUsd, 2)} USD</div>
-      <div className="stat-hint">{goal.positionCount} open live positions · {goal.closing ? 'Closing positions…' : 'Global profit target'} · {goal.lastCheckedAt ? `Checked ${fmtDate(goal.lastCheckedAt)}` : 'Awaiting Kraken scan'}</div>
+      <div className="stat-hint">{goal.positionCount} open live positions · {goal.closing ? 'Closing positions…' : goal.monitoringEnabled ? 'Global profit target' : 'Profit worker disabled'} · {goal.lastCheckedAt ? `Checked ${fmtDate(goal.lastCheckedAt)}` : 'Awaiting Kraken scan'}</div>
       {goal.errors?.map((error, index) => <div className="panel error" key={index}>{error}</div>)}
     </div> : null}
 
