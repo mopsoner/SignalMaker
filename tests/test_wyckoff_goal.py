@@ -49,7 +49,7 @@ class Exchange:
 @pytest.fixture
 def setup(monkeypatch):
     monkeypatch.setattr(module, "settings", SimpleNamespace(
-        wyckoff_live_enabled=True, kraken_execution_enabled=True,
+        wyckoff_live_enabled=False, kraken_profit_worker_enabled=True, kraken_execution_enabled=True,
         kraken_dry_run=False, wyckoff_live_mode="margin", wyckoff_live_goal_usd=100))
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)

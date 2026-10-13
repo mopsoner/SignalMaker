@@ -23,7 +23,8 @@ class WyckoffGoalService:
         rows = self.rows()
         verified = all((row.meta or {}).get("goal_verified_at") for row in rows)
         total = sum(row.unrealized_pnl or 0 for row in rows)
-        return {"targetUsd": settings.wyckoff_live_goal_usd,
+        return {"monitoringEnabled": settings.kraken_profit_worker_enabled,
+                "targetUsd": settings.wyckoff_live_goal_usd,
                 "profitUsd": total if verified else None, "positionCount": len(rows),
                 "verified": verified, "closing": any(row.status == "closing" or
                 (row.meta or {}).get("goal_triggered") for row in rows),
@@ -117,8 +118,16 @@ class WyckoffGoalService:
                                 mode=mode, leverage=entry.get("leverage"))
         self._meta(row, goal_close_order_id=order["order_id"], goal_error=None)
 
+    def entry_blocked(self):
+        rows = self.rows()
+        return any(row.status == "closing" or (row.meta or {}).get("goal_triggered") for row in rows) or (
+            settings.kraken_profit_worker_enabled and any(
+                not (row.meta or {}).get("goal_verified_at") or (row.meta or {}).get("goal_error") for row in rows
+            )
+        )
+
     def run(self):
-        if not settings.wyckoff_live_enabled or not settings.kraken_execution_enabled or settings.kraken_dry_run:
+        if not settings.kraken_profit_worker_enabled or not settings.kraken_execution_enabled or settings.kraken_dry_run:
             return {"enabled": False, "goal": self.summary()}
         self.execution = self.execution or KrakenExecutionService(self.db)
         margin = self.execution.client.open_margin_positions()

@@ -66,7 +66,6 @@ def _live_service(monkeypatch, tmp_path, side="bull"):
     db.add(CandidateExecution(execution_id="candidate-1-live", candidate_id="candidate-1", execution_mode="live", status="claimed"))
     db.commit()
     service = ExecutorService(db)
-    service.reconcile_live_positions = lambda: {"enabled": True, "blockEntries": False}
     service._hierarchical_target_plan = lambda _candidate: {"target_price": 120.0}
     return service, candidate, db
 
@@ -171,8 +170,10 @@ def test_paper_and_live_cycles_do_not_consume_each_others_claim(monkeypatch):
         ),
         release_claim=lambda *_args, **_kwargs: None,
     )
+    from app.services.wyckoff_goal_service import WyckoffGoalService
+    monkeypatch.setattr(WyckoffGoalService, "entry_blocked", lambda self: False)
     service = object.__new__(ExecutorService)
-    service.reconcile_live_positions = lambda: {"enabled": True, "blockEntries": False}
+    service.db = None
     service.candidates = repository
     service._hierarchical_target_plan = lambda _candidate: {"target_price": 120.0}
     service._current_price_for_candidate = lambda _candidate, *, requested_mode: 100.0
