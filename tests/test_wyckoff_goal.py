@@ -104,3 +104,23 @@ def test_unavailable_price_blocks_entire_goal(setup):
 def test_dry_run_never_contacts_exchange(setup, monkeypatch):
     monkeypatch.setattr(module.settings, "kraken_dry_run", True)
     assert WyckoffGoalService(setup, object()).run()["enabled"] is False
+
+
+@pytest.mark.parametrize("timestamps", [
+    [], [None], [None, "2026-10-13T21:00:00+00:00"],
+    ["missing", "2026-10-13T21:00:00+00:00"],
+    ["2026-10-13T21:01:00+00:00", "2026-10-13T21:00:00+00:00"],
+])
+def test_summary_handles_missing_and_null_verification_dates(setup, timestamps):
+    for index, timestamp in enumerate(timestamps):
+        meta = {"execution_mode": "live"}
+        if timestamp != "missing":
+            meta["goal_verified_at"] = timestamp
+        setup.add(Position(position_id=f"summary-{index}", symbol="BTCUSD", side="long",
+                           status="open", quantity=1, unrealized_pnl=10, meta=meta))
+    setup.commit()
+    summary = WyckoffGoalService(setup).summary()
+    verified = all(t and t != "missing" for t in timestamps)
+    assert summary["verified"] == verified
+    assert summary["lastCheckedAt"] == (min(timestamps) if verified and timestamps else None)
+    assert summary["profitUsd"] == (10 * len(timestamps) if verified else None)

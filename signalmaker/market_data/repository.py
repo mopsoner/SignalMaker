@@ -681,14 +681,14 @@ class MarketDataRepository:
         if kind in (None, "import"):
             selections.append("""SELECT id, 'import' run_kind, run_type, provider engine,
                 NULL scope, metadata filters, status, total_assets, success_count, failed_count,
-                started_at created_at, started_at, finished_at, NULL heartbeat_at,
+                started_at created_at, started_at, finished_at, CAST(NULL AS TIMESTAMP) heartbeat_at,
                 metadata, error_message error, NULL worker_id, 0 attempts
                 FROM market_data_import_runs""")
         if kind in (None, "analysis"):
             selections.append("""SELECT r.id, 'analysis' run_kind, 'analysis' run_type,
                 r.engine_name engine, u.name scope, r.metadata filters, r.status,
                 r.total_assets, r.success_count, r.failed_count, r.started_at created_at,
-                r.started_at, r.finished_at, NULL heartbeat_at, r.metadata,
+                r.started_at, r.finished_at, CAST(NULL AS TIMESTAMP) heartbeat_at, r.metadata,
                 r.error_message error, NULL worker_id, 0 attempts
                 FROM market_analysis_runs r LEFT JOIN market_universes u ON u.id=r.universe_id""")
         if kind in (None, "job"):
@@ -749,7 +749,7 @@ class MarketDataRepository:
         queries = {
             "import": """SELECT id, 'import' run_kind, run_type, provider engine, NULL scope,
                 metadata filters, status, total_assets, success_count, failed_count, started_at created_at,
-                started_at, finished_at, NULL heartbeat_at, metadata, error_message error,
+                started_at, finished_at, CAST(NULL AS TIMESTAMP) heartbeat_at, metadata, error_message error,
                 NULL worker_id, 0 attempts FROM market_data_import_runs WHERE id=:id""",
             "analysis": """SELECT r.id, 'analysis' run_kind, 'analysis' run_type,
                 r.engine_name engine, u.name scope, r.metadata filters, r.status, r.total_assets,
