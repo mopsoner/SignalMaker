@@ -172,6 +172,8 @@ class PositionService:
         asset_by_symbol = {row.symbol.upper(): row for row in asset_rows}
         changed = False
         for row in open_rows:
+            if (row.meta or {}).get("execution_mode") == "live":
+                continue
             asset = asset_by_symbol.get(row.symbol.upper())
             if not asset or asset.price is None:
                 continue

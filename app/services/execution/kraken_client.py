@@ -180,13 +180,15 @@ class KrakenClient:
                 return float(value or 0)
         return 0.0
 
-    def place_market_entry(self, symbol: str, side: str, quantity: float | str, *, leverage: int | None = None) -> dict[str, Any]:
+    def place_market_entry(self, symbol: str, side: str, quantity: float | str, *, leverage: int | None = None, reduce_only: bool = False) -> dict[str, Any]:
         side = side.strip().lower()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be buy or sell")
         payload: dict[str, Any] = {"pair": self.pair_info(symbol)["pair_key"], "type": side, "ordertype": "market", "volume": str(quantity)}
         if leverage is not None:
             payload["leverage"] = str(leverage)
+        if reduce_only:
+            payload["reduce_only"] = "true"
         if self.dry_run:
             order_id = f"dry-{uuid.uuid4()}"
             return {"order_id": order_id, "status": "simulated", "symbol": symbol.upper(), "side": side, "requested_quantity": str(quantity), "executed_quantity": "0", "leverage": leverage, "dry_run": True, "payload": payload}

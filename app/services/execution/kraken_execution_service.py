@@ -141,6 +141,18 @@ class KrakenExecutionService:
             result = self.client.place_exit_limit(symbol, side, normalized, price)
         return self._record(result, symbol, side, float(normalized), mode, "limit")
 
+    def close_market(self, symbol: str, side: str, quantity: float, *, mode: str, leverage: int | None = None) -> dict:
+        self._guard(mode)
+        normalized = self.rules.normalize_market_quantity(symbol, quantity)
+        result = self.client.place_market_entry(
+            symbol, side, normalized,
+            leverage=leverage if mode == "margin" else None,
+            reduce_only=mode == "margin",
+        )
+        if not result.get("order_id"):
+            raise RuntimeError("Kraken close response has no order id; manual reconciliation required")
+        return self._record(result, symbol, side, float(normalized), mode)
+
     def account_summary(self) -> dict:
         self._guard()
         if settings.kraken_dry_run:
