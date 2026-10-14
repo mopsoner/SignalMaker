@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, literal, select, update
+from sqlalchemy import and_, delete, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -104,6 +104,28 @@ class TradeCandidateService:
         if candidate is None or candidate.status != "open":
             return None
         now = datetime.now(timezone.utc)
+        reclaimed_id = self.db.scalar(
+            update(CandidateExecution).where(
+                CandidateExecution.candidate_id == candidate_id,
+                CandidateExecution.execution_mode == mode,
+                CandidateExecution.entry_order_id.is_(None),
+                CandidateExecution.take_profit_order_id.is_(None),
+                CandidateExecution.submitted_at.is_(None),
+                or_(
+                    and_(CandidateExecution.status == "retryable",
+                         or_(CandidateExecution.next_attempt_at.is_(None), CandidateExecution.next_attempt_at <= now)),
+                    and_(CandidateExecution.status == "failed", CandidateExecution.error.in_([
+                        "bearish Wyckoff candidates require margin mode",
+                        "live candidate requires stop-loss and take-profit levels",
+                        "invalid live total notional range",
+                    ])),
+                ),
+            ).values(status="claimed", claimed_at=now, next_attempt_at=None, completed_at=None, error=None)
+            .returning(CandidateExecution.candidate_id)
+        )
+        if reclaimed_id:
+            self.db.commit()
+            return candidate
         values = {
             "execution_id": f"{candidate_id}-{mode}",
             "candidate_id": candidate_id,
@@ -120,6 +142,24 @@ class TradeCandidateService:
         )
         self.db.commit()
         return candidate if claimed_id else None
+
+    def claim_failure_reason(self, candidate_id: str, *, execution_mode: str) -> str:
+        candidate = self.db.get(TradeCandidate, candidate_id)
+        if candidate is None:
+            return "candidate_not_found"
+        if candidate.status != "open":
+            return f"candidate_not_open: {candidate.status}"
+        state = self.db.scalar(select(CandidateExecution).where(
+            CandidateExecution.candidate_id == candidate_id,
+            CandidateExecution.execution_mode == execution_mode,
+        ))
+        if state is None:
+            return "candidate_claim_conflict"
+        if state.status == "retryable":
+            return f"candidate_retry_scheduled: {state.error or 'retry pending'}"
+        if state.status == "failed":
+            return f"candidate_execution_failed_requires_reconciliation: {state.error or 'unknown failure'}"
+        return f"candidate_already_executed_or_in_progress: {state.status}"
 
     def get_pending_candidate(self, candidate_id: str, *, execution_mode: str) -> TradeCandidate | None:
         return self.db.scalar(
