@@ -255,7 +255,7 @@ class ExecutorService:
         if live.get("live_require_tp_sl", True) and (
             candidate.stop_price is None or target_plan.get("target_price") is None
         ):
-            raise ValueError("live candidate requires stop-loss and take-profit levels")
+            raise CorrectableExecutionError("live candidate requires stop-loss and take-profit levels")
 
         mode = settings.wyckoff_live_mode.lower()
         execution = KrakenExecutionService(self.db)
@@ -270,7 +270,7 @@ class ExecutorService:
             entry_order_id = state.entry_order_id
         elif self._is_short_side(candidate.side):
             if mode == "spot":
-                raise ValueError("bearish Wyckoff candidates require margin mode")
+                raise CorrectableExecutionError("bearish Wyckoff candidates require margin mode")
             exchange_order = execution.sell_market(
                 candidate.symbol,
                 quantity=quantity,
@@ -282,7 +282,7 @@ class ExecutorService:
             min_notional = float(live["live_min_total_notional_per_trade"])
             max_notional = float(live["live_max_notional_per_trade"])
             if min_notional <= 0 or min_notional > max_notional:
-                raise ValueError("invalid live total notional range")
+                raise CorrectableExecutionError("invalid live total notional range")
             requested_notional = min(max(raw_notional, min_notional), max_notional)
             exchange_order = execution.buy_market(
                 candidate.symbol,
@@ -424,7 +424,7 @@ class ExecutorService:
             return {
                 'mode': requested_mode,
                 'executed': [],
-                'skipped': [{'candidate_id': candidate_id, 'reason': 'candidate_not_open_or_already_executed'}],
+                'skipped': [{'candidate_id': candidate_id, 'reason': self.candidates.claim_failure_reason(candidate_id, execution_mode=requested_mode)}],
             }
         for candidate in candidates:
             if candidate.entry_price is None:
