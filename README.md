@@ -234,16 +234,20 @@ avec une erreur pour réconciliation manuelle, afin de ne pas répéter une vent
 
 ### Worker profit indépendant
 
-La surveillance et les clôtures automatiques sont désactivées par défaut :
+Le worker Wyckoff live et le worker profit démarrent automatiquement avec l’API
+par défaut, sous réserve de configuration Kraken valide :
 
 ```dotenv
-KRAKEN_PROFIT_WORKER_ENABLED=false
+WYCKOFF_LIVE_ENABLED=true
+KRAKEN_PROFIT_WORKER_ENABLED=true
 KRAKEN_PROFIT_WORKER_INTERVAL_SECONDS=15
 WYCKOFF_LIVE_GOAL_USD=100
 ```
 
-Pour activer, passez `KRAKEN_PROFIT_WORKER_ENABLED=true`, puis lancez
-`bash run.sh kraken-profit-loop` (ou `kraken-profit-once` pour un seul passage).
+Pour désactiver un worker, passez son flag à `false` puis redémarrez l’API.
+Une valeur explicite dans le `.env` prime sur la valeur par défaut. Le lancement
+manuel reste possible avec `bash run.sh kraken-profit-loop` (ou
+`kraken-profit-once` pour un seul passage).
 Le worker dispose d'une session DB par passage, d'un heartbeat et de logs dédiés.
 Il continue après une erreur Kraken. Il est également disponible dans Ops/Logs
 sous `kraken_profit` et via `deploy/systemd/signalmaker-kraken-profit.service`.
