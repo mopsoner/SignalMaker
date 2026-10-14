@@ -1143,3 +1143,60 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
     assert "CHECK_NO_CASH" not in actions
     assert open_position.symbol == "ETHUSDC"
     assert status["open_position"]["symbol"] == "ETHUSDC"
+
+
+@pytest.mark.parametrize("bearish_field,bearish_value", [
+    ("ema_trend_15m", "below_ema"),
+    ("structure_15m_bias", "bearish"),
+])
+@pytest.mark.parametrize("scenario", ["initial", "better_rank", "broken_support"])
+def test_crypto_buy_rejects_bearish_15m_with_valid_support(
+    bearish_field: str, bearish_value: str, scenario: str,
+) -> None:
+    with _make_session() as db:
+        candidate = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        setattr(candidate[0] if bearish_field == "ema_trend_15m" else candidate[1], bearish_field, bearish_value)
+        db.add_all(candidate)
+        if scenario != "initial":
+            db.add_all(_momentum_row(
+                "ETHUSDC", price=50, momentum_score=20, stored_rank=2,
+                structure_15m_status="broken_bearish" if scenario == "broken_support" else "valid",
+            ))
+            db.add(_open_engine_position("ETHUSDC", entry_price=50, entry_value=1000, quantity=20, stored_rank=2))
+        db.commit()
+        service = MomentumEngineService(db)
+        decision = service.decision()
+        assert decision["best_asset"] is None
+        assert decision["top_watch_asset"]["support_status"] == "blocked_bearish_15m"
+        service.run_once(force=True)
+        trades = list(db.scalars(select(MomentumEngineTrade)).all())
+        assert not any(trade.action.startswith("BUY") for trade in trades)
+        if scenario == "better_rank":
+            assert service._open_position().symbol == "ETHUSDC"
+        else:
+            assert service._open_position() is None
+
+
+def test_crypto_entry_filter_preserves_next_valid_candidate_selection() -> None:
+    with _make_session() as db:
+        first = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        first[0].ema_trend_15m = "below_ema"
+        second = _momentum_row("ETHUSDC", price=50, momentum_score=20, stored_rank=2)
+        second[0].ema_trend_15m = "above_ema"
+        db.add_all([*first, *second])
+        db.commit()
+        service = MomentumEngineService(db)
+        service.run_once(force=True)
+        assert service._open_position().symbol == "ETHUSDC"
+
+
+def test_bearish_15m_entry_filter_does_not_sell_intact_current_position() -> None:
+    with _make_session() as db:
+        rows = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        rows[0].ema_trend_15m = "below_ema"
+        db.add_all([*rows, _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
+        db.commit()
+        service = MomentumEngineService(db)
+        service.run_once(force=True)
+        assert service._open_position().symbol == "BTCUSDC"
+        assert not any(t.action.startswith("SELL") for t in db.scalars(select(MomentumEngineTrade)).all())

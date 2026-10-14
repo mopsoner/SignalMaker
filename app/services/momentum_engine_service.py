@@ -509,6 +509,16 @@ class MomentumEngineService:
             return False
         return asset.get("structure_15m_status") in self.VALID_STRUCTURE_STATUSES
 
+    def _entry_bearish_15m(self, asset: dict[str, Any]) -> bool:
+        # Entry-only crypto filter: bearish trend alone must not trigger a sale.
+        return self.market_scope == "crypto" and (
+            asset.get("structure_15m_bias") == "bearish"
+            or asset.get("ema_trend_15m") == "below_ema"
+        )
+
+    def _entry_valid(self, asset: dict[str, Any]) -> bool:
+        return self._structure_valid(asset) and not self._entry_bearish_15m(asset)
+
     def _structure_broken(self, asset: dict[str, Any] | None) -> bool:
         if not asset:
             return True
@@ -525,6 +535,8 @@ class MomentumEngineService:
             return "blocked_price_not_positive"
         if not self._structure_valid(asset):
             return "support_broken_or_invalid"
+        if self._entry_bearish_15m(asset):
+            return "blocked_bearish_15m"
         return "support_valid"
 
     def _decorate_entry(self, asset: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -558,7 +570,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("momentum_score") or 0) <= min_momentum_score:
                 continue
-            if not self._structure_valid(row):
+            if not self._entry_valid(row):
                 continue
             return self._decorate_entry(row)
         return None
@@ -590,7 +602,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("momentum_score") or 0) <= min_momentum_score:
                 continue
-            if not self._structure_valid(row):
+            if not self._entry_valid(row):
                 continue
             return self._decorate_entry(row)
         return None
