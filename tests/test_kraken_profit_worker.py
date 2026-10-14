@@ -9,8 +9,8 @@ from scripts import run_kraken_profit_loop as worker
 from app.services import wyckoff_goal_service as goal
 
 
-def test_disabled_by_default():
-    assert Settings(_env_file=None).kraken_profit_worker_enabled is False
+def test_enabled_by_default():
+    assert Settings(_env_file=None).kraken_profit_worker_enabled is True
 
 
 def test_disabled_worker_does_not_open_session(monkeypatch):
