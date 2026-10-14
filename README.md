@@ -259,3 +259,27 @@ Après une modification du `.env`, redémarrez le worker et l'API pour recharger
 la configuration. Avec le flag désactivé, le worker sort sans interroger Kraken
 et l'endpoint de réconciliation ne déclenche aucune clôture. Arrêter le worker
 ne révoque pas les ordres déjà envoyés à Kraken.
+
+### Démarrage commun des workers
+
+Tous les modes de lancement de l’API utilisent le même gestionnaire. Les workers
+vitaux démarrent automatiquement : Pipeline, Wyckoff paper, Momentum paper,
+Scheduler, Kraken Candle Feed, IBKR ingestion et Stock/ETF analysis.
+Leurs réglages métier existants restent applicables : un processus actif peut
+être en pause ou attendre une tâche lorsque sa fonction est désactivée.
+
+Les trois workers d’exécution réelle suivent exclusivement leurs flags `.env` :
+
+```dotenv
+WYCKOFF_LIVE_ENABLED=true
+KRAKEN_PROFIT_WORKER_ENABLED=true
+MOMENTUM_LIVE_ENABLED=false
+```
+
+Wyckoff live et Profit sont activés par défaut ; Momentum live reste désactivé
+par défaut. Les valeurs explicites du `.env` priment. Après modification,
+redémarrez l’API. Les protections des clés, du mode réel Kraken et de la marge
+restent obligatoires. Une erreur de lancement n’empêche pas les autres workers
+ni l’API de démarrer ; les logs identifient le worker concerné.
+Les scripts VM ne lancent plus de workers directement, ce qui évite les doubles
+lancements. Les contrôles Ops/Logs et le superviseur systemd restent utilisables.

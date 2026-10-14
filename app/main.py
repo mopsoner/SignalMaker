@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.logging import configure_error_logging
 from app.db.base import apply_compatible_schema_upgrades, init_db
 from app.db.session import SessionLocal, rollback_and_close
-from app.services.live_worker_startup import start_live_workers, stop_started_workers
+from app.services.live_worker_startup import start_workers, stop_started_workers
 from signalmaker.market_data.repository import MarketDataRepository
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -37,7 +37,7 @@ async def lifespan(_: FastAPI):
         raise
     else:
         db.close()
-    workers, started = start_live_workers(settings)
+    workers, started = start_workers(settings)
     try:
         yield
     finally:

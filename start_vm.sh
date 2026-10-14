@@ -24,14 +24,7 @@ mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 python -m scripts.init_db
 
-python -m scripts.run_pipeline_loop >> "$LOG_DIR/pipeline.log" 2>&1 &
-echo $! > "$RUNTIME_DIR/pipeline.pid"
+# The API starts workers through the common supervisor.
 
-python -m scripts.run_wyckoff_paper_loop >> "$LOG_DIR/wyckoff_paper.log" 2>&1 &
-echo $! > "$RUNTIME_DIR/wyckoff_paper.pid"
-
-python -m scripts.run_scheduler_loop >> "$LOG_DIR/scheduler.log" 2>&1 &
-echo $! > "$RUNTIME_DIR/scheduler.pid"
-
-echo "Workers started — launching API on port ${APP_PORT:-5000}"
+echo "Launching API and configured workers on port ${APP_PORT:-5000}"
 exec uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT:-5000}
