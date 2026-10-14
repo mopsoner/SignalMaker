@@ -22,6 +22,7 @@ class MomentumService:
     INTERVALS = ("15m", "1h", "4h")
     WEIGHTS = {"15m": 0.35, "1h": 0.40, "4h": 0.25}
     LOOKBACKS = {"15m": 32, "1h": 24, "4h": 30}
+    EMA_HISTORY_15M = 200
     EMA_PERIOD = 20
     RSI_PERIOD = 14
     STRUCTURE_SWING_WINDOW = 2
@@ -185,8 +186,14 @@ class MomentumService:
         row.calculated_at = calculated_at
 
     def _build_symbol_row(self, symbol: str, previous: MomentumCurrent | None = None) -> dict[str, Any]:
-        bundle = self.market_data.load_symbol_bundle(symbol, {interval: self.LOOKBACKS[interval] for interval in self.INTERVALS})
-        return self._calculate_bundle(symbol, bundle, previous=previous)
+        limits = dict(self.LOOKBACKS)
+        # One extra slot allows for the current, unclosed candle.
+        limits["15m"] = self.EMA_HISTORY_15M + 1
+        bundle = self.market_data.load_symbol_bundle(symbol, limits)
+        ema_history = bundle.get("15m") or []
+        # Keep price-change, RSI and structure windows unchanged.
+        bundle["15m"] = ema_history[-self.LOOKBACKS["15m"]:]
+        return self._calculate_bundle(symbol, bundle, previous=previous, ema_history_15m=ema_history)
 
     @classmethod
     def calculate_bundle(
@@ -205,8 +212,15 @@ class MomentumService:
         calculator = object.__new__(cls)
         return calculator._calculate_bundle(symbol, bundle, previous=previous)
 
-    def _calculate_bundle(self, symbol: str, bundle: dict[str, list[dict[str, Any]]], previous: MomentumCurrent | None = None) -> dict[str, Any]:
-        interval_payloads = {interval: self._interval_momentum(bundle.get(interval) or []) for interval in self.INTERVALS}
+    def _calculate_bundle(self, symbol: str, bundle: dict[str, list[dict[str, Any]]], previous: MomentumCurrent | None = None, *, ema_history_15m: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        interval_payloads = {
+            interval: (
+                self._interval_momentum(bundle.get(interval) or [], ema_candles=ema_history_15m)
+                if interval == "15m" and ema_history_15m
+                else self._interval_momentum(bundle.get(interval) or [])
+            )
+            for interval in self.INTERVALS
+        }
         structure_15m = self._structure_15m(bundle.get("15m") or [])
 
         weighted_score = 0.0
@@ -397,7 +411,7 @@ class MomentumService:
             "structure_reason": reason,
         }
 
-    def _interval_momentum(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
+    def _interval_momentum(self, candles: list[dict[str, Any]], *, ema_candles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         closed_candles = self._closed_candles(candles)
         if len(closed_candles) < 2:
             return self._empty_interval_payload()
@@ -412,7 +426,11 @@ class MomentumService:
         latest_candle = candles_with_close[-1]
         price_change = ((latest_close - first_close) / first_close) * 100
         rsi = self._rsi(closes)
-        ema = self._ema(closes, min(self.EMA_PERIOD, len(closes)))
+        ema_closes = closes
+        if ema_candles is not None:
+            ema_closes = [float(candle["close"]) for candle in self._closed_candles(ema_candles)
+                          if candle.get("close") is not None][-self.EMA_HISTORY_15M:]
+        ema = self._ema(ema_closes, min(self.EMA_PERIOD, len(ema_closes)))
         ema_bonus = 0.0
         ema_trend = "unknown"
         if ema is not None:
