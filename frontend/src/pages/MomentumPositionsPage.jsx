@@ -1,9 +1,10 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { api } from '../lib/api'
 import { fmtDate, fmtNumber } from '../lib/format'
+import { loadAllMomentumTrades, momentumTradesCsv } from '../lib/momentumTradesCsv'
 
 function pnlTone(value) {
   const number = Number(value)
@@ -32,6 +33,29 @@ function actionKind(action) {
 }
 
 export default function MomentumPositionsPage() {
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState(null)
+
+  async function exportDecisions() {
+    setExporting(true)
+    setExportError(null)
+    let url
+    try {
+      const allTrades = await loadAllMomentumTrades(api.momentumTrades)
+      url = URL.createObjectURL(new Blob([momentumTradesCsv(allTrades)], { type: 'text/csv;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `executed-momentum-decisions-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } catch (error) {
+      setExportError(error.message || String(error))
+    } finally {
+      if (url) setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setExporting(false)
+    }
+  }
   const { data: status, loading: statusLoading, error: statusError } = usePollingQuery(useCallback(() => api.momentumStatus(), []), 15000)
   const { data: positionPage, loading: positionsLoading, error: positionsError } = usePollingQuery(useCallback(() => api.momentumPositions('?limit=1000'), []), 15000)
   const { data: tradePage, loading: tradesLoading, error: tradesError } = usePollingQuery(useCallback(() => api.momentumTrades('?limit=1000'), []), 15000)
@@ -92,6 +116,8 @@ export default function MomentumPositionsPage() {
 
     <FoldableTable title="Open Momentum positions" columns={positionColumns} rows={openPositions} empty="No open Momentum positions" paginated initialPageSize={25} />
     <FoldableTable title="Closed Momentum positions" columns={positionColumns} rows={closedPositions} empty="No closed Momentum positions" paginated initialPageSize={25} />
-    <FoldableTable title="Executed Momentum decisions" columns={tradeColumns} rows={trades} empty="No executed Momentum decisions" paginated initialPageSize={50} />
+    {exportError ? <div className="panel error" role="alert">CSV export failed: {exportError}</div> : null}
+    <FoldableTable title="Executed Momentum decisions" columns={tradeColumns} rows={trades} empty="No executed Momentum decisions" paginated initialPageSize={50}
+      actions={<button className="button" disabled={exporting} onClick={exportDecisions}>{exporting ? 'Exporting…' : 'Export CSV'}</button>} />
   </div>
 }
