@@ -16,7 +16,7 @@ def test_stock_etf_run_does_not_mutate_crypto_state_or_configuration() -> None:
     Base.metadata.create_all(engine)
     ranking = [{
         "symbol": "SPY", "rank": 1, "price": 500.0, "momentum_score": 10.0,
-        "structure_15m_status": "valid", "mss_15m_bearish": False,
+        "structure_15m_status": "valid", "ema_trend_15m": "above_ema", "mss_15m_bearish": False,
         "bos_15m_bearish": False,
     }]
     with Session(engine) as db:

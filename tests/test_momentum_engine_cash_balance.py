@@ -34,6 +34,7 @@ def _momentum_row(
 ) -> list[object]:
     return [
         MomentumCurrent(
+            ema_trend_15m="above_ema",
             symbol=symbol,
             price=price,
             momentum_score=momentum_score,
@@ -212,6 +213,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
                     created_at=datetime.now(timezone.utc),
                 ),
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="ETHUSDC",
                     price=100.0,
                     momentum_score=10.0,
@@ -250,6 +252,7 @@ def test_hold_trade_records_mark_to_market_pnl_with_latest_market_price() -> Non
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="BTCUSDC",
                     price=100.0,
                     momentum_score=10.0,
@@ -365,6 +368,7 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
                 "classification": "strong_bull",
                 "data_quality": "complete",
                 "structure_15m_status": "valid",
+                "ema_trend_15m": "above_ema",
                 "structure_reason": "15m_structure_holding_above_last_swing_low",
                 "rsi_1h": 50.0,
                 "support_status": "support_valid",
@@ -389,6 +393,7 @@ def test_decision_buy_does_not_write_trade() -> None:
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="ETHUSDC",
                     price=100.0,
                     momentum_score=12.0,
@@ -433,6 +438,7 @@ def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_o
                 "rank": 1,
                 "rsi_1h": 80.0,
                 "structure_15m_status": "valid",
+                "ema_trend_15m": "above_ema",
             },
             {
                 "symbol": "ETHUSDC",
@@ -441,6 +447,7 @@ def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_o
                 "rank": 2,
                 "rsi_1h": 50.0,
                 "structure_15m_status": "valid",
+                "ema_trend_15m": "above_ema",
             },
         ]
 
@@ -467,6 +474,7 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "momentum_score": 30.0,
                 "rank": 1,
                 "structure_15m_status": "valid",
+                "ema_trend_15m": "above_ema",
             },
             {
                 "symbol": "ETHUSDC",
@@ -481,6 +489,7 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "momentum_score": 28.0,
                 "rank": 3,
                 "structure_15m_status": "valid_bullish",
+                "ema_trend_15m": "above_ema",
             },
             {
                 "symbol": "BNBUSDC",
@@ -488,6 +497,7 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "momentum_score": 27.0,
                 "rank": 4,
                 "structure_15m_status": "valid",
+                "ema_trend_15m": "above_ema",
             },
         ]
 
@@ -506,6 +516,7 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="BTCUSDC",
                     price=100.0,
                     momentum_score=12.0,
@@ -550,6 +561,7 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="BTCUSDC",
                     price=100.0,
                     momentum_score=30.0,
@@ -566,6 +578,7 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
                     calculated_at=datetime.now(timezone.utc),
                 ),
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="ETHUSDC",
                     price=50.0,
                     momentum_score=29.0,
@@ -617,6 +630,7 @@ def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="BTCUSDC",
                     price=100.0,
                     momentum_score=30.0,
@@ -633,6 +647,7 @@ def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
                     calculated_at=datetime.now(timezone.utc),
                 ),
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="ETHUSDC",
                     price=50.0,
                     momentum_score=29.0,
@@ -649,6 +664,7 @@ def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
                     calculated_at=datetime.now(timezone.utc),
                 ),
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="SOLUSDC",
                     price=25.0,
                     momentum_score=28.0,
@@ -1084,6 +1100,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
         db.add_all(
             [
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="BTCUSDC",
                     price=100.0,
                     momentum_score=10.0,
@@ -1100,6 +1117,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
                     calculated_at=datetime.now(timezone.utc),
                 ),
                 MomentumCurrent(
+                    ema_trend_15m="above_ema",
                     symbol="ETHUSDC",
                     price=50.0,
                     momentum_score=12.0,
@@ -1243,3 +1261,37 @@ def test_ema_exit_does_not_apply_to_stock_etf():
         asset = {"structure_15m_status": "valid", "ema_trend_15m": "below_ema"}
         assert service._ema_exit(asset) is False
         assert service._exit_required(asset) is False
+
+
+@pytest.mark.parametrize("trend", ["at_ema", "unknown", "insufficient_data", None, "below_ema"])
+@pytest.mark.parametrize("scenario", ["initial", "better_rank", "broken_support"])
+def test_crypto_buys_require_explicit_above_ema20_and_try_next_asset(trend, scenario):
+    with _make_session() as db:
+        first = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        first[0].ema_trend_15m = trend
+        db.add_all(first)
+        db.add_all(_momentum_row("ETHUSDC", price=50, momentum_score=20, stored_rank=2))
+        if scenario != "initial":
+            db.add_all(_momentum_row("SOLUSDC", price=10, momentum_score=10, stored_rank=3,
+                structure_15m_status="broken_bearish" if scenario == "broken_support" else "valid"))
+            db.add(_open_engine_position("SOLUSDC", entry_price=10, entry_value=1000, quantity=100, stored_rank=3))
+        db.commit()
+        service = MomentumEngineService(db)
+        assert service.decision()["best_asset"]["symbol"] == "ETHUSDC"
+        service.run_once(force=True)
+        assert service._open_position().symbol == "ETHUSDC"
+
+
+@pytest.mark.parametrize("trend", ["at_ema", "unknown", "insufficient_data", None])
+def test_crypto_stays_cash_without_explicit_above_ema20(trend):
+    with _make_session() as db:
+        rows = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        rows[0].ema_trend_15m = trend
+        db.add_all(rows)
+        db.commit()
+        service = MomentumEngineService(db)
+        decision = service.decision()
+        assert decision["best_asset"] is None
+        assert decision["top_watch_asset"]["support_status"] == "blocked_not_above_ema20_15m"
+        service.run_once(force=True)
+        assert service._open_position() is None

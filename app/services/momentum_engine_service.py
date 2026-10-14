@@ -525,7 +525,14 @@ class MomentumEngineService:
         )
 
     def _entry_valid(self, asset: dict[str, Any]) -> bool:
-        return self._structure_valid(asset) and not self._entry_bearish_15m(asset)
+        return (
+            self._structure_valid(asset)
+            and not self._entry_bearish_15m(asset)
+            and self._entry_above_ema20(asset)
+        )
+
+    def _entry_above_ema20(self, asset: dict[str, Any]) -> bool:
+        return self.market_scope != "crypto" or asset.get("ema_trend_15m") == "above_ema"
 
     def _ema_exit(self, asset: dict[str, Any] | None) -> bool:
         # ema_trend_15m is calculated exclusively from closed candles.
@@ -552,6 +559,8 @@ class MomentumEngineService:
             return "support_broken_or_invalid"
         if self._entry_bearish_15m(asset):
             return "blocked_bearish_15m"
+        if not self._entry_above_ema20(asset):
+            return "blocked_not_above_ema20_15m"
         return "support_valid"
 
     def _decorate_entry(self, asset: dict[str, Any] | None) -> dict[str, Any] | None:
