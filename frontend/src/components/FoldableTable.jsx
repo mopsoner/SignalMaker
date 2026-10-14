@@ -9,6 +9,7 @@ export default function FoldableTable({
   defaultSortKey,
   defaultSortDir,
   hint,
+  actions,
   paginated = false,
   initialPageSize = 25,
   pageSizeOptions,
@@ -23,6 +24,7 @@ export default function FoldableTable({
         </div>
         <span className="collapse-indicator">⌄</span>
       </summary>
+      {actions ? <div className="page-actions" style={{ marginBottom: 10 }}>{actions}</div> : null}
       <div className="market-toolbar-hint" style={{ marginBottom: 10 }}>Rows: {count}</div>
       <DataTable
         columns={columns}
