@@ -1190,13 +1190,56 @@ def test_crypto_entry_filter_preserves_next_valid_candidate_selection() -> None:
         assert service._open_position().symbol == "ETHUSDC"
 
 
-def test_bearish_15m_entry_filter_does_not_sell_intact_current_position() -> None:
+@pytest.mark.parametrize("trend", ["above_ema", "at_ema", "unknown", "insufficient_data", None])
+def test_non_bearish_or_missing_ema_does_not_sell_intact_current_position(trend) -> None:
     with _make_session() as db:
         rows = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
-        rows[0].ema_trend_15m = "below_ema"
+        rows[0].ema_trend_15m = trend
         db.add_all([*rows, _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
         db.commit()
         service = MomentumEngineService(db)
         service.run_once(force=True)
         assert service._open_position().symbol == "BTCUSDC"
         assert not any(t.action.startswith("SELL") for t in db.scalars(select(MomentumEngineTrade)).all())
+
+
+@pytest.mark.parametrize("replacement", [True, False])
+def test_ema_exit_is_urgent_rotates_or_stays_cash_and_is_idempotent(replacement):
+    with _make_session() as db:
+        current = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
+        current[0].ema_trend_15m = "below_ema"
+        db.add_all([*current, _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
+        if replacement:
+            candidate = _momentum_row("ETHUSDC", price=50, momentum_score=20, stored_rank=2)
+            candidate[0].ema_trend_15m = "above_ema"
+            db.add_all(candidate)
+        db.commit()
+        service = MomentumEngineService(db)
+        decision = service.decision()
+        assert decision["cadence_due"] is False
+        assert decision["event_due"] is True
+        assert decision["due_reason"] == "below_ema20_15m"
+        assert decision["action"] == ("rotate" if replacement else "sell")
+        assert decision["open_position"]["structure_broken"] is False
+        assert decision["open_position"]["ema_exit"] is True
+        assert "below EMA20" in decision["reason"]
+        from app.schemas.momentum_engine import MomentumEngineDecision
+        serialized = MomentumEngineDecision.model_validate(decision).model_dump()
+        assert serialized["open_position"]["ema_exit"] is True
+        assert serialized["open_position"]["ema_trend_15m"] == "below_ema"
+        first = service.run_once()
+        actions = list(db.scalars(select(MomentumEngineTrade.action).order_by(MomentumEngineTrade.created_at)).all())
+        assert actions == ["SELL_BELOW_EMA20_15M", "BUY_NEXT_VALID_MOMENTUM_AFTER_EMA20_EXIT" if replacement else "STAY_CASH_AFTER_EMA20_EXIT"]
+        assert first["due_reason"] == "below_ema20_15m"
+        assert first["open_position"]["symbol"] == "ETHUSDC" if replacement else first["open_position"] is None
+        service.run_once()
+        assert list(db.scalars(select(MomentumEngineTrade.action).order_by(MomentumEngineTrade.created_at)).all()) == actions
+
+
+def test_ema_exit_does_not_apply_to_stock_etf():
+    from app.services.momentum_market import STOCK_ETF_CONTEXT
+    with _make_session() as db:
+        service = MomentumEngineService(db, context=STOCK_ETF_CONTEXT)
+        asset = {"structure_15m_status": "valid", "ema_trend_15m": "below_ema"}
+        assert service._ema_exit(asset) is False
+        assert service._exit_required(asset) is False

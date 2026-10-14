@@ -19,6 +19,8 @@ class MomentumEnginePositionRead(BaseModel):
     structure_15m_bias: str | None = None
     structure_reason: str | None = None
     structure_broken: bool | None = None
+    ema_exit: bool = False
+    ema_trend_15m: str | None = None
     support_status: str | None = None
     opened_at: datetime
     closed_at: datetime | None = None
