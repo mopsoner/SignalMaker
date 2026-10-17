@@ -205,6 +205,10 @@ or 24 hours on the Momentum page or in **Admin Settings → Bot runtime → Mome
 engine cadence**. The selection is persisted immediately and is used by the
 momentum worker on its next tick.
 
+Crypto momentum purchases (including rotations) require a momentum score of at
+least 20 points, even if runtime settings specify a lower minimum. A higher
+configured minimum is respected.
+
 Crypto momentum entries are blocked when RSI(14) is strictly above 80 on 15m
 or 1h, or for one hour after either RSI crosses from >= 80 to < 80. Cross times
 use candle closure times; restarting the worker does not reset the window.
