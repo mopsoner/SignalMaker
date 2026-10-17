@@ -31,6 +31,7 @@ class MomentumEngineService:
 
     STRATEGY = "momentum_rotation_v1"
     MODE = "paper"
+    MIN_CRYPTO_ENTRY_SCORE = 20.0
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
 
@@ -367,7 +368,7 @@ class MomentumEngineService:
             "total_pnl": round(total_pnl, 8),
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
-            "selection_min_momentum_score": min_momentum_score,
+            "selection_min_momentum_score": max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score) if self.market_scope == "crypto" else min_momentum_score,
             "open_position": open_position_payload,
             "best_asset": best_asset,
             "top_watch_asset": top_watch_asset,
@@ -655,6 +656,13 @@ class MomentumEngineService:
         decorated["selection_method"] = "momentum_rank_with_valid_15m_support"
         return decorated
 
+    def _score_eligible(self, asset: dict[str, Any], min_momentum_score: float) -> bool:
+        score = float(asset.get("momentum_score") or 0)
+        if self.market_scope == "crypto":
+            # Inclusive hard floor, even when runtime settings or API callers pass 0.
+            return score >= max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score)
+        return score > min_momentum_score
+
     def _top_watch_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str] | None = None) -> dict[str, Any] | None:
         excluded = exclude_symbols or set()
         for row in rankings:
@@ -662,7 +670,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             return self._decorate_entry(row)
         return None
@@ -674,7 +682,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
@@ -706,7 +714,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
