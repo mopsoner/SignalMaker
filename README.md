@@ -205,6 +205,20 @@ or 24 hours on the Momentum page or in **Admin Settings → Bot runtime → Mome
 engine cadence**. The selection is persisted immediately and is used by the
 momentum worker on its next tick.
 
+Crypto momentum purchases (including rotations) require a momentum score of at
+least 20 points, even if runtime settings specify a lower minimum. A higher
+configured minimum is respected.
+
+Crypto momentum entries are blocked when RSI(14) is strictly above 80 on 15m
+or 1h, or for one hour after either RSI crosses from >= 80 to < 80. Cross times
+use candle closure times; restarting the worker does not reset the window.
+A negative return between the two most recent closed 15m candles triggers a
+sale on the next worker tick without waiting for the hourly cadence. Unclosed
+candles are excluded. Existing rotation behavior applies: an eligible replacement
+may be bought after the sale, otherwise the engine stays in cash. Assets with a
+negative closed 15m return cannot be bought while that exit signal is active.
+These filters do not affect stock/ETF momentum.
+
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.

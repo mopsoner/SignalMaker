@@ -20,6 +20,9 @@ class MomentumEnginePositionRead(BaseModel):
     structure_reason: str | None = None
     structure_broken: bool | None = None
     ema_exit: bool = False
+    negative_15m_exit: bool = False
+    closed_change_15m: float | None = None
+    exit_description: str | None = None
     ema_trend_15m: str | None = None
     support_status: str | None = None
     opened_at: datetime

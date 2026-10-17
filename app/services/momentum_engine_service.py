@@ -19,7 +19,9 @@ class MomentumEngineService:
     """Dedicated backend paper engine for momentum rotation.
 
     Strategy v3:
-    - Exit risk uses bearish 15m structure or a crypto close below EMA20.
+    - Crypto entries reject RSI > 80 and downward crosses within one hour.
+    - Exit risk includes a negative closed-candle 15m return, bearish structure,
+      or a crypto close below EMA20.
     - Entry selection follows the momentum ranking order strictly.
     - The engine targets the highest-ranked available asset with positive price,
       sufficient momentum score, and intact 15m support/structure.
@@ -29,6 +31,7 @@ class MomentumEngineService:
 
     STRATEGY = "momentum_rotation_v1"
     MODE = "paper"
+    MIN_CRYPTO_ENTRY_SCORE = 20.0
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
 
@@ -134,16 +137,19 @@ class MomentumEngineService:
         current_broken = self._exit_required(current_asset) if current_asset else False
         if open_position:
             if current_broken:
+                negative_exit = self._negative_15m_exit(current_asset)
                 ema_exit = self._ema_exit(current_asset) and not self._structure_broken(current_asset)
                 exit_reason = (
-                    "Last closed 15m candle below EMA20; rotating to next eligible momentum asset"
-                    if ema_exit else "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+                    self._exit_description(current_asset) if negative_exit else (
+                        "Last closed 15m candle below EMA20; rotating to next eligible momentum asset"
+                        if ema_exit else "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+                    )
                 )
                 self._close_position(
                     open_position,
                     rankings=rankings,
                     reason=exit_reason,
-                    action="SELL_BELOW_EMA20_15M" if ema_exit else "SELL_ROTATE_OR_STRUCTURE_BREAK",
+                    action="SELL_NEGATIVE_15M" if negative_exit else ("SELL_BELOW_EMA20_15M" if ema_exit else "SELL_ROTATE_OR_STRUCTURE_BREAK"),
                 )
                 replacement_asset = self._best_ranked_asset_with_valid_structure(
                     rankings=rankings,
@@ -157,13 +163,13 @@ class MomentumEngineService:
                         self._open_new_position(
                             replacement_asset,
                             cash,
-                            action="BUY_NEXT_VALID_MOMENTUM_AFTER_EMA20_EXIT" if ema_exit else "BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK",
+                            action="BUY_NEXT_VALID_MOMENTUM_AFTER_NEGATIVE_15M" if negative_exit else ("BUY_NEXT_VALID_MOMENTUM_AFTER_EMA20_EXIT" if ema_exit else "BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK"),
                             reason=exit_reason,
                         )
                     else:
-                        self._record_trade(action="CHECK_NO_CASH", symbol=replacement_asset["symbol"], price=float(replacement_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason="No cash available after 15m EMA20 exit" if ema_exit else "No cash available after 15m support break on current asset")
+                        self._record_trade(action="CHECK_NO_CASH", symbol=replacement_asset["symbol"], price=float(replacement_asset.get("price") or 0), quantity=0.0, value=0.0, pnl=0.0, reason=f"No cash available after exit: {exit_reason}")
                 else:
-                    self._record_trade(action="STAY_CASH_AFTER_EMA20_EXIT" if ema_exit else "STAY_CASH_AFTER_STRUCTURE_BREAK", symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason="Last closed 15m candle below EMA20; no eligible replacement momentum asset" if ema_exit else "15m support broken on current asset; no ranked momentum asset has valid 15m support")
+                    self._record_trade(action="STAY_CASH_AFTER_NEGATIVE_15M" if negative_exit else ("STAY_CASH_AFTER_EMA20_EXIT" if ema_exit else "STAY_CASH_AFTER_STRUCTURE_BREAK"), symbol="NONE", price=0.0, quantity=0.0, value=0.0, pnl=0.0, reason=f"{exit_reason}; no eligible replacement momentum asset")
             else:
                 candidate = self._best_ranked_asset_with_valid_structure(
                     rankings=rankings,
@@ -213,7 +219,10 @@ class MomentumEngineService:
                 min_momentum_score=min_momentum_score,
             )
             status = self._status_for_execution(status, before=before, force=force)
-            decision = self._decision_from_status(status)
+            # Preserve the pre-execution sell/rotate intent for the live executor;
+            # the paper ledger has already closed the position at this point.
+            decision_status = before if self._negative_15m_exit(current_asset) else status
+            decision = self._decision_from_status(decision_status)
             self._save_current_decision(decision)
             self.db.commit()
             return status
@@ -262,7 +271,51 @@ class MomentumEngineService:
         return status
 
     def _rankings(self) -> list[dict[str, Any]]:
-        return self.ranking_loader(300)
+        rankings = [dict(row) for row in self.ranking_loader(300)]
+        if self.market_scope != "crypto" or not rankings:
+            return rankings
+        now = datetime.now(timezone.utc)
+        # Bound the result per symbol/timeframe in one query, excluding live candles.
+        recent = select(
+            MarketCandle.symbol, MarketCandle.interval, MarketCandle.close,
+            MarketCandle.close_time,
+            func.row_number().over(
+                partition_by=(MarketCandle.symbol, MarketCandle.interval),
+                order_by=MarketCandle.close_time.desc(),
+            ).label("candle_rank"),
+        ).where(
+            MarketCandle.symbol.in_([row["symbol"] for row in rankings]),
+            MarketCandle.interval.in_(["15m", "1h"]),
+            MarketCandle.close_time <= int(now.timestamp() * 1000),
+        ).subquery()
+        histories: dict[tuple[str, str], list[Any]] = {}
+        for candle in self.db.execute(
+            select(recent).where(recent.c.candle_rank <= 20)
+            .order_by(recent.c.close_time)
+        ):
+            histories.setdefault((candle.symbol, candle.interval), []).append(candle)
+        calculator = object.__new__(MomentumService)
+        cutoff_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
+        for asset in rankings:
+            asset["rsi_recent_cross_down"] = False
+            asset["closed_change_15m"] = None
+            for interval in ("15m", "1h"):
+                candles = histories.get((asset["symbol"], interval), [])
+                closes = [float(candle.close) for candle in candles]
+                if interval == "15m" and len(closes) >= 2 and closes[-2] > 0:
+                    asset["closed_change_15m"] = (closes[-1] / closes[-2] - 1) * 100
+                    asset["closed_change_15m_time"] = candles[-1].close_time
+                if len(closes) <= MomentumService.RSI_PERIOD:
+                    continue
+                asset[f"rsi_{interval}"] = calculator._rsi(closes)
+                for index in range(MomentumService.RSI_PERIOD + 1, len(closes)):
+                    if candles[index].close_time <= cutoff_ms:
+                        continue
+                    before = calculator._rsi(closes[:index])
+                    after = calculator._rsi(closes[:index + 1])
+                    if before is not None and after is not None and before >= 80 and after < 80:
+                        asset["rsi_recent_cross_down"] = True
+        return rankings
 
     def _build_status(self, *, rankings: list[dict[str, Any]], cadence_hours: int, starting_capital: float, min_momentum_score: float) -> dict[str, Any]:
         open_position = self._open_position()
@@ -315,7 +368,7 @@ class MomentumEngineService:
             "total_pnl": round(total_pnl, 8),
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
-            "selection_min_momentum_score": min_momentum_score,
+            "selection_min_momentum_score": max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score) if self.market_scope == "crypto" else min_momentum_score,
             "open_position": open_position_payload,
             "best_asset": best_asset,
             "top_watch_asset": top_watch_asset,
@@ -338,7 +391,7 @@ class MomentumEngineService:
     ) -> tuple[bool, str | None, str | None]:
         """Return urgent, idempotent triggers independent of the hourly cadence.
 
-        Broken support and crypto closes below EMA20 are urgent. A newly eligible better-ranked asset is *not*
+        Broken support, negative crypto 15m returns and closes below EMA20 are urgent. A newly eligible better-ranked asset is *not*
         urgent: rotation opportunities are deliberately evaluated only on the
         cadence (or when forced), avoiding churn on every five-minute poll.
         """
@@ -346,9 +399,10 @@ class MomentumEngineService:
         self._pending_event_key = None
         if not open_position or not self._exit_required(current_asset):
             return False, None, None
-        event_reason = "support_broken" if self._structure_broken(current_asset) else "below_ema20_15m"
+        event_reason = "negative_change_15m" if self._negative_15m_exit(current_asset) else ("support_broken" if self._structure_broken(current_asset) else "below_ema20_15m")
         event_state = (
-            current_asset.get("structure_broken_at")
+            current_asset.get("closed_change_15m_time")
+            or current_asset.get("structure_broken_at")
             or current_asset.get("momentum_candle_time_15m")
             or current_asset.get("calculated_at")
             or current_asset.get("structure_reason")
@@ -384,8 +438,8 @@ class MomentumEngineService:
 
         if open_position:
             symbol = open_position.get("symbol")
-            if open_position.get("structure_broken") or open_position.get("ema_exit"):
-                exit_description = "Support 15m cassé" if open_position.get("structure_broken") else "Last closed 15m candle below EMA20"
+            if open_position.get("structure_broken") or open_position.get("ema_exit") or open_position.get("negative_15m_exit"):
+                exit_description = open_position.get("exit_description") or "15m risk exit"
                 if best_asset:
                     action = "rotate"
                     target_symbol = best_asset.get("symbol")
@@ -529,7 +583,31 @@ class MomentumEngineService:
             self._structure_valid(asset)
             and not self._entry_bearish_15m(asset)
             and self._entry_above_ema20(asset)
+            and self._rsi_entry_block(asset) is None
+            and not self._negative_15m_exit(asset)
         )
+
+    def _rsi_entry_block(self, asset: dict[str, Any]) -> str | None:
+        if self.market_scope != "crypto":
+            return None
+        if any(asset.get(f"rsi_{interval}") is not None and float(asset[f"rsi_{interval}"]) > 80
+               for interval in ("15m", "1h")):
+            return "blocked_rsi_above_80"
+        if asset.get("rsi_recent_cross_down"):
+            return "blocked_rsi_cross_down_1h"
+        return None
+
+    def _negative_15m_exit(self, asset: dict[str, Any] | None) -> bool:
+        return bool(asset and self.market_scope == "crypto"
+                    and asset.get("closed_change_15m") is not None
+                    and float(asset["closed_change_15m"]) < 0)
+
+    def _exit_description(self, asset: dict[str, Any] | None) -> str:
+        if self._negative_15m_exit(asset):
+            return "Negative 15m variation between the last two closed candles"
+        if self._structure_broken(asset):
+            return "15m support broken"
+        return "Last closed 15m candle below EMA20"
 
     def _entry_above_ema20(self, asset: dict[str, Any]) -> bool:
         return self.market_scope != "crypto" or asset.get("ema_trend_15m") == "above_ema"
@@ -539,7 +617,7 @@ class MomentumEngineService:
         return bool(asset and self.market_scope == "crypto" and asset.get("ema_trend_15m") == "below_ema")
 
     def _exit_required(self, asset: dict[str, Any] | None) -> bool:
-        return self._structure_broken(asset) or self._ema_exit(asset)
+        return self._structure_broken(asset) or self._ema_exit(asset) or self._negative_15m_exit(asset)
 
     def _structure_broken(self, asset: dict[str, Any] | None) -> bool:
         if not asset:
@@ -561,6 +639,11 @@ class MomentumEngineService:
             return "blocked_bearish_15m"
         if not self._entry_above_ema20(asset):
             return "blocked_not_above_ema20_15m"
+        rsi_block = self._rsi_entry_block(asset)
+        if rsi_block:
+            return rsi_block
+        if self._negative_15m_exit(asset):
+            return "blocked_negative_15m"
         return "support_valid"
 
     def _decorate_entry(self, asset: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -573,6 +656,13 @@ class MomentumEngineService:
         decorated["selection_method"] = "momentum_rank_with_valid_15m_support"
         return decorated
 
+    def _score_eligible(self, asset: dict[str, Any], min_momentum_score: float) -> bool:
+        score = float(asset.get("momentum_score") or 0)
+        if self.market_scope == "crypto":
+            # Inclusive hard floor, even when runtime settings or API callers pass 0.
+            return score >= max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score)
+        return score > min_momentum_score
+
     def _top_watch_asset(self, *, rankings: list[dict[str, Any]], min_momentum_score: float, exclude_symbols: set[str] | None = None) -> dict[str, Any] | None:
         excluded = exclude_symbols or set()
         for row in rankings:
@@ -580,7 +670,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             return self._decorate_entry(row)
         return None
@@ -592,7 +682,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
@@ -624,7 +714,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if float(row.get("momentum_score") or 0) <= min_momentum_score:
+            if not self._score_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
@@ -709,6 +799,9 @@ class MomentumEngineService:
             "structure_reason": current_asset.get("structure_reason") if current_asset else "asset_missing_from_ranking",
             "structure_broken": self._structure_broken(current_asset),
             "ema_exit": self._ema_exit(current_asset),
+            "negative_15m_exit": self._negative_15m_exit(current_asset),
+            "exit_description": self._exit_description(current_asset) if self._exit_required(current_asset) else None,
+            "closed_change_15m": current_asset.get("closed_change_15m") if current_asset else None,
             "ema_trend_15m": current_asset.get("ema_trend_15m") if current_asset else None,
             "rsi_1h": current_asset.get("rsi_1h") if current_asset else None,
             "support_status": self._support_status(current_asset) if current_asset else "blocked_missing_asset",
@@ -861,7 +954,7 @@ class MomentumEngineService:
     def _recommendation(self, *, open_position: MomentumEnginePosition | None, current_asset: dict[str, Any] | None, best_asset: dict[str, Any] | None, top_watch_asset: dict[str, Any] | None, due_now: bool) -> str:
         if open_position and self._exit_required(current_asset):
             target = best_asset.get("symbol") if best_asset else "cash"
-            cause = "support 15m cassé" if self._structure_broken(current_asset) else "last closed 15m candle below EMA20"
+            cause = self._exit_description(current_asset)
             return f"Sell {open_position.symbol}: {cause}. Rotate to {target}."
         if open_position and best_asset:
             return f"Rotate from {open_position.symbol} to {best_asset['symbol']} — meilleur momentum disponible avec support 15m valide."
