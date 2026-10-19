@@ -94,3 +94,34 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
         buys = list(db.scalars(select(MomentumEngineTrade).where(
             MomentumEngineTrade.action.like("BUY%"))))
         assert [trade.symbol for trade in buys] == ["BNBUSDC", "ETHUSDC", "BTCUSDC"]
+
+
+@pytest.mark.parametrize("starting_capital", [1000, 0])
+def test_cash_entry_bypasses_cadence_only_when_funded_and_eligible(starting_capital):
+    from app.models.momentum_current import MomentumCurrent
+    with _make_session() as db:
+        rows = _momentum_row("ETHUSDC", price=50, momentum_score=15, stored_rank=1)
+        rows[0].classification = "neutral_bull"
+        db.add_all(rows)
+        db.commit()
+        service = MomentumEngineService(db)
+        service.run_once(force=True, starting_capital=starting_capital)
+        assert service.status(starting_capital=starting_capital)["due_now"] is False
+        db.scalar(select(MomentumCurrent)).classification = "bull"
+        db.commit()
+        preview = service.decision(starting_capital=starting_capital)
+        assert preview["cadence_due"] is False
+        assert preview["event_due"] is bool(starting_capital)
+        assert preview["due_now"] is bool(starting_capital)
+        before_count = len(list(db.scalars(select(MomentumEngineTrade))))
+        result = service.run_once(starting_capital=starting_capital)
+        if starting_capital:
+            assert preview["action"] == "buy"
+            assert result["due_reason"] == "eligible_while_cash"
+            assert service._open_position().symbol == "ETHUSDC"
+            assert len(list(db.scalars(select(MomentumEngineTrade)))) == before_count + 1
+            service.run_once(starting_capital=starting_capital)
+            assert len(list(db.scalars(select(MomentumEngineTrade)))) == before_count + 1
+        else:
+            assert service._open_position() is None
+            assert len(list(db.scalars(select(MomentumEngineTrade)))) == before_count
