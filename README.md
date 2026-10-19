@@ -341,3 +341,17 @@ transactions are released between provider requests. OpenAI storage is disabled
 for these requests (`store: false`). Tool integration is covered by mocked API
 round trips and database tests; a live OpenAI run still requires credentials and
 network access.
+
+### Crypto momentum entry robustness
+
+New crypto momentum purchases additionally require `momentum_15m` strictly above
+`MOMENTUM_ENTRY_MIN_15M` (default 15) and global `momentum_acceleration` strictly above
+`MOMENTUM_ENTRY_MIN_ACCELERATION` (default 5). The acceleration field is the
+existing weighted aggregate across available timeframes, not the 15m-only field.
+Missing, invalid or nonfinite values block entry. Existing Bull/Strong Bull,
+price, RSI, EMA and support checks remain in force. These filters also apply to
+replacement purchases after exits, but do not create an exit signal for a held
+position. Stock/ETF selection remains unchanged. Thresholds are returned by the
+crypto engine status and included in AI snapshots. Restart the engine workers
+and API after changing these server environment variables. This change alone
+does not establish that returns improve; evaluate it with historical data.

@@ -75,6 +75,9 @@ class Settings(BaseSettings):
             )
         return self
 
+    momentum_entry_min_15m: float = Field(default=15.0, alias="MOMENTUM_ENTRY_MIN_15M", allow_inf_nan=False)
+    momentum_entry_min_acceleration: float = Field(default=5.0, alias="MOMENTUM_ENTRY_MIN_ACCELERATION", ge=0, allow_inf_nan=False)
+
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
 

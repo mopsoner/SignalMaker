@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from math import isfinite
+
+from app.core.config import settings
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
@@ -363,6 +366,8 @@ class MomentumEngineService:
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
             "selection_min_momentum_score": None if self.market_scope == "crypto" else min_momentum_score,
+            "selection_min_momentum_15m": settings.momentum_entry_min_15m if self.market_scope == "crypto" else None,
+            "selection_min_acceleration": settings.momentum_entry_min_acceleration if self.market_scope == "crypto" else None,
             "selection_classes": list(self.CRYPTO_ENTRY_CLASSES) if self.market_scope == "crypto" else None,
             "open_position": open_position_payload,
             "best_asset": best_asset,
@@ -653,7 +658,18 @@ class MomentumEngineService:
 
     def _entry_eligible(self, asset: dict[str, Any], min_momentum_score: float) -> bool:
         if self.market_scope == "crypto":
-            return asset.get("classification") in self.CRYPTO_ENTRY_CLASSES
+            if asset.get("classification") not in self.CRYPTO_ENTRY_CLASSES:
+                return False
+            try:
+                momentum_15m = float(asset["momentum_15m"])
+                acceleration = float(asset["momentum_acceleration"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return False
+            return (
+                isfinite(momentum_15m) and isfinite(acceleration)
+                and momentum_15m > settings.momentum_entry_min_15m
+                and acceleration > settings.momentum_entry_min_acceleration
+            )
         return float(asset.get("momentum_score") or 0) > min_momentum_score
 
     def _entry_order(self, rankings: list[dict[str, Any]]) -> list[dict[str, Any]]:
