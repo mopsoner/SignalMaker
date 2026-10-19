@@ -25,6 +25,11 @@ def test_snapshot_is_scoped_and_excludes_future_candles():
         db.commit()
         snapshot = MomentumAIService(db).snapshot()
         assert [p['position_id'] for p in snapshot['positions']] == ['crypto']
+        assert snapshot['entry_filters'] == {
+            'classes': ['bull', 'strong_bull'],
+            'prealert_strictly_above_zero': ['momentum_delta_15m', 'momentum_delta_1h', 'momentum_acceleration_1h'],
+            'order': 'momentum_score_desc', 'veto_active_exit': True,
+        }
         assert len(snapshot['price_history']['BTCUSD']['1h']) == 1
         assert snapshot['price_history']['BTCUSD']['1h'][0]['close_time'] < now
         assert not db.new and not db.dirty and not db.deleted

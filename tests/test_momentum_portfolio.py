@@ -20,6 +20,8 @@ def test_opens_three_distinct_equal_positions_and_reports_total_equity():
         engine = MomentumEngineService(db)
         preview = engine.decision(starting_capital=900)
         assert len(preview['operations']) == 3
+        assert [op['symbol'] for op in preview['operations']] == ['BTCUSDC', 'ETHUSDC', 'SOLUSDC']
+        assert MomentumEngineDecision.model_validate(preview).selection_prealert_fields == ['momentum_delta_15m', 'momentum_delta_1h', 'momentum_acceleration_1h']
         result = engine.run_once(starting_capital=900)
         assert len(result['open_positions']) == 3
         assert len({p['symbol'] for p in result['open_positions']}) == 3
@@ -102,7 +104,7 @@ def test_portfolio_filters_reject_weak_entry_and_hourly_confirmation_holds_indep
     with _make_session() as db:
         seed(db, ('BTCUSDC', 'ETHUSDC', 'SOLUSDC'))
         weak = db.scalar(select(MomentumCurrent).where(MomentumCurrent.symbol == 'SOLUSDC'))
-        weak.momentum_acceleration = 5
+        weak.momentum_delta_15m = 0
         strong = db.scalar(select(MomentumCurrent).where(MomentumCurrent.symbol == 'BTCUSDC'))
         strong.momentum_1h = 10
         db.commit()
@@ -161,3 +163,36 @@ def test_default_initial_cash_is_1000_regardless_of_capacity(monkeypatch, capaci
         assert len(result['open_positions']) == capacity
         assert [p['entry_value'] for p in result['open_positions']] == pytest.approx([1000/capacity]*capacity)
         assert result['cash'] == pytest.approx(0)
+
+
+def test_full_portfolio_keeps_holdings_after_prealert_loss_and_better_candidate():
+    with _make_session() as db:
+        seed(db, ('BTCUSDC', 'ETHUSDC', 'SOLUSDC'))
+        engine = MomentumEngineService(db)
+        engine.run_once(starting_capital=900)
+        held_ids = {p.position_id for p in engine._open_positions()}
+        for row in db.scalars(select(MomentumCurrent)):
+            row.momentum_delta_15m = -1
+            row.classification = 'neutral_bull'
+            row.momentum_score = 1
+        db.add_all(_momentum_row('XRPUSDC', price=100, momentum_score=100, stored_rank=1))
+        db.commit()
+        result = engine.run_once(force=True, starting_capital=900)
+        assert {p['position_id'] for p in result['open_positions']} == held_ids
+        assert engine.current_decision()['operations'] == []
+        assert not list(db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action.like('SELL%'))))
+
+
+@pytest.mark.parametrize('exit_field,exit_value', [
+    ('structure_15m_status', 'broken_bearish'),
+    ('mss_15m_bearish', True), ('bos_15m_bearish', True),
+    ('ema_trend_15m', 'below_ema'),
+])
+def test_prealert_cannot_override_active_exit(exit_field, exit_value):
+    with _make_session() as db:
+        engine = MomentumEngineService(db)
+        eligible = {'symbol': 'BTCUSDC', 'price': 100, 'momentum_score': 100,
+                    'classification': 'strong_bull', 'momentum_delta_15m': 1,
+                    'momentum_delta_1h': 1, 'momentum_acceleration_1h': 1,
+                    exit_field: exit_value}
+        assert engine._best_ranked_asset_with_valid_structure(rankings=[eligible], min_momentum_score=0) is None

@@ -41,7 +41,7 @@ class MomentumPortfolioMixin:
         allocation = cash / slots if slots else 0
         buys = [{'action': 'buy', 'symbol': asset['symbol'], 'buy_symbol': asset['symbol'],
                  'allocation_divisor': slots - index, 'total_notional': allocation,
-                 'reason': 'Eligible momentum entry with valid support; equal allocation to free slots'}
+                 'reason': 'Bull/Strong Bull prealert with no active exit; highest scores first, equal allocation to free slots'}
                 for index, asset in enumerate(entries) if allocation > 0]
         return positions, exits, entries, buys
 
@@ -73,9 +73,8 @@ class MomentumPortfolioMixin:
             'due_reason': 'portfolio_risk_exit' if exits else ('eligible_free_slot' if buys else ('cadence_elapsed' if cadence_due else None)),
             'recommendation': f'{len(positions)}/{self.context.max_positions} positions; {len(exits)} exits and {len(buys)} entries available.',
             'operations': exits + buys,
-            'selection_min_momentum_score': None, 'selection_classes': list(self.CRYPTO_ENTRY_CLASSES),
-            'selection_min_momentum_15m': settings.momentum_entry_min_15m,
-            'selection_min_acceleration': settings.momentum_entry_min_acceleration,
+            'selection_min_momentum_score': None,
+            **self._selection_metadata(),
             'exit_max_momentum_1h': settings.momentum_exit_max_1h,
             'trades': self._recent_trades(),
         }

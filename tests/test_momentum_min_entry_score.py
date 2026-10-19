@@ -48,7 +48,7 @@ def test_crypto_purchases_require_bull_class(classification, eligible, scenario)
 def test_crypto_uses_classification_instead_of_numeric_threshold(classification, score, minimum, eligible):
     with _make_session() as db:
         assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible(
-            {"classification": classification, "momentum_score": score, "momentum_15m": 16.0, "momentum_acceleration": 6.0}, minimum) is eligible
+            {"classification": classification, "momentum_score": score, "momentum_15m": 16.0, "momentum_acceleration": 6.0, "momentum_delta_15m": 1, "momentum_delta_1h": 1, "momentum_acceleration_1h": 1}, minimum) is eligible
 
 
 def test_missing_class_is_blocked_and_stock_etf_threshold_is_preserved():
@@ -74,7 +74,7 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
             db.add_all(rows)
         db.commit()
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
-        for expected in ["BNBUSDC", "ETHUSDC", "BTCUSDC"]:
+        for expected in ["BTCUSDC", "ETHUSDC", "BNBUSDC"]:
             preview = service.decision(min_momentum_score=10)
             assert preview["best_asset"]["symbol"] == expected
             service.run_once(force=True, min_momentum_score=10)
@@ -86,7 +86,7 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
                 assert hold["target_symbol"] == expected
                 service.run_once(force=True, min_momentum_score=10)
                 assert service._open_position().symbol == expected
-            if expected != "BTCUSDC":
+            if expected != "BNBUSDC":
                 from app.models.momentum_structure_current import MomentumStructureCurrent
                 structure = db.scalar(select(MomentumStructureCurrent).where(
                     MomentumStructureCurrent.symbol == expected))
@@ -94,10 +94,10 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
                 db.commit()
         assert service.decision(min_momentum_score=10)["best_asset"] is None
         service.run_once(force=True, min_momentum_score=10)
-        assert service._open_position().symbol == "BTCUSDC"
+        assert service._open_position().symbol == "BNBUSDC"
         buys = list(db.scalars(select(MomentumEngineTrade).where(
             MomentumEngineTrade.action.like("BUY%"))))
-        assert [trade.symbol for trade in buys] == ["BNBUSDC", "ETHUSDC", "BTCUSDC"]
+        assert [trade.symbol for trade in buys] == ["BTCUSDC", "ETHUSDC", "BNBUSDC"]
 
 
 @pytest.mark.parametrize("starting_capital", [1000, 0])

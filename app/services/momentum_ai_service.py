@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.momentum_prealert import PREALERT_FIELDS
 from app.models.market_candle import MarketCandle
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
@@ -68,15 +69,16 @@ class MomentumAIService:
             'as_of': now.isoformat(), 'history_since': since.isoformat(), 'scope': 'crypto / momentum_rotation_v1',
             'exit_filters': {'negative_15m_requires_momentum_1h_at_or_below': settings.momentum_exit_max_1h,
                              'missing_1h': 'fallback_exit', 'support_and_ema_exits': 'independent'},
-            'entry_filters': {'momentum_15m_strictly_above': settings.momentum_entry_min_15m,
-                              'global_acceleration_strictly_above': settings.momentum_entry_min_acceleration},
+            'entry_filters': {'classes': ['bull', 'strong_bull'],
+                              'prealert_strictly_above_zero': list(PREALERT_FIELDS),
+                              'order': 'momentum_score_desc', 'veto_active_exit': True},
             'limits': {'positions': 200, 'trades': 100, 'decisions': 50, 'ranking': 30, 'orders': 100, 'symbols': 20, 'candles_per_interval': 32},
             'truncated': {'positions': len(positions)>200, 'trades': len(trades)>100, 'decisions': len(decisions)>50,
                           'ranking': len(ranking)>30, 'orders': len(orders)>100, 'symbols': len(symbols)>20},
             'positions': [fields(r, 'position_id symbol status quantity entry_price mark_price entry_score entry_rank unrealized_pnl opened_at closed_at') for r in positions[:200]],
             'trades': [fields(r, 'trade_id symbol action price quantity pnl reason created_at') for r in trades[:100]],
             'decisions': [fields(r, 'decision_id produced_at payload_json') for r in decisions[:50]],
-            'ranking': [fields(r, 'symbol price momentum_score rank rsi_15m rsi_1h rsi_4h ema_trend_15m ema_trend_1h ema_trend_4h momentum_acceleration data_quality calculated_at') for r in ranking[:30]],
+            'ranking': [fields(r, 'symbol price momentum_score rank rsi_15m rsi_1h rsi_4h ema_trend_15m ema_trend_1h ema_trend_4h momentum_acceleration momentum_delta_15m momentum_delta_1h momentum_acceleration_1h data_quality calculated_at') for r in ranking[:30]],
             'orders': [fields(r, 'order_id position_id symbol side order_type status requested_price filled_price created_at') for r in orders[:100]],
             'price_history': candles,
             'limitations': ['Only orders linked to sampled momentum positions are included; unlinked orders are unavailable.',

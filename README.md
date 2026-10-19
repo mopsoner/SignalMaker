@@ -205,19 +205,10 @@ or 24 hours on the Momentum page or in **Admin Settings → Bot runtime → Mome
 engine cadence**. The selection is persisted immediately and is used by the
 momentum worker on its next tick.
 
-Crypto momentum purchases (including rotations) require a momentum score of at
-least 20 points, even if runtime settings specify a lower minimum. A higher
-configured minimum is respected.
-
-Crypto momentum entries are blocked when RSI(14) is strictly above 80 on 15m
-or 1h, or for one hour after either RSI crosses from >= 80 to < 80. Cross times
-use candle closure times; restarting the worker does not reset the window.
-A negative return between the two most recent closed 15m candles triggers a
-sale on the next worker tick without waiting for the hourly cadence. Unclosed
-candles are excluded. Existing rotation behavior applies: an eligible replacement
-may be bought after the sale, otherwise the engine stays in cash. Assets with a
-negative closed 15m return cannot be bought while that exit signal is active.
-These filters do not affect stock/ETF momentum.
+Crypto momentum purchases, including replacements after exits, use the
+To The MOOn prealert entry rule documented below. Existing closed-candle exits
+can trigger a sale before the scheduled cadence; an eligible replacement is then
+bought if available, otherwise the engine keeps cash. Stock/ETF rules are unchanged.
 
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
@@ -309,9 +300,10 @@ Missing, invalid or nonfinite inputs never trigger a badge. Classification and
 score do not add extra requirements: an early recovery can qualify before Bull.
 The shared view also supports stock/ETF rows when those indicators are available.
 
-This is a visual early warning based on the existing closed-candle indicators;
-it does not change the score or trading rules and does not guarantee a price rise.
-No backend change or migration is required. Rebuild/redeploy the frontend.
+The badge is an early warning based on existing closed-candle indicators and does
+not change the momentum score. The crypto engine reuses these three conditions,
+with Bull/Strong Bull classification and the exit veto described below. The badge
+alone can also appear on other classifications. It does not guarantee a price rise.
 
 ### Global momentum AI review
 
@@ -357,19 +349,31 @@ for these requests (`store: false`). Tool integration is covered by mocked API
 round trips and database tests; a live OpenAI run still requires credentials and
 network access.
 
-### Crypto momentum entry robustness
+### Crypto momentum prealert entries
 
-New crypto momentum purchases additionally require `momentum_15m` strictly above
-`MOMENTUM_ENTRY_MIN_15M` (default 15) and global `momentum_acceleration` strictly above
-`MOMENTUM_ENTRY_MIN_ACCELERATION` (default 5). The acceleration field is the
-existing weighted aggregate across available timeframes, not the 15m-only field.
-Missing, invalid or nonfinite values block entry. Existing Bull/Strong Bull,
-price, RSI, EMA and support checks remain in force. These filters also apply to
-replacement purchases after exits, but do not create an exit signal for a held
-position. Stock/ETF selection remains unchanged. Thresholds are returned by the
-crypto engine status and included in AI snapshots. Restart the engine workers
-and API after changing these server environment variables. This change alone
-does not establish that returns improve; evaluate it with historical data.
+A new crypto purchase requires `classification` equal to `bull` or `strong_bull`,
+and all three To The MOOn inputs strictly above zero: `momentum_delta_15m`,
+`momentum_delta_1h` and `momentum_acceleration_1h`. Missing, invalid or nonfinite
+values block eligibility. Among eligible assets with a finite positive price,
+the engine fills up to `MOMENTUM_MAX_POSITIONS` slots by descending momentum score
+(rank ascending, then symbol, break ties). Held symbols are excluded.
+
+An active exit vetoes the purchase: broken bearish structure/BOS/MSS, a last
+closed 15m candle below EMA20, or a negative closed 15m variation confirmed by
+hourly momentum (including its existing missing-data fallback). Unknown or neutral
+structure/EMA states do not independently block an otherwise eligible entry.
+RSI levels/crosses, `momentum_15m > 15` and aggregate acceleration `> 5` are no
+longer entry filters. `MOMENTUM_ENTRY_MIN_15M` and
+`MOMENTUM_ENTRY_MIN_ACCELERATION` remain accepted for configuration compatibility
+but are ignored; their legacy status thresholds are returned as null.
+
+Each free slot receives available cash divided by remaining vacancies. Existing
+exit rules remain unchanged. Losing the badge, a lower rank or a non-Bull
+classification never forces a sale. Replacements use the same entry rule after
+exits, with cash retained when no candidate qualifies. Stock/ETF selection remains
+unchanged. Status/decision responses and AI snapshots expose the new rule; entry
+metadata records the three prealert inputs. Restart the API and momentum workers
+after deploying the code; rebuild the frontend. No database migration is needed.
 
 ### Confirmation of negative-15m exits
 
@@ -378,7 +382,7 @@ a variation-based exit only when stored `momentum_1h <= MOMENTUM_EXIT_MAX_1H`
 (default 0). Positive hourly momentum above the threshold suppresses this exit.
 Missing, invalid or nonfinite hourly momentum retains the prior negative-15m exit
 as a fallback. Support-break and below-EMA20 exits remain independent. Negative
-15m returns still block new entries regardless of hourly momentum, and Stock/ETF
+15m returns veto new entries only when this exit condition is active; Stock/ETF
 behavior is unchanged. The hourly value is the existing stored ranking indicator,
 not a newly fetched price or an RSI condition. Exit reasons distinguish confirmed
 exits and missing-data fallbacks. The threshold is exposed in status and AI
