@@ -297,3 +297,47 @@ restent obligatoires. Une erreur de lancement n’empêche pas les autres worker
 ni l’API de démarrer ; les logs identifient le worker concerné.
 Les scripts VM ne lancent plus de workers directement, ce qui évite les doubles
 lancements. Les contrôles Ops/Logs et le superviseur systemd restent utilisables.
+
+### Global momentum AI review
+
+Momentum → IA (`/momentum-ai`) includes an on-demand global review of the crypto momentum
+portfolio, recent trades and decisions, ranking indicators and stored Kraken
+15m/1h/4h candles. It proposes evidence-based improvements to test; it does not
+change trading rules or execute orders. Reports remain in the current browser
+session and are not persisted.
+
+Set server-side `OPENAI_API_KEY` and optionally `OPENAI_MODEL` (default
+`gpt-4.1-mini`), allow HTTPS to `api.openai.com`, and restart the API.
+Use the configured operator key in the UI; `POST /api/v1/momentum-engine/analysis`
+requires operator authentication. Each click sends a bounded snapshot to OpenAI
+and incurs API usage. Missing credentials return 503, no data returns 422 and
+provider failures return 502 without exposing upstream credentials or payloads.
+The report states its timestamp, sampling limits and data limitations. Orders
+without a link to sampled momentum positions are excluded. Validate proposed
+rules out of sample with fees and slippage before applying them.
+
+The IA page offers global, loss-audit, entry/exit and improvement-plan modes,
+an optional question and 1/7/30-day trade and decision history. Current positions
+and ranking remain current; candle context remains capped at 32 bars per interval.
+A local preview (`GET /api/v1/momentum-engine/analysis/preview?days=7`, operator
+key required) shows sample counts, loss counts, missing PnL and candle coverage
+without calling OpenAI. Up to ten reports can be consulted while the page stays
+open and exported to Markdown. Reports are not persisted across page reloads.
+
+The model can also invoke `read_momentum_data` during analysis. The server
+validates structured arguments and dispatches to existing `MomentumService`
+ranking and `MomentumEngineService.current_decision` read functions, or scoped
+SQLAlchemy SELECT queries over existing positions, trades, orders, decisions and
+Kraken candle models. Historical candle requests accept an ISO `before` timestamp;
+row queries support pagination (200 rows/call, offset at most 5000). Order reads
+are linked to crypto momentum positions. No arbitrary SQL, Python evaluation,
+order execution, ingestion, configuration writes or recalculation functions are
+exposed. These tools query stored data, not fresh exchange prices.
+
+A report uses at most eight tool calls over four tool rounds and a final synthesis,
+with a 150-second budget checked before each provider request. Each call's arguments
+and success/error status appear in the UI and Markdown export. Database read
+transactions are released between provider requests. OpenAI storage is disabled
+for these requests (`store: false`). Tool integration is covered by mocked API
+round trips and database tests; a live OpenAI run still requires credentials and
+network access.

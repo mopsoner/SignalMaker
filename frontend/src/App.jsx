@@ -6,6 +6,7 @@ import PositionsPage from './pages/PositionsPage'
 import MomentumPage from './pages/MomentumPage'
 import StockEtfMomentumPage from './pages/StockEtfMomentumPage'
 import MomentumPositionsPage from './pages/MomentumPositionsPage'
+import MomentumAIPage from './pages/MomentumAIPage'
 import OpsPage from './pages/OpsPage'
 import LogsPage from './pages/LogsPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
@@ -48,6 +49,7 @@ export default function App() {
           <div style={groupTitleStyle}>Momentum</div>
           <NavLink to="/momentum" onClick={closeMenu}>Dashboard</NavLink>
           <NavLink to="/momentum-positions" onClick={closeMenu}>Positions</NavLink>
+          <NavLink to="/momentum-ai" onClick={closeMenu}>IA</NavLink>
 
           <div style={groupTitleStyle}>ETF & Stocks</div>
           <NavLink to="/stocks-etfs/wyckoff" onClick={closeMenu}>Wyckoff Dashboard</NavLink>
@@ -69,6 +71,7 @@ export default function App() {
           <Route path="/assets/:symbol" element={<AssetDetailPage />} />
           <Route path="/momentum" element={<MomentumPage />} />
           <Route path="/momentum-positions" element={<MomentumPositionsPage />} />
+          <Route path="/momentum-ai" element={<MomentumAIPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
           <Route path="/positions" element={<PositionsPage />} />
           <Route path="/ops" element={<OpsPage />} />

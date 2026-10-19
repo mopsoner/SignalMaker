@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_operator
 from app.schemas.momentum_engine import (
     MomentumEngineDecision,
     MomentumEnginePositionPage,
@@ -15,6 +17,7 @@ from app.schemas.momentum_engine import (
     MomentumEngineTradePage,
 )
 from app.services.momentum_engine_service import MomentumEngineService
+from app.services.momentum_ai_service import MomentumAIService
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_engine_current_decision import MomentumEngineDecisionHistory
 
@@ -118,3 +121,19 @@ def clear_momentum_engine(db: Session = Depends(get_db)) -> dict:
             "momentum_engine_decisions": deleted_decisions,
         },
     }
+
+
+class MomentumAnalysisRequest(BaseModel):
+    mode: Literal['global', 'losses', 'execution', 'improvements'] = 'global'
+    days: Literal[1, 7, 30] = 7
+    question: str = Field(default='', max_length=1000)
+
+
+@router.get('/analysis/preview', dependencies=[Depends(require_operator)])
+def preview_momentum(days: Literal[1, 7, 30] = 7, db: Session = Depends(get_db)) -> dict:
+    return MomentumAIService(db).preview(days)
+
+
+@router.post("/analysis", dependencies=[Depends(require_operator)])
+def analyze_momentum(payload: MomentumAnalysisRequest, db: Session = Depends(get_db)) -> dict:
+    return MomentumAIService(db).analyze(payload.mode, payload.days, payload.question)

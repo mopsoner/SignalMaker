@@ -60,6 +60,8 @@ export const api = {
   assets: (params = '') => request(`/api/v1/assets${params}`),
   asset: (symbol) => request(`/api/v1/assets/${encodeURIComponent(symbol)}`),
   candidates: (params = '') => request(`/api/v1/trade-candidates${params}`),
+  momentumAnalysisPreview: (days) => request(`/api/v1/momentum-engine/analysis/preview?days=${days}`),
+  momentumAnalysis: (options = {}) => request('/api/v1/momentum-engine/analysis', { method: 'POST', body: JSON.stringify(options) }),
   momentumDecision: () => request('/api/v1/momentum-engine/decision'),
   momentumStatus: () => request('/api/v1/momentum-engine/status'),
   momentumPositions: (params = '') => request(`/api/v1/momentum-engine/positions${params}`),
