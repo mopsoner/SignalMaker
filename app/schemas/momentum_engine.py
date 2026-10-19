@@ -66,6 +66,10 @@ class MomentumEngineTradePage(BaseModel):
 
 
 class MomentumEngineDecision(BaseModel):
+    selection_method: str | None = None
+    selection_classes: list[str] | None = None
+    selection_prealert_fields: list[str] = Field(default_factory=list)
+    selection_veto_active_exit: bool = False
     strategy: str
     mode: str = "paper"
     cadence_hours: int
@@ -101,6 +105,10 @@ class MomentumEngineDecision(BaseModel):
 
 
 class MomentumEngineStatus(BaseModel):
+    selection_method: str | None = None
+    selection_classes: list[str] | None = None
+    selection_prealert_fields: list[str] = Field(default_factory=list)
+    selection_veto_active_exit: bool = False
     exit_max_momentum_1h: float | None = None
     selection_min_momentum_15m: float | None = None
     selection_min_acceleration: float | None = None

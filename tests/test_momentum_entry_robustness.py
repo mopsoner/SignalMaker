@@ -6,41 +6,44 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_engine import MomentumEngineTrade
 from app.services.momentum_engine_service import MomentumEngineService
 from test_momentum_engine_cash_balance import _make_session, _momentum_row, _open_engine_position
 
 
-@pytest.mark.parametrize('momentum,acceleration,eligible', [
-    (1, 6, True), (0, 6, False), (-1, 6, False), (1, 5, False), (1, -6, False),
-    (None, 6, False), (1, None, False), (float('nan'), 6, False),
-    (1, float('inf'), False), ('invalid', 6, False),
+PREALERT = {'momentum_delta_15m': 1, 'momentum_delta_1h': 1, 'momentum_acceleration_1h': 1}
+
+
+@pytest.mark.parametrize('field', list(PREALERT))
+@pytest.mark.parametrize('value,eligible', [
+    (1, True), (0.00001, True), ('1.5', True), (0, False), (-1, False),
+    (None, False), ('', False), (' ', False), (True, False), (False, False),
+    (float('nan'), False), (float('inf'), False), ('invalid', False),
 ])
-def test_strict_entry_thresholds_and_missing_invalid_data(monkeypatch, momentum, acceleration, eligible):
-    monkeypatch.setattr(settings, 'momentum_entry_min_15m', 0)
-    monkeypatch.setattr(settings, 'momentum_entry_min_acceleration', 5)
+def test_prealert_strictly_positive_finite_inputs(field, value, eligible):
     with _make_session() as db:
-        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
-            'classification': 'bull', 'momentum_15m': momentum,
-            'momentum_acceleration': acceleration}, 0) is eligible
+        row = {'classification': 'bull', **PREALERT, field: value}
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
+        assert service._entry_eligible(row, 0) is eligible
+        del row[field]
+        assert not service._entry_eligible(row, 0)
 
 
-def test_configured_threshold_is_used(monkeypatch):
-    monkeypatch.setattr(settings, 'momentum_entry_min_15m', 2)
+def test_obsolete_entry_thresholds_no_longer_apply(monkeypatch):
+    monkeypatch.setattr(settings, 'momentum_entry_min_15m', 100)
+    monkeypatch.setattr(settings, 'momentum_entry_min_acceleration', 100)
     with _make_session() as db:
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
-        row = {'classification': 'bull', 'momentum_15m': 2, 'momentum_acceleration': 6}
-        assert not service._entry_eligible(row, 0)
-        row['momentum_15m'] = 2.01
-        assert service._entry_eligible(row, 0)
+        row = {'classification': 'bull', **PREALERT, 'momentum_15m': -1, 'momentum_acceleration': -5}
+        assert service._entry_eligible(row, 100)
+        assert service._selection_metadata()['selection_min_acceleration'] is None
 
 
 @pytest.mark.parametrize('scenario', ['cash', 'hold', 'risk_exit'])
 def test_filter_blocks_buys_without_forcing_a_sale(scenario):
     with _make_session() as db:
         candidate = _momentum_row('ETHUSDC', price=50, momentum_score=30, stored_rank=2)
-        candidate[0].momentum_acceleration = 5
+        candidate[0].momentum_delta_15m = 0
         db.add_all(candidate)
         if scenario != 'cash':
             db.add_all(_momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=1,
@@ -58,10 +61,10 @@ def test_filter_blocks_buys_without_forcing_a_sale(scenario):
         assert bool(service._open_position()) is (scenario == 'hold')
 
 
-def test_lost_entry_momentum_does_not_exit_existing_position():
+def test_lost_prealert_does_not_exit_existing_position():
     with _make_session() as db:
-        rows = _momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=1)
-        rows[0].momentum_acceleration = 0
+        rows = _momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=2)
+        rows[0].momentum_acceleration_1h = 0
         db.add_all(rows)
         db.add(_open_engine_position('BTCUSDC', entry_price=100, entry_value=1000, quantity=10, stored_rank=1))
         db.commit()
@@ -71,12 +74,12 @@ def test_lost_entry_momentum_does_not_exit_existing_position():
         assert not list(db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action.like('SELL%'))))
 
 
-def test_selection_skips_weak_acceleration_for_next_valid_asset():
+def test_selection_skips_missing_prealert_for_next_valid_asset():
     with _make_session() as db:
-        weak = _momentum_row('ETHUSDC', price=50, momentum_score=30, stored_rank=2)
-        weak[0].momentum_acceleration = 5
+        weak = _momentum_row('ETHUSDC', price=50, momentum_score=50, stored_rank=1)
+        weak[0].momentum_delta_1h = 0
         db.add_all(weak)
-        db.add_all(_momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=1))
+        db.add_all(_momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=2))
         db.commit()
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         assert service.decision()['best_asset']['symbol'] == 'BTCUSDC'
@@ -84,21 +87,19 @@ def test_selection_skips_weak_acceleration_for_next_valid_asset():
         assert service._open_position().symbol == 'BTCUSDC'
 
 
-def test_global_acceleration_is_used_not_15m_acceleration():
+@pytest.mark.parametrize('price', [0, -1, None, 'invalid', float('inf'), float('nan')])
+def test_invalid_prices_are_never_selected(price):
     with _make_session() as db:
-        assert not MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
-            'classification': 'bull', 'momentum_15m': 16,
-            'momentum_acceleration': 4, 'momentum_acceleration_15m': 20}, 0)
+        row = {'symbol': 'BTCUSDC', 'price': price, 'classification': 'bull', **PREALERT}
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
+        assert service._best_ranked_asset_with_valid_structure(rankings=[row], min_momentum_score=0) is None
 
 
-@pytest.mark.parametrize('momentum,eligible', [(14.99, False), (15, False), (15.01, True)])
-def test_default_15m_threshold_boundary(monkeypatch, momentum, eligible):
-    from app.core.config import Settings
-    assert Settings.model_fields['momentum_entry_min_15m'].default == 15
-    assert Settings.model_fields['momentum_entry_min_acceleration'].default == 5
-    monkeypatch.setattr(settings, 'momentum_entry_min_15m', 15)
-    monkeypatch.setattr(settings, 'momentum_entry_min_acceleration', 5)
+def test_crypto_orders_by_score_then_rank_with_deterministic_ties():
     with _make_session() as db:
-        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
-            'classification': 'bull', 'momentum_15m': momentum,
-            'momentum_acceleration': 6}, 0) is eligible
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
+        rows = [{'symbol': 'A', 'momentum_score': 2, 'rank': 1},
+                {'symbol': 'B', 'momentum_score': 5, 'rank': 3},
+                {'symbol': 'C', 'momentum_score': 5, 'rank': 2},
+                {'symbol': 'D', 'momentum_score': None, 'rank': 4}]
+        assert [r['symbol'] for r in service._entry_order(rows)] == ['C', 'B', 'A', 'D']

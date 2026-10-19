@@ -45,6 +45,9 @@ def _momentum_row(
             classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
             rsi_1h=50.0,
             rank=stored_rank,
             calculated_at=datetime.now(timezone.utc),
@@ -226,6 +229,9 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=50.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -267,6 +273,9 @@ def test_hold_trade_records_mark_to_market_pnl_with_latest_market_price() -> Non
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=70.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -381,7 +390,7 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
                 "ema_trend_15m": "above_ema",
                 "structure_reason": "15m_structure_holding_above_last_swing_low",
                 "rsi_1h": 50.0,
-                "support_status": "support_valid",
+                "support_status": "prealert_valid",
             },
             cash=240.0,
             action="BUY_TOP_VALID_MOMENTUM",
@@ -410,6 +419,9 @@ def test_decision_buy_does_not_write_trade() -> None:
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=50.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -432,12 +444,12 @@ def test_decision_buy_does_not_write_trade() -> None:
     assert decision["action"] == "buy"
     assert decision["symbol"] == "ETHUSDC"
     assert decision["target_symbol"] == "ETHUSDC"
-    assert decision["best_asset"]["support_status"] == "support_valid"
+    assert decision["best_asset"]["support_status"] == "prealert_valid"
     assert trades == []
     assert positions == []
 
 
-def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank() -> (
+def test_best_ranked_asset_selects_highest_score_prealert() -> (
     None
 ):
     with _make_session() as db:
@@ -450,6 +462,9 @@ def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank()
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 1,
                 "rsi_1h": 80.0,
                 "structure_15m_status": "valid",
@@ -462,6 +477,9 @@ def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank()
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 2,
                 "rsi_1h": 50.0,
                 "structure_15m_status": "valid",
@@ -475,9 +493,9 @@ def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank()
         )
 
     assert best_asset is not None
-    assert best_asset["symbol"] == "ETHUSDC"
-    assert best_asset["support_status"] == "support_valid"
-    assert best_asset["selection_method"] == "momentum_rank_with_valid_15m_support"
+    assert best_asset["symbol"] == "BTCUSDC"
+    assert best_asset["support_status"] == "prealert_valid"
+    assert best_asset["selection_method"] == "momentum_score_prealert"
 
 
 def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusions() -> (
@@ -493,6 +511,9 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 1,
                 "structure_15m_status": "valid",
                 "ema_trend_15m": "above_ema",
@@ -504,6 +525,9 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 2,
                 "structure_15m_status": "broken_bearish",
             },
@@ -514,6 +538,9 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 3,
                 "structure_15m_status": "valid_bullish",
                 "ema_trend_15m": "above_ema",
@@ -525,6 +552,9 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
                 "classification": "bull",
                 "momentum_15m": 16.0,
                 "momentum_acceleration": 6.0,
+                "momentum_delta_15m": 1.0,
+                "momentum_delta_1h": 1.0,
+                "momentum_acceleration_1h": 1.0,
                 "rank": 4,
                 "structure_15m_status": "valid",
                 "ema_trend_15m": "above_ema",
@@ -553,6 +583,9 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=70.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -600,6 +633,9 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=70.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -619,6 +655,9 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=80.0,
                     rank=2,
                     calculated_at=datetime.now(timezone.utc),
@@ -673,6 +712,9 @@ def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=70.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -692,6 +734,9 @@ def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=80.0,
                     rank=2,
                     calculated_at=datetime.now(timezone.utc),
@@ -711,6 +756,9 @@ def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=30.0,
                     rank=3,
                     calculated_at=datetime.now(timezone.utc),
@@ -757,17 +805,17 @@ def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
     assert trades[1].symbol == "SOLUSDC"
     assert (
         trades[0].reason
-        == "15m support broken on current asset; rotating to next eligible momentum asset with valid 15m support"
+        == "15m support broken on current asset; rotating to next eligible momentum asset"
     )
     assert (
         trades[1].reason
-        == "15m support broken on current asset; rotating to next eligible momentum asset with valid 15m support"
+        == "15m support broken on current asset; rotating to next eligible momentum asset"
     )
     assert open_position.symbol == "SOLUSDC"
     assert status["open_position"]["symbol"] == "SOLUSDC"
 
 
-def test_buys_lowest_eligible_rank_when_15m_support_valid() -> None:
+def test_buys_highest_score_eligible_prealert() -> None:
     with _make_session() as db:
         db.add_all(
             [
@@ -793,10 +841,10 @@ def test_buys_lowest_eligible_rank_when_15m_support_valid() -> None:
             ).all()
         )
 
-    assert position.symbol == "ETHUSDC"
-    assert status["open_position"]["symbol"] == "ETHUSDC"
+    assert position.symbol == "BTCUSDC"
+    assert status["open_position"]["symbol"] == "BTCUSDC"
     assert [trade.action for trade in trades] == ["BUY_TOP_VALID_MOMENTUM"]
-    assert trades[0].symbol == "ETHUSDC"
+    assert trades[0].symbol == "BTCUSDC"
 
 
 def test_rotates_to_rank_2_when_rank_1_15m_breaks() -> None:
@@ -1166,6 +1214,9 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
                     classification="strong_bull",
             momentum_15m=16.0,
             momentum_acceleration=6.0,
+            momentum_delta_15m=1.0,
+            momentum_delta_1h=1.0,
+            momentum_acceleration_1h=1.0,
                     rsi_1h=50.0,
                     rank=1,
                     calculated_at=datetime.now(timezone.utc),
@@ -1212,7 +1263,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
     ("structure_15m_bias", "bearish"),
 ])
 @pytest.mark.parametrize("scenario", ["initial", "better_rank", "broken_support"])
-def test_crypto_buy_rejects_bearish_15m_with_valid_support(
+def test_crypto_entry_veto_uses_exit_signal_instead_of_bias(
     bearish_field: str, bearish_value: str, scenario: str,
 ) -> None:
     with _make_session() as db:
@@ -1228,13 +1279,17 @@ def test_crypto_buy_rejects_bearish_15m_with_valid_support(
         db.commit()
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
-        assert decision["best_asset"] is None
-        assert decision["top_watch_asset"]["support_status"] == "blocked_bearish_15m"
+        can_buy = bearish_field == "structure_15m_bias" and scenario != "better_rank"
+        assert (decision["best_asset"] is not None) is can_buy
+        if bearish_field == "ema_trend_15m":
+            assert decision["top_watch_asset"]["support_status"] == "blocked_active_exit"
         service.run_once(force=True)
         trades = list(db.scalars(select(MomentumEngineTrade)).all())
-        assert not any(trade.action.startswith("BUY") for trade in trades)
+        assert any(trade.action.startswith("BUY") for trade in trades) is can_buy
         if scenario == "better_rank":
             assert service._open_position().symbol == "ETHUSDC"
+        elif can_buy:
+            assert service._open_position().symbol == "BTCUSDC"
         else:
             assert service._open_position() is None
 
@@ -1309,7 +1364,7 @@ def test_ema_exit_does_not_apply_to_stock_etf():
 
 @pytest.mark.parametrize("trend", ["at_ema", "unknown", "insufficient_data", None, "below_ema"])
 @pytest.mark.parametrize("scenario", ["initial", "better_rank", "broken_support"])
-def test_crypto_buys_require_explicit_above_ema20_and_try_next_asset(trend, scenario):
+def test_crypto_buys_veto_below_ema20_and_try_next_asset(trend, scenario):
     with _make_session() as db:
         first = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
         first[0].ema_trend_15m = trend
@@ -1326,13 +1381,13 @@ def test_crypto_buys_require_explicit_above_ema20_and_try_next_asset(trend, scen
             service.run_once(force=True)
             assert service._open_position().symbol == "SOLUSDC"
         else:
-            assert service.decision()["best_asset"]["symbol"] == "ETHUSDC"
+            assert service.decision()["best_asset"]["symbol"] == ("ETHUSDC" if trend == "below_ema" else "BTCUSDC")
             service.run_once(force=True)
-            assert service._open_position().symbol == "ETHUSDC"
+            assert service._open_position().symbol == ("ETHUSDC" if trend == "below_ema" else "BTCUSDC")
 
 
 @pytest.mark.parametrize("trend", ["at_ema", "unknown", "insufficient_data", None])
-def test_crypto_stays_cash_without_explicit_above_ema20(trend):
+def test_crypto_prealert_does_not_require_explicit_above_ema20(trend):
     with _make_session() as db:
         rows = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
         rows[0].ema_trend_15m = trend
@@ -1340,7 +1395,7 @@ def test_crypto_stays_cash_without_explicit_above_ema20(trend):
         db.commit()
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
-        assert decision["best_asset"] is None
-        assert decision["top_watch_asset"]["support_status"] == "blocked_not_above_ema20_15m"
+        assert decision["best_asset"]["symbol"] == "BTCUSDC"
+        assert decision["top_watch_asset"]["support_status"] == "prealert_valid"
         service.run_once(force=True)
-        assert service._open_position() is None
+        assert service._open_position().symbol == "BTCUSDC"

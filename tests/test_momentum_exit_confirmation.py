@@ -23,6 +23,7 @@ def test_hourly_confirmation_and_missing_data_fallback(monkeypatch, momentum, ex
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         asset = {'closed_change_15m': -1, 'momentum_1h': momentum}
         assert service._negative_15m_exit(asset) is exit_expected
+        assert service._entry_valid(asset) is (not exit_expected)
         asset['closed_change_15m'] = 0
         assert not service._negative_15m_exit(asset)
 
@@ -55,13 +56,14 @@ def test_closed_candle_drop_holds_or_exits_in_actual_engine(momentum, sell):
         assert bool(service._open_position()) is not sell
 
 
-def test_confirmation_does_not_relax_entry_or_affect_stock_etf(monkeypatch):
+def test_entry_veto_matches_exit_confirmation_and_preserves_stock_etf(monkeypatch):
     monkeypatch.setattr(settings, 'momentum_exit_max_1h', 3)
     with _make_session() as db:
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
-        asset = {'price': 100, 'closed_change_15m': -1, 'momentum_1h': 20, 'structure_15m_status': 'valid', 'ema_trend_15m': 'above_ema'}
-        assert not service._entry_valid(asset)
-        assert service._support_status(asset) == 'blocked_negative_15m'
+        asset = {'price': 100, 'classification': 'bull', 'momentum_delta_15m': 1, 'momentum_delta_1h': 1, 'momentum_acceleration_1h': 1, 'closed_change_15m': -1, 'momentum_1h': 20, 'structure_15m_status': 'valid', 'ema_trend_15m': 'above_ema'}
+        assert service._entry_valid(asset)
+        assert service._support_status(asset) == 'prealert_valid'
         asset['momentum_1h'] = 3
         assert service._negative_15m_exit(asset)
+        assert not service._entry_valid(asset)
         assert not MomentumEngineService(db, context=STOCK_ETF_CONTEXT)._negative_15m_exit(asset)

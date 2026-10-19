@@ -30,7 +30,7 @@ def add_candles(db, interval, closes, *, last_close=None):
 
 @pytest.mark.parametrize("interval", ["15m", "1h"])
 @pytest.mark.parametrize("rsi,blocked", [(80, False), (80.01, True), (79.99, False)])
-def test_rsi_threshold_blocks_entries_only(interval, rsi, blocked):
+def test_rsi_threshold_no_longer_blocks_prealert_entries(interval, rsi, blocked):
     with _make_session() as db:
         rows = _momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1)
         setattr(rows[0], f"rsi_{interval}", rsi)
@@ -38,9 +38,7 @@ def test_rsi_threshold_blocks_entries_only(interval, rsi, blocked):
         db.commit()
         service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
-        assert (decision["best_asset"] is None) is blocked
-        if blocked:
-            assert decision["top_watch_asset"]["support_status"] == "blocked_rsi_above_80"
+        assert decision["best_asset"]["symbol"] == "BTCUSDC"
         assert not service._exit_required(service._rankings()[0])
 
 
@@ -55,7 +53,7 @@ def test_downward_cross_uses_actual_close_time_and_expires_after_one_hour(interv
         db.commit()
         asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["rsi_recent_cross_down"] is blocked
-        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rsi_entry_block(asset) == ("blocked_rsi_cross_down_1h" if blocked else None)
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_valid(asset) is (interval != "15m")
         # A new service/session evaluation sees the same cross (no in-memory cooldown).
         assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]["rsi_recent_cross_down"] is blocked
 
@@ -68,7 +66,7 @@ def test_cross_is_still_detected_after_more_15m_candles():
         asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["rsi_recent_cross_down"] is True
         assert asset["closed_change_15m"] > 0
-        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._support_status(asset) == "blocked_rsi_cross_down_1h"
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._support_status(asset) == "prealert_valid"
 
 
 @pytest.mark.parametrize("replacement", [False, True])
