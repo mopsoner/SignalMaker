@@ -58,6 +58,7 @@ a { color: inherit; text-decoration: none; }
 .badge.blue { background: rgba(91,140,255,0.18); color: #b9ccff; }
 .badge.orange { background: rgba(255,159,67,0.18); color: #ffd1a2; }
 .badge.gray { background: rgba(155,168,199,0.12); color: #d5def6; }
+.badge.moon { background: linear-gradient(120deg, rgba(250,204,21,0.2), rgba(249,115,22,0.16)); color: #fde68a; border: 1px solid rgba(250,204,21,0.4); gap: 4px; }
 .collapsible-panel summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .collapsible-panel summary::-webkit-details-marker { display: none; }
 .collapsible-panel[open] .collapse-indicator { transform: rotate(180deg); }
