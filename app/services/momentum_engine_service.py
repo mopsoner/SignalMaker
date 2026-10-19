@@ -23,7 +23,7 @@ class MomentumEngineService:
 
     Strategy v3:
     - Crypto entries reject RSI > 80 and downward crosses within one hour.
-    - Exit risk includes a negative closed-candle 15m return, bearish structure,
+    - Exit risk includes a negative closed-candle 15m return confirmed by 1h momentum, bearish structure,
       or a crypto close below EMA20.
     - Crypto entry starts at the lowest eligible rank; hold until an exit signal.
     - The engine targets the next eligible asset with positive price,
@@ -366,6 +366,7 @@ class MomentumEngineService:
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
             "selection_min_momentum_score": None if self.market_scope == "crypto" else min_momentum_score,
+            "exit_max_momentum_1h": settings.momentum_exit_max_1h if self.market_scope == "crypto" else None,
             "selection_min_momentum_15m": settings.momentum_entry_min_15m if self.market_scope == "crypto" else None,
             "selection_min_acceleration": settings.momentum_entry_min_acceleration if self.market_scope == "crypto" else None,
             "selection_classes": list(self.CRYPTO_ENTRY_CLASSES) if self.market_scope == "crypto" else None,
@@ -584,7 +585,7 @@ class MomentumEngineService:
             and not self._entry_bearish_15m(asset)
             and self._entry_above_ema20(asset)
             and self._rsi_entry_block(asset) is None
-            and not self._negative_15m_exit(asset)
+            and not self._negative_15m_change(asset)
         )
 
     def _rsi_entry_block(self, asset: dict[str, Any]) -> str | None:
@@ -597,14 +598,31 @@ class MomentumEngineService:
             return "blocked_rsi_cross_down_1h"
         return None
 
-    def _negative_15m_exit(self, asset: dict[str, Any] | None) -> bool:
+    def _negative_15m_change(self, asset: dict[str, Any] | None) -> bool:
         return bool(asset and self.market_scope == "crypto"
                     and asset.get("closed_change_15m") is not None
                     and float(asset["closed_change_15m"]) < 0)
 
+    def _negative_15m_exit(self, asset: dict[str, Any] | None) -> bool:
+        if not self._negative_15m_change(asset):
+            return False
+        # Missing confirmation cannot suppress the existing protective exit.
+        try:
+            momentum_1h = float(asset["momentum_1h"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return True
+        return not isfinite(momentum_1h) or momentum_1h <= settings.momentum_exit_max_1h
+
     def _exit_description(self, asset: dict[str, Any] | None) -> str:
         if self._negative_15m_exit(asset):
-            return "Negative 15m variation between the last two closed candles"
+            try:
+                confirmed = isfinite(float(asset["momentum_1h"]))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                confirmed = False
+            return (
+                f"Negative closed 15m variation confirmed by 1h momentum <= {settings.momentum_exit_max_1h}"
+                if confirmed else "Negative closed 15m variation; 1h momentum unavailable (fallback exit)"
+            )
         if self._structure_broken(asset):
             return "15m support broken"
         return "Last closed 15m candle below EMA20"
@@ -642,7 +660,7 @@ class MomentumEngineService:
         rsi_block = self._rsi_entry_block(asset)
         if rsi_block:
             return rsi_block
-        if self._negative_15m_exit(asset):
+        if self._negative_15m_change(asset):
             return "blocked_negative_15m"
         return "support_valid"
 

@@ -355,3 +355,18 @@ position. Stock/ETF selection remains unchanged. Thresholds are returned by the
 crypto engine status and included in AI snapshots. Restart the engine workers
 and API after changing these server environment variables. This change alone
 does not establish that returns improve; evaluate it with historical data.
+
+### Confirmation of negative-15m exits
+
+For crypto, a negative return between the last two closed 15m candles now triggers
+a variation-based exit only when stored `momentum_1h <= MOMENTUM_EXIT_MAX_1H`
+(default 0). Positive hourly momentum above the threshold suppresses this exit.
+Missing, invalid or nonfinite hourly momentum retains the prior negative-15m exit
+as a fallback. Support-break and below-EMA20 exits remain independent. Negative
+15m returns still block new entries regardless of hourly momentum, and Stock/ETF
+behavior is unchanged. The hourly value is the existing stored ranking indicator,
+not a newly fetched price or an RSI condition. Exit reasons distinguish confirmed
+exits and missing-data fallbacks. The threshold is exposed in status and AI
+snapshots. Restart the API and momentum workers after changing the environment.
+This testable rule can hold losses longer; churn, slippage and return improvements
+must be assessed by backtesting and have not been established by unit tests.

@@ -66,6 +66,8 @@ class MomentumAIService:
         orders = list(self.db.scalars(select(Order).where(Order.position_id.in_(ids)).order_by(Order.created_at.desc()).limit(101))) if ids else []
         return {
             'as_of': now.isoformat(), 'history_since': since.isoformat(), 'scope': 'crypto / momentum_rotation_v1',
+            'exit_filters': {'negative_15m_requires_momentum_1h_at_or_below': settings.momentum_exit_max_1h,
+                             'missing_1h': 'fallback_exit', 'support_and_ema_exits': 'independent'},
             'entry_filters': {'momentum_15m_strictly_above': settings.momentum_entry_min_15m,
                               'global_acceleration_strictly_above': settings.momentum_entry_min_acceleration},
             'limits': {'positions': 200, 'trades': 100, 'decisions': 50, 'ranking': 30, 'orders': 100, 'symbols': 20, 'candles_per_interval': 32},

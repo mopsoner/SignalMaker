@@ -98,6 +98,7 @@ class MomentumEngineDecision(BaseModel):
 
 
 class MomentumEngineStatus(BaseModel):
+    exit_max_momentum_1h: float | None = None
     selection_min_momentum_15m: float | None = None
     selection_min_acceleration: float | None = None
     strategy: str
