@@ -6,6 +6,7 @@ import StatCard from '../components/StatCard'
 import { usePollingQuery } from '../hooks/usePollingQuery'
 import { fmtDate, fmtNumber } from '../lib/format'
 import { tradingViewUrl } from '../lib/tradingview'
+import { isMomentumPrealert } from '../lib/momentumPrealert'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const DEFAULT_CADENCE_HOURS = 1
@@ -297,6 +298,7 @@ export function MomentumView({
 
   const counts = useMemo(() => ({
     all: rows.length,
+    prealert: rows.filter(isMomentumPrealert).length,
     strong_bull: rows.filter((row) => row.classification === 'strong_bull').length,
     bull: rows.filter((row) => row.classification === 'bull').length,
     neutral: rows.filter((row) => ['neutral_bull', 'neutral_bear'].includes(row.classification)).length,
@@ -306,6 +308,7 @@ export function MomentumView({
 
   const filteredRows = useMemo(() => {
     if (filter === 'all') return rows
+    if (filter === 'prealert') return rows.filter(isMomentumPrealert)
     if (filter === 'neutral') return rows.filter((row) => ['neutral_bull', 'neutral_bear'].includes(row.classification))
     return rows.filter((row) => row.classification === filter)
   }, [filter, rows])
@@ -326,6 +329,7 @@ export function MomentumView({
 
   const filters = [
     ['all', `All (${counts.all})`],
+    ['prealert', `🚀 To The MOOn (${counts.prealert})`],
     ['strong_bull', `Strong Bull (${counts.strong_bull})`],
     ['bull', `Bull (${counts.bull})`],
     ['neutral', `Neutral (${counts.neutral})`],
@@ -335,6 +339,15 @@ export function MomentumView({
   const columns = [
     { key: 'rank', title: 'Rank', render: (row) => row.rank, sortValue: (row) => row.rank, defaultSortDir: 'asc' },
     { key: 'symbol', title: 'Symbol', render: (row) => <div style={{ display: 'grid', gap: 6 }}><Link to={`/assets/${encodeURIComponent(row.symbol)}`}><strong>{row.provider_symbol || row.symbol}</strong></Link>{row.name ? <span className="stat-hint">{row.name} · {row.universe_name || '—'} · {row.currency || '—'} · {row.exchange_code || '—'}</span> : null}<a href={momentumApi.tradingViewLink(row)} target="_blank" rel="noreferrer">TradingView</a></div>, sortValue: (row) => row.provider_symbol || row.symbol },
+    {
+      key: 'prealert', title: 'Préalerte',
+      render: (row) => isMomentumPrealert(row)
+        ? <span className="badge moon" title={`Δ momentum 15m : +${fmtNumber(row.momentum_delta_15m, 4)} · Δ momentum 1h : +${fmtNumber(row.momentum_delta_1h, 4)} · Accélération 1h : +${fmtNumber(row.momentum_acceleration_1h, 4)}`}>
+          🚀 To The MOOn · Préalerte
+        </span>
+        : '—',
+      sortValue: (row) => isMomentumPrealert(row) ? 1 : 0,
+    },
     { key: 'price', title: 'Price', render: (row) => fmtNumber(row.price, 6), sortValue: (row) => Number(row.price ?? -1) },
     { key: 'score', title: 'Momentum score', render: (row) => <strong>{fmtNumber(row.momentum_score, 2)}</strong>, sortValue: (row) => Number(row.momentum_score ?? -999) },
     {
@@ -383,6 +396,7 @@ export function MomentumView({
   const topMomentumColumnKeys = [
     'rank',
     'symbol',
+    'prealert',
     'price',
     'score',
     'momentumAcceleration',
@@ -462,9 +476,10 @@ export function MomentumView({
 
     <details className="panel collapsible-panel" open>
       <summary><h2>Momentum scanner</h2><span className="collapse-indicator">⌄</span></summary>
+      {filter === 'prealert' ? <p className="market-toolbar-hint">{counts.prealert === 0 ? 'Aucune préalerte To The MOOn pour le moment. ' : ''}Préalerte : momentum en progression sur 15 min et 1 h, avec une accélération 1 h positive.</p> : null}
       <div className="market-toolbar">
         <div className="filter-chips" role="tablist" aria-label="Momentum filters">
-          {filters.map(([key, label]) => <button key={key} type="button" className={`filter-chip ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}>{label}</button>)}
+          {filters.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={filter === key} className={`filter-chip ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)}>{label}</button>)}
         </div>
         <div className="market-toolbar-hint">Showing {filteredRows.length} / {rows.length}</div>
       </div>

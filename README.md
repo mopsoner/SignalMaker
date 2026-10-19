@@ -298,6 +298,21 @@ ni l’API de démarrer ; les logs identifient le worker concerné.
 Les scripts VM ne lancent plus de workers directement, ce qui évite les doubles
 lancements. Les contrôles Ops/Logs et le superviseur systemd restent utilisables.
 
+### To The MOOn momentum prealert
+
+The Momentum scanner and Top 10 table show a **🚀 To The MOOn · Préalerte** badge
+when all three persisted indicators are strictly positive:
+`momentum_delta_15m > 0`, `momentum_delta_1h > 0` and
+`momentum_acceleration_1h > 0`. The dedicated **🚀 To The MOOn** scanner filter
+shows matching assets with a live count. Hover over the badge to see the values.
+Missing, invalid or nonfinite inputs never trigger a badge. Classification and
+score do not add extra requirements: an early recovery can qualify before Bull.
+The shared view also supports stock/ETF rows when those indicators are available.
+
+This is a visual early warning based on the existing closed-candle indicators;
+it does not change the score or trading rules and does not guarantee a price rise.
+No backend change or migration is required. Rebuild/redeploy the frontend.
+
 ### Global momentum AI review
 
 Momentum → IA (`/momentum-ai`) includes an on-demand global review of the crypto momentum
