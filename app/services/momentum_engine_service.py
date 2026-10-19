@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from math import isfinite
+from dataclasses import replace
 
 from app.core.config import settings
 from uuid import uuid4
@@ -18,12 +19,15 @@ from app.services.momentum_service import MomentumService
 from app.services.momentum_market import CandleLoader, CRYPTO_CONTEXT, MomentumMarketContext, RankingLoader
 
 
-class MomentumEngineService:
+from app.services.momentum_portfolio import MomentumPortfolioMixin
+
+
+class MomentumEngineService(MomentumPortfolioMixin):
     """Dedicated backend paper engine for momentum rotation.
 
     Strategy v3:
     - Crypto entries reject RSI > 80 and downward crosses within one hour.
-    - Exit risk includes a negative closed-candle 15m return, bearish structure,
+    - Exit risk includes a negative closed-candle 15m return confirmed by 1h momentum, bearish structure,
       or a crypto close below EMA20.
     - Crypto entry starts at the lowest eligible rank; hold until an exit signal.
     - The engine targets the next eligible asset with positive price,
@@ -47,6 +51,9 @@ class MomentumEngineService:
         candle_loader: CandleLoader | None = None,
     ) -> None:
         self.db = db
+        self._portfolio_mode = context is CRYPTO_CONTEXT or (context.market_scope == 'crypto' and context.max_positions > 1)
+        if context is CRYPTO_CONTEXT:
+            context = replace(context, max_positions=settings.momentum_max_positions)
         self.context = context
         self.market_scope = context.market_scope
         self.ranking_loader = ranking_loader or (lambda limit: MomentumService(db).list_rankings(limit=limit))
@@ -117,6 +124,9 @@ class MomentumEngineService:
         }
 
     def run_once(self, *, force: bool = False, cadence_hours: int = 1, starting_capital: float = 1000.0, min_momentum_score: float = 0.0) -> dict[str, Any]:
+        if self._portfolio_enabled():
+            return self._run_portfolio(force=force, cadence_hours=cadence_hours,
+                starting_capital=starting_capital, min_momentum_score=min_momentum_score)
         rankings = self._rankings()
         before = self._build_status(
             rankings=rankings,
@@ -314,6 +324,9 @@ class MomentumEngineService:
         return rankings
 
     def _build_status(self, *, rankings: list[dict[str, Any]], cadence_hours: int, starting_capital: float, min_momentum_score: float) -> dict[str, Any]:
+        if self._portfolio_enabled():
+            return self._portfolio_status(rankings=rankings, cadence_hours=cadence_hours,
+                starting_capital=starting_capital, min_momentum_score=min_momentum_score)
         open_position = self._open_position()
         current_asset = self._asset_for(open_position.symbol, rankings=rankings) if open_position else None
         exclude_symbols = {open_position.symbol} if open_position else set()
@@ -366,6 +379,7 @@ class MomentumEngineService:
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
             "selection_min_momentum_score": None if self.market_scope == "crypto" else min_momentum_score,
+            "exit_max_momentum_1h": settings.momentum_exit_max_1h if self.market_scope == "crypto" else None,
             "selection_min_momentum_15m": settings.momentum_entry_min_15m if self.market_scope == "crypto" else None,
             "selection_min_acceleration": settings.momentum_entry_min_acceleration if self.market_scope == "crypto" else None,
             "selection_classes": list(self.CRYPTO_ENTRY_CLASSES) if self.market_scope == "crypto" else None,
@@ -425,6 +439,8 @@ class MomentumEngineService:
 
 
     def _decision_from_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        if self._portfolio_enabled():
+            return self._portfolio_decision(status)
         open_position = status.get("open_position")
         best_asset = status.get("best_asset")
         top_watch_asset = status.get("top_watch_asset")
@@ -584,7 +600,7 @@ class MomentumEngineService:
             and not self._entry_bearish_15m(asset)
             and self._entry_above_ema20(asset)
             and self._rsi_entry_block(asset) is None
-            and not self._negative_15m_exit(asset)
+            and not self._negative_15m_change(asset)
         )
 
     def _rsi_entry_block(self, asset: dict[str, Any]) -> str | None:
@@ -597,14 +613,31 @@ class MomentumEngineService:
             return "blocked_rsi_cross_down_1h"
         return None
 
-    def _negative_15m_exit(self, asset: dict[str, Any] | None) -> bool:
+    def _negative_15m_change(self, asset: dict[str, Any] | None) -> bool:
         return bool(asset and self.market_scope == "crypto"
                     and asset.get("closed_change_15m") is not None
                     and float(asset["closed_change_15m"]) < 0)
 
+    def _negative_15m_exit(self, asset: dict[str, Any] | None) -> bool:
+        if not self._negative_15m_change(asset):
+            return False
+        # Missing confirmation cannot suppress the existing protective exit.
+        try:
+            momentum_1h = float(asset["momentum_1h"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return True
+        return not isfinite(momentum_1h) or momentum_1h <= settings.momentum_exit_max_1h
+
     def _exit_description(self, asset: dict[str, Any] | None) -> str:
         if self._negative_15m_exit(asset):
-            return "Negative 15m variation between the last two closed candles"
+            try:
+                confirmed = isfinite(float(asset["momentum_1h"]))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                confirmed = False
+            return (
+                f"Negative closed 15m variation confirmed by 1h momentum <= {settings.momentum_exit_max_1h}"
+                if confirmed else "Negative closed 15m variation; 1h momentum unavailable (fallback exit)"
+            )
         if self._structure_broken(asset):
             return "15m support broken"
         return "Last closed 15m candle below EMA20"
@@ -642,7 +675,7 @@ class MomentumEngineService:
         rsi_block = self._rsi_entry_block(asset)
         if rsi_block:
             return rsi_block
-        if self._negative_15m_exit(asset):
+        if self._negative_15m_change(asset):
             return "blocked_negative_15m"
         return "support_valid"
 

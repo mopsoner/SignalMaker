@@ -1,3 +1,7 @@
+# Retain regression coverage of the explicitly supported one-slot engine.
+from app.services.momentum_market import MomentumMarketContext
+SINGLE_POSITION_CRYPTO = MomentumMarketContext(market_scope="crypto", reference_currency="USDC", max_positions=1)
+
 import pytest
 from sqlalchemy import select
 
@@ -17,7 +21,7 @@ def test_strict_entry_thresholds_and_missing_invalid_data(monkeypatch, momentum,
     monkeypatch.setattr(settings, 'momentum_entry_min_15m', 0)
     monkeypatch.setattr(settings, 'momentum_entry_min_acceleration', 5)
     with _make_session() as db:
-        assert MomentumEngineService(db)._entry_eligible({
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
             'classification': 'bull', 'momentum_15m': momentum,
             'momentum_acceleration': acceleration}, 0) is eligible
 
@@ -25,7 +29,7 @@ def test_strict_entry_thresholds_and_missing_invalid_data(monkeypatch, momentum,
 def test_configured_threshold_is_used(monkeypatch):
     monkeypatch.setattr(settings, 'momentum_entry_min_15m', 2)
     with _make_session() as db:
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         row = {'classification': 'bull', 'momentum_15m': 2, 'momentum_acceleration': 6}
         assert not service._entry_eligible(row, 0)
         row['momentum_15m'] = 2.01
@@ -45,7 +49,7 @@ def test_filter_blocks_buys_without_forcing_a_sale(scenario):
         else:
             candidate[0].momentum_15m = -1
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         if scenario == 'cash':
             assert service.decision()['best_asset'] is None
         service.run_once(force=True)
@@ -61,7 +65,7 @@ def test_lost_entry_momentum_does_not_exit_existing_position():
         db.add_all(rows)
         db.add(_open_engine_position('BTCUSDC', entry_price=100, entry_value=1000, quantity=10, stored_rank=1))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         service.run_once(force=True)
         assert service._open_position().symbol == 'BTCUSDC'
         assert not list(db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action.like('SELL%'))))
@@ -74,7 +78,7 @@ def test_selection_skips_weak_acceleration_for_next_valid_asset():
         db.add_all(weak)
         db.add_all(_momentum_row('BTCUSDC', price=100, momentum_score=40, stored_rank=1))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         assert service.decision()['best_asset']['symbol'] == 'BTCUSDC'
         service.run_once(force=True)
         assert service._open_position().symbol == 'BTCUSDC'
@@ -82,7 +86,7 @@ def test_selection_skips_weak_acceleration_for_next_valid_asset():
 
 def test_global_acceleration_is_used_not_15m_acceleration():
     with _make_session() as db:
-        assert not MomentumEngineService(db)._entry_eligible({
+        assert not MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
             'classification': 'bull', 'momentum_15m': 16,
             'momentum_acceleration': 4, 'momentum_acceleration_15m': 20}, 0)
 
@@ -95,6 +99,6 @@ def test_default_15m_threshold_boundary(monkeypatch, momentum, eligible):
     monkeypatch.setattr(settings, 'momentum_entry_min_15m', 15)
     monkeypatch.setattr(settings, 'momentum_entry_min_acceleration', 5)
     with _make_session() as db:
-        assert MomentumEngineService(db)._entry_eligible({
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({
             'classification': 'bull', 'momentum_15m': momentum,
             'momentum_acceleration': 6}, 0) is eligible

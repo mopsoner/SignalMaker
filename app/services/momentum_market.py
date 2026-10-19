@@ -26,7 +26,7 @@ class MomentumMarketContext:
         return self.market_is_open(datetime.now(timezone.utc))
 
 
-CRYPTO_CONTEXT = MomentumMarketContext(market_scope="crypto", reference_currency="USDC")
+CRYPTO_CONTEXT = MomentumMarketContext(market_scope="crypto", reference_currency="USDC", max_positions=3)
 
 
 def weekday_market_hours(now: datetime) -> bool:
