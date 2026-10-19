@@ -7,11 +7,13 @@ from app.services.momentum_market import STOCK_ETF_CONTEXT
 from test_momentum_engine_cash_balance import _make_session, _momentum_row, _open_engine_position
 
 
-@pytest.mark.parametrize("score,eligible", [(9.99, False), (10, True), (10.01, True)])
+@pytest.mark.parametrize("classification,eligible", [("neutral_bull", False), ("bull", True), ("strong_bull", True), ("bear", False), (None, False)])
 @pytest.mark.parametrize("scenario", ["initial", "rotation", "risk_exit"])
-def test_crypto_purchases_require_at_least_10_points(score, eligible, scenario):
+def test_crypto_purchases_require_bull_class(classification, eligible, scenario):
     with _make_session() as db:
-        db.add_all(_momentum_row("ETHUSDC", price=50, momentum_score=score, stored_rank=1))
+        rows = _momentum_row("ETHUSDC", price=50, momentum_score=50, stored_rank=1)
+        rows[0].classification = classification
+        db.add_all(rows)
         if scenario != "initial":
             db.add_all(_momentum_row("BTCUSDC", price=100, momentum_score=5, stored_rank=2,
                                     structure_15m_status="broken_bearish" if scenario == "risk_exit" else "valid"))
@@ -28,24 +30,29 @@ def test_crypto_purchases_require_at_least_10_points(score, eligible, scenario):
         elif scenario == "risk_exit":
             assert service._open_position() is None
         elif scenario == "rotation":
-            # Falling below 10 is an entry restriction, not an extra sale signal.
+            # Entry eligibility never adds a sale signal to a held position.
             assert service._open_position().symbol == "BTCUSDC"
-        assert status["selection_min_momentum_score"] == 10
+        assert status["selection_min_momentum_score"] is None
+        assert status["selection_classes"] == ["bull", "strong_bull"]
 
 
-@pytest.mark.parametrize("score,minimum,eligible", [(10, -100, True), (9.99, -100, False), (24.99, 25, False), (25, 25, True)])
-def test_runtime_minimum_cannot_lower_floor_but_can_raise_it(score, minimum, eligible):
+@pytest.mark.parametrize("classification,score,minimum,eligible", [
+    ("bull", 1, 100, True), ("strong_bull", 1, 100, True),
+    ("neutral_bull", 100, 0, False), ("bear", 100, -100, False),
+    (None, 100, 0, False), ("unknown", 100, 0, False),
+])
+def test_crypto_uses_classification_instead_of_numeric_threshold(classification, score, minimum, eligible):
     with _make_session() as db:
-        service = MomentumEngineService(db)
-        assert service._score_eligible({"momentum_score": score}, minimum) is eligible
+        assert MomentumEngineService(db)._entry_eligible(
+            {"classification": classification, "momentum_score": score}, minimum) is eligible
 
 
-def test_missing_score_is_blocked_and_stock_etf_threshold_is_preserved():
+def test_missing_class_is_blocked_and_stock_etf_threshold_is_preserved():
     with _make_session() as db:
-        assert not MomentumEngineService(db)._score_eligible({}, 0)
+        assert not MomentumEngineService(db)._entry_eligible({}, 0)
         stock = MomentumEngineService(db, context=STOCK_ETF_CONTEXT)
-        assert stock._score_eligible({"momentum_score": 10}, 0)
-        assert not stock._score_eligible({"momentum_score": 10}, 10)
+        assert stock._entry_eligible({"momentum_score": 10}, 0)
+        assert not stock._entry_eligible({"momentum_score": 10}, 10)
 
 
 def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
@@ -57,8 +64,10 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
             (4, "BNBUSDC", 10, "valid"),
             (5, "XRPUSDC", 9.99, "valid"),
         ]:
-            db.add_all(_momentum_row(symbol, price=50, momentum_score=score,
-                                     stored_rank=rank, structure_15m_status=structure))
+            rows = _momentum_row(symbol, price=50, momentum_score=score,
+                                 stored_rank=rank, structure_15m_status=structure)
+            rows[0].classification = "neutral_bull" if symbol == "XRPUSDC" else "bull"
+            db.add_all(rows)
         db.commit()
         service = MomentumEngineService(db)
         for expected in ["BNBUSDC", "ETHUSDC", "BTCUSDC"]:

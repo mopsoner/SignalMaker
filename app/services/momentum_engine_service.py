@@ -8,7 +8,6 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
 from app.models.market_candle import MarketCandle
 from app.models.momentum_engine import MomentumEnginePosition, MomentumEngineTrade
 from app.models.momentum_engine_current_decision import MomentumEngineCurrentDecision, MomentumEngineDecisionHistory
@@ -25,14 +24,14 @@ class MomentumEngineService:
       or a crypto close below EMA20.
     - Crypto entry starts at the lowest eligible rank; hold until an exit signal.
     - The engine targets the next eligible asset with positive price,
-      sufficient momentum score, and intact 15m support/structure.
+      eligible momentum, and intact 15m support/structure.
     - A current position is sold if 15m structure breaks, a crypto candle closes
       below EMA20. Crypto ranking improvements alone never trigger a sale.
     """
 
     STRATEGY = "momentum_rotation_v1"
     MODE = "paper"
-    MIN_CRYPTO_ENTRY_SCORE = Settings.model_fields["momentum_paper_min_score"].default
+    CRYPTO_ENTRY_CLASSES = ("bull", "strong_bull")
     VALID_STRUCTURE_STATUSES = {"valid", "valid_bullish"}
     BROKEN_STRUCTURE_STATUSES = {"broken_bearish"}
 
@@ -230,7 +229,7 @@ class MomentumEngineService:
                 quantity=0.0,
                 value=0.0,
                 pnl=0.0,
-                reason="No ranked momentum asset has positive price, sufficient score, and valid 15m support",
+                reason="No ranked momentum asset has positive price, eligible momentum, and valid 15m support",
             )
             self.db.flush()
             status = self._build_status(
@@ -362,7 +361,8 @@ class MomentumEngineService:
             "total_pnl": round(total_pnl, 8),
             "total_pnl_pct": round((total_pnl / starting_capital) * 100, 4) if starting_capital else 0.0,
             "selection_method": "momentum_rank_with_valid_15m_support",
-            "selection_min_momentum_score": max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score) if self.market_scope == "crypto" else min_momentum_score,
+            "selection_min_momentum_score": None if self.market_scope == "crypto" else min_momentum_score,
+            "selection_classes": list(self.CRYPTO_ENTRY_CLASSES) if self.market_scope == "crypto" else None,
             "open_position": open_position_payload,
             "best_asset": best_asset,
             "top_watch_asset": top_watch_asset,
@@ -650,12 +650,10 @@ class MomentumEngineService:
         decorated["selection_method"] = "momentum_rank_with_valid_15m_support"
         return decorated
 
-    def _score_eligible(self, asset: dict[str, Any], min_momentum_score: float) -> bool:
-        score = float(asset.get("momentum_score") or 0)
+    def _entry_eligible(self, asset: dict[str, Any], min_momentum_score: float) -> bool:
         if self.market_scope == "crypto":
-            # Inclusive hard floor, even when runtime settings or API callers pass 0.
-            return score >= max(self.MIN_CRYPTO_ENTRY_SCORE, min_momentum_score)
-        return score > min_momentum_score
+            return asset.get("classification") in self.CRYPTO_ENTRY_CLASSES
+        return float(asset.get("momentum_score") or 0) > min_momentum_score
 
     def _entry_order(self, rankings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if self.market_scope != "crypto":
@@ -675,7 +673,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if not self._score_eligible(row, min_momentum_score):
+            if not self._entry_eligible(row, min_momentum_score):
                 continue
             return self._decorate_entry(row)
         return None
@@ -687,7 +685,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if not self._score_eligible(row, min_momentum_score):
+            if not self._entry_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
@@ -719,7 +717,7 @@ class MomentumEngineService:
                 continue
             if float(row.get("price") or 0) <= 0:
                 continue
-            if not self._score_eligible(row, min_momentum_score):
+            if not self._entry_eligible(row, min_momentum_score):
                 continue
             if not self._entry_valid(row):
                 continue
@@ -905,7 +903,7 @@ class MomentumEngineService:
             quantity=quantity,
             value=cash,
             pnl=0.0,
-            reason=reason or f"Momentum rank #{asset.get('rank')} with positive price, sufficient momentum score, and valid 15m support",
+            reason=reason or f"Momentum rank #{asset.get('rank')} with positive price, eligible momentum, and valid 15m support",
             meta={
                 "price_source": price_source,
                 "pnl_basis": "entry",
@@ -969,4 +967,4 @@ class MomentumEngineService:
             return f"Buy {best_asset['symbol']} — prochain rang admissible avec support 15m valide." if due_now else "Wait until next scheduled momentum check."
         if top_watch_asset:
             return f"Wait on {top_watch_asset['symbol']}: support 15m not valid ({top_watch_asset.get('support_status')})."
-        return "No ranked momentum asset has positive price, sufficient score, and support 15m valide."
+        return "No ranked momentum asset has positive price, eligible momentum, and support 15m valide."
