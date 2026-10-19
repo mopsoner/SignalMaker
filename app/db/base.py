@@ -28,6 +28,11 @@ def apply_compatible_schema_upgrades() -> None:
         return
 
     statements = (
+        """ALTER TABLE momentum_current
+    ADD COLUMN IF NOT EXISTS momentum_volume_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS relative_volume_15m DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS relative_volume_1h DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS relative_volume_4h DOUBLE PRECISION""",
         "ALTER TABLE momentum_engine_trades ALTER COLUMN action TYPE VARCHAR(64)",
         """ALTER TABLE momentum_current
             ADD COLUMN IF NOT EXISTS momentum_delta_15m DOUBLE PRECISION NOT NULL DEFAULT 0,

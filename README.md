@@ -407,3 +407,38 @@ The default paper starting capital remains **1,000**, independent of
 each, four receive 250, and five receive 200. Changing capacity alone never
 changes or resets starting capital. Subsequent allocation uses remaining cash,
 including realized gains/losses; the live executor uses available exchange cash.
+
+### Volume confirmation in the momentum score
+
+Momentum now uses relative traded volume as a separate additive confirmation.
+For each 15m/1h/4h timeframe, the average volume of the last **3 closed candles**
+is divided by the average of the **20 preceding closed candles**, excluding the
+recent window. This compares each asset with its own history rather than
+comparing raw BTC, ETH or stock volumes.
+
+The contribution per timeframe is
+`sign(last_close - close_before_recent_window) × min(2, max(0, relative_volume - 1)) × 5`.
+A ratio of 2× therefore contributes +5 points on a rise or −5 on a fall;
+3× or higher is capped at ±10. Flat prices, normal/lower volume and unavailable
+volume contribute zero. Missing, negative, nonfinite or insufficient volume
+history, or an all-zero baseline, is unavailable rather than an invented ratio.
+Real zero-volume candles remain part of the averages.
+
+The final score adds this contribution to the existing price/RSI/EMA score and
+acceleration term. It uses the existing timeframe weights (35% / 40% / 25%),
+renormalized only for timeframes with price momentum; missing volume retains
+zero contribution. Price momentum per timeframe and its acceleration remain
+unchanged. Classification and ranking use the new final score.
+
+The API and scanner expose `momentum_volume_score` and
+`relative_volume_15m/1h/4h`; AI ranking snapshots also receive them.
+The shared calculation also applies to stock/ETF momentum; this simple rolling
+baseline does not adjust for exchange session seasonality.
+
+Run `bash run.sh init-db` before starting the updated API/workers against an
+existing PostgreSQL database (or apply
+`migrations/20261019_add_momentum_volume.sql`). Existing rows start with a
+neutral contribution and unavailable ratios; fresh values appear after the
+next candle-ingestion recalculation. Restart the API and momentum workers.
+These weights are an initial rule requiring backtesting with fees and slippage;
+the tests verify arithmetic and data handling, not improved returns.

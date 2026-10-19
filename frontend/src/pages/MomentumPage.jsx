@@ -365,6 +365,24 @@ export function MomentumView({
       },
       sortValue: (row) => Number(row.momentum_acceleration ?? -999),
     },
+    {
+      key: 'volumeScore', title: 'Volume score',
+      render: (row) => {
+        const available = ['15m', '1h', '4h'].some((tf) => row[`relative_volume_${tf}`] != null)
+        if (!available) return <span title="Requires 23 closed candles with valid volume per timeframe">—</span>
+        const value = Number(row.momentum_volume_score || 0)
+        return <span className={value > 0 ? 'badge green' : value < 0 ? 'badge orange' : 'badge gray'}
+          title="Contribution to total score: excess volume confirms the direction of the last 3 closed candles; capped at ±10 points">
+          {value > 0 ? '+' : ''}{fmtNumber(value, 2)}
+        </span>
+      },
+      sortValue: (row) => Number(row.momentum_volume_score ?? 0),
+    },
+    ...['15m', '1h', '4h'].map((tf) => ({
+      key: `relativeVolume_${tf}`, title: `Rel. volume ${tf}`,
+      render: (row) => row[`relative_volume_${tf}`] == null ? '—' : `${fmtNumber(row[`relative_volume_${tf}`], 2)}×`,
+      sortValue: (row) => Number(row[`relative_volume_${tf}`] ?? -1),
+    })),
     { key: 'classification', title: 'Class', render: (row) => <span className={scoreBadgeClass(row.classification)}>{classLabel(row.classification)}</span>, sortValue: (row) => row.classification || '' },
     { key: 'm15', title: '15m', render: (row) => fmtNumber(row.momentum_15m, 2), sortValue: (row) => Number(row.momentum_15m ?? -999) },
     { key: 'm1h', title: '1h', render: (row) => fmtNumber(row.momentum_1h, 2), sortValue: (row) => Number(row.momentum_1h ?? -999) },
@@ -386,6 +404,7 @@ export function MomentumView({
     'price',
     'score',
     'momentumAcceleration',
+    'volumeScore',
     'classification',
     'm15',
     'm1h',
@@ -468,6 +487,7 @@ export function MomentumView({
         </div>
         <div className="market-toolbar-hint">Showing {filteredRows.length} / {rows.length}</div>
       </div>
+      <p className="market-toolbar-hint">Relative volume = average volume of the last 3 closed candles / average of the preceding 20. Excess volume adds up to 10 points on a rise or subtracts up to 10 on a fall, weighted across 15m / 1h / 4h. Missing volume is neutral.</p>
       <FoldableTable title="All momentum rankings" columns={columns} rows={filteredRows} empty="No momentum data available" defaultSortKey="score" defaultSortDir="desc" paginated initialPageSize={50} />
     </details>
   </div>

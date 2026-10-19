@@ -76,7 +76,7 @@ class MomentumAIService:
             'positions': [fields(r, 'position_id symbol status quantity entry_price mark_price entry_score entry_rank unrealized_pnl opened_at closed_at') for r in positions[:200]],
             'trades': [fields(r, 'trade_id symbol action price quantity pnl reason created_at') for r in trades[:100]],
             'decisions': [fields(r, 'decision_id produced_at payload_json') for r in decisions[:50]],
-            'ranking': [fields(r, 'symbol price momentum_score rank rsi_15m rsi_1h rsi_4h ema_trend_15m ema_trend_1h ema_trend_4h momentum_acceleration data_quality calculated_at') for r in ranking[:30]],
+            'ranking': [fields(r, 'symbol price momentum_score rank rsi_15m rsi_1h rsi_4h ema_trend_15m ema_trend_1h ema_trend_4h momentum_acceleration momentum_volume_score relative_volume_15m relative_volume_1h relative_volume_4h data_quality calculated_at') for r in ranking[:30]],
             'orders': [fields(r, 'order_id position_id symbol side order_type status requested_price filled_price created_at') for r in orders[:100]],
             'price_history': candles,
             'limitations': ['Only orders linked to sampled momentum positions are included; unlinked orders are unavailable.',
