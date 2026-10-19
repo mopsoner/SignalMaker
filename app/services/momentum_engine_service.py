@@ -336,14 +336,15 @@ class MomentumEngineService:
             cadence_anchor = self._as_utc(open_position.opened_at)
         next_check_at = cadence_anchor + timedelta(hours=cadence_hours) if cadence_anchor else None
         cadence_due = (next_check_at is None or now >= next_check_at) and self.context.is_open_now()
+        cash = self._cash_balance(starting_capital=starting_capital)
         event_due, event_reason, _ = self._is_event_due(
             open_position=open_position,
             current_asset=current_asset,
             best_asset=best_asset,
+            cash_available=cash,
         )
         due_now = cadence_due or event_due
         due_reason = event_reason if event_due else ("cadence_elapsed" if cadence_due else None)
-        cash = self._cash_balance(starting_capital=starting_capital)
         equity = cash + self._open_position_value(open_position, rankings=rankings)
         total_pnl = equity - starting_capital
         recommendation = self._recommendation(open_position=open_position, current_asset=current_asset, best_asset=best_asset, top_watch_asset=top_watch_asset, due_now=due_now)
@@ -382,15 +383,15 @@ class MomentumEngineService:
         open_position: MomentumEnginePosition | None,
         current_asset: dict[str, Any] | None,
         best_asset: dict[str, Any] | None,
+        cash_available: float,
     ) -> tuple[bool, str | None, str | None]:
-        """Return urgent, idempotent triggers independent of the hourly cadence.
-
-        Broken support, negative crypto 15m returns and closes below EMA20 are urgent. A newly eligible better-ranked asset is *not*
-        urgent: rotation opportunities are deliberately evaluated only on the
-        cadence (or when forced), avoiding churn on every five-minute poll.
-        """
-        del best_asset  # Documents that ranking replacements are cadence-only.
+        """Bypass cadence for crypto cash entries and existing risk exits."""
         self._pending_event_key = None
+        if (self.market_scope == "crypto" and not open_position
+                and best_asset is not None and cash_available > 0):
+            event_key = f"eligible_while_cash:{best_asset['symbol']}"
+            self._pending_event_key = event_key
+            return True, "eligible_while_cash", event_key
         if not open_position or not self._exit_required(current_asset):
             return False, None, None
         event_reason = "negative_change_15m" if self._negative_15m_exit(current_asset) else ("support_broken" if self._structure_broken(current_asset) else "below_ema20_15m")
