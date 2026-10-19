@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import isfinite
 from statistics import fmean
 from typing import Any
 
@@ -29,6 +30,10 @@ class MomentumService:
     ACCELERATION_WEIGHT = 0.30
     ACCELERATION_CAP = 30.0
     ACCELERATION_WEIGHTS = {"15m": 0.20, "1h": 0.45, "4h": 0.35}
+    VOLUME_RECENT_BARS = 3
+    VOLUME_BASELINE_BARS = 20
+    VOLUME_POINTS_PER_EXCESS = 5.0
+    VOLUME_MAX_EXCESS = 2.0
     MARKET_SCOPE = "crypto"
 
     def __init__(self, db: Session) -> None:
@@ -97,6 +102,8 @@ class MomentumService:
             "momentum_1h": row.momentum_1h,
             "momentum_4h": row.momentum_4h,
             "momentum_score": row.momentum_score,
+            "momentum_volume_score": getattr(row, "momentum_volume_score", 0.0) or 0.0,
+            **{f"relative_volume_{tf}": getattr(row, f"relative_volume_{tf}", None) for tf in self.INTERVALS},
             "momentum_delta_15m": row.momentum_delta_15m,
             "momentum_delta_1h": row.momentum_delta_1h,
             "momentum_delta_4h": row.momentum_delta_4h,
@@ -160,6 +167,7 @@ class MomentumService:
             "momentum_acceleration_15m", "momentum_acceleration_1h", "momentum_acceleration_4h",
             "momentum_acceleration", "momentum_candle_time_15m", "momentum_candle_time_1h",
             "momentum_candle_time_4h", "classification",
+            "momentum_volume_score", "relative_volume_15m", "relative_volume_1h", "relative_volume_4h",
             "rsi_15m", "rsi_1h", "rsi_4h", "change_15m", "change_1h", "change_4h",
             "ema_trend_15m", "ema_trend_1h", "ema_trend_4h", "data_quality", "rank", "updated_at",
         ):
@@ -283,7 +291,20 @@ class MomentumService:
             4,
         )
         capped_acceleration = max(-self.ACCELERATION_CAP, min(self.ACCELERATION_CAP, momentum_acceleration))
-        momentum_score = round(raw_momentum_score + capped_acceleration * self.ACCELERATION_WEIGHT, 4)
+        # Keep price momentum/deltas intact. Missing volume contributes zero
+        # using the price-available weights, so one timeframe cannot be amplified.
+        volume_signals = {
+            tf: self._volume_signal(bundle.get(tf) or [])
+            if interval_payloads[tf]["momentum"] is not None else (None, 0.0)
+            for tf in self.INTERVALS
+        }
+        momentum_volume_score = round(
+            sum(volume_signals[tf][1] * self.WEIGHTS[tf] for tf in self.INTERVALS)
+            / available_weight if available_weight else 0.0, 4,
+        )
+        momentum_score = round(
+            raw_momentum_score + capped_acceleration * self.ACCELERATION_WEIGHT + momentum_volume_score, 4,
+        )
 
         latest_times = [payload["updated_at"] for payload in interval_payloads.values() if payload["updated_at"]]
         latest_price = self._latest_price(interval_payloads)
@@ -297,6 +318,8 @@ class MomentumService:
             "momentum_1h": interval_payloads["1h"]["momentum"],
             "momentum_4h": interval_payloads["4h"]["momentum"],
             "momentum_score": momentum_score,
+            "momentum_volume_score": momentum_volume_score,
+            **{f"relative_volume_{tf}": volume_signals[tf][0] for tf in self.INTERVALS},
             "momentum_delta_15m": momentum_deltas["15m"],
             "momentum_delta_1h": momentum_deltas["1h"],
             "momentum_delta_4h": momentum_deltas["4h"],
@@ -410,6 +433,42 @@ class MomentumService:
             "structure_broken_at": None,
             "structure_reason": reason,
         }
+
+    def _volume_signal(self, candles: list[dict[str, Any]]) -> tuple[float | None, float]:
+        """Confirm a recent price move with excess volume, capped at 10 points.
+
+        Compare three closed bars with the preceding twenty (no overlap).
+        Volume units cancel within each symbol/timeframe. Missing or invalid
+        history is neutral; it must not fabricate a zero-volume observation.
+        """
+        closed = self._closed_candles(candles)
+        required = self.VOLUME_BASELINE_BARS + self.VOLUME_RECENT_BARS
+        if len(closed) < required:
+            return None, 0.0
+        window = closed[-required:]
+        try:
+            volumes = [float(bar["volume"]) for bar in window]
+            previous_close = float(window[-self.VOLUME_RECENT_BARS - 1]["close"])
+            latest_close = float(window[-1]["close"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None, 0.0
+        if (any(not isfinite(v) or v < 0 for v in volumes)
+                or not isfinite(previous_close) or previous_close <= 0
+                or not isfinite(latest_close) or latest_close <= 0):
+            return None, 0.0
+        try:
+            baseline = fmean(volumes[:-self.VOLUME_RECENT_BARS])
+            recent = fmean(volumes[-self.VOLUME_RECENT_BARS:])
+        except OverflowError:
+            return None, 0.0
+        if baseline <= 0:
+            return None, 0.0
+        ratio = recent / baseline
+        if not isfinite(ratio):
+            return None, 0.0
+        direction = (latest_close > previous_close) - (latest_close < previous_close)
+        excess = min(self.VOLUME_MAX_EXCESS, max(0.0, ratio - 1.0))
+        return round(ratio, 4), direction * excess * self.VOLUME_POINTS_PER_EXCESS
 
     def _interval_momentum(self, candles: list[dict[str, Any]], *, ema_candles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         closed_candles = self._closed_candles(candles)

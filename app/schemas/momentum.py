@@ -11,6 +11,10 @@ class MomentumRead(BaseModel):
     momentum_1h: float | None = None
     momentum_4h: float | None = None
     momentum_score: float
+    momentum_volume_score: float = 0.0
+    relative_volume_15m: float | None = None
+    relative_volume_1h: float | None = None
+    relative_volume_4h: float | None = None
     momentum_delta_15m: float = 0.0
     momentum_delta_1h: float = 0.0
     momentum_delta_4h: float = 0.0
