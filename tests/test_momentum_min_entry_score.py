@@ -19,11 +19,11 @@ def test_crypto_purchases_require_at_least_10_points(score, eligible, scenario):
         db.commit()
         service = MomentumEngineService(db)
         preview = service.decision(min_momentum_score=0)
-        assert (preview["best_asset"] is not None) is eligible
+        assert (preview["best_asset"] is not None) is (eligible and scenario != "rotation")
         status = service.run_once(force=True, min_momentum_score=0)
         buys = list(db.scalars(select(MomentumEngineTrade).where(MomentumEngineTrade.action.like("BUY%"))))
-        assert bool(buys) is eligible
-        if eligible:
+        assert bool(buys) is (eligible and scenario != "rotation")
+        if eligible and scenario != "rotation":
             assert service._open_position().symbol == "ETHUSDC"
         elif scenario == "risk_exit":
             assert service._open_position() is None
@@ -48,7 +48,7 @@ def test_missing_score_is_blocked_and_stock_etf_threshold_is_preserved():
         assert not stock._score_eligible({"momentum_score": 10}, 10)
 
 
-def test_crypto_climbs_one_eligible_rank_per_check_and_holds_at_number_one():
+def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
     with _make_session() as db:
         for rank, symbol, score, structure in [
             (1, "BTCUSDC", 40, "valid"),
@@ -66,6 +66,19 @@ def test_crypto_climbs_one_eligible_rank_per_check_and_holds_at_number_one():
             assert preview["best_asset"]["symbol"] == expected
             service.run_once(force=True, min_momentum_score=10)
             assert service._open_position().symbol == expected
+            for _ in range(2):
+                hold = service.decision(min_momentum_score=10)
+                assert hold["best_asset"] is None
+                assert hold["action"] == "hold"
+                assert hold["target_symbol"] == expected
+                service.run_once(force=True, min_momentum_score=10)
+                assert service._open_position().symbol == expected
+            if expected != "BTCUSDC":
+                from app.models.momentum_structure_current import MomentumStructureCurrent
+                structure = db.scalar(select(MomentumStructureCurrent).where(
+                    MomentumStructureCurrent.symbol == expected))
+                structure.structure_15m_status = "broken_bearish"
+                db.commit()
         assert service.decision(min_momentum_score=10)["best_asset"] is None
         service.run_once(force=True, min_momentum_score=10)
         assert service._open_position().symbol == "BTCUSDC"

@@ -1111,7 +1111,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
                 ),
                 MomentumStructureCurrent(
                     symbol="BTCUSDC",
-                    structure_15m_status="valid",
+                    structure_15m_status="broken_bearish",
                     structure_15m_bias="neutral_bullish",
                     structure_reason="15m_structure_holding_above_last_swing_low",
                     calculated_at=datetime.now(timezone.utc),
@@ -1157,7 +1157,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
         ).one()
 
     assert "SELL_ROTATE_OR_STRUCTURE_BREAK" in actions
-    assert "BUY_BETTER_VALID_MOMENTUM" in actions
+    assert "BUY_NEXT_VALID_MOMENTUM_AFTER_15M_BREAK" in actions
     assert "CHECK_NO_CASH" not in actions
     assert open_position.symbol == "ETHUSDC"
     assert status["open_position"]["symbol"] == "ETHUSDC"
@@ -1277,9 +1277,14 @@ def test_crypto_buys_require_explicit_above_ema20_and_try_next_asset(trend, scen
             db.add(_open_engine_position("SOLUSDC", entry_price=10, entry_value=1000, quantity=100, stored_rank=3))
         db.commit()
         service = MomentumEngineService(db)
-        assert service.decision()["best_asset"]["symbol"] == "ETHUSDC"
-        service.run_once(force=True)
-        assert service._open_position().symbol == "ETHUSDC"
+        if scenario == "better_rank":
+            assert service.decision()["best_asset"] is None
+            service.run_once(force=True)
+            assert service._open_position().symbol == "SOLUSDC"
+        else:
+            assert service.decision()["best_asset"]["symbol"] == "ETHUSDC"
+            service.run_once(force=True)
+            assert service._open_position().symbol == "ETHUSDC"
 
 
 @pytest.mark.parametrize("trend", ["at_ema", "unknown", "insufficient_data", None])
