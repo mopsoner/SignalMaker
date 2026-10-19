@@ -401,3 +401,9 @@ changes. Reducing the limit does not forcibly liquidate excess existing holdings
 all holdings remain monitored for normal exits and no new entry is allowed until
 capacity becomes available. `LIVE_MAX_OPEN_POSITIONS` remains the separate shared
 live execution guard and must allow the intended account-wide position count.
+
+The default paper starting capital remains **1,000**, independent of
+`MOMENTUM_MAX_POSITIONS`: three initial positions receive approximately 333.33
+each, four receive 250, and five receive 200. Changing capacity alone never
+changes or resets starting capital. Subsequent allocation uses remaining cash,
+including realized gains/losses; the live executor uses available exchange cash.

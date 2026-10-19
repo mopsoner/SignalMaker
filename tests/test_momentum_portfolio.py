@@ -147,3 +147,17 @@ def test_reducing_capacity_keeps_all_holdings_monitored_without_new_entries(monk
         result = engine.run_once(starting_capital=900)
         assert result['open_positions'] == []
         assert len(engine.current_decision()['operations']) == 3
+
+
+@pytest.mark.parametrize('capacity', [3, 4, 5])
+def test_default_initial_cash_is_1000_regardless_of_capacity(monkeypatch, capacity):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, 'momentum_max_positions', capacity)
+    with _make_session() as db:
+        seed(db, ('BTCUSDC', 'ETHUSDC', 'SOLUSDC', 'XRPUSDC', 'BNBUSDC'))
+        result = MomentumEngineService(db).run_once()
+        assert result['starting_capital'] == 1000
+        assert result['equity'] == pytest.approx(1000)
+        assert len(result['open_positions']) == capacity
+        assert [p['entry_value'] for p in result['open_positions']] == pytest.approx([1000/capacity]*capacity)
+        assert result['cash'] == pytest.approx(0)
