@@ -292,7 +292,7 @@ class MomentumEngineService(MomentumPortfolioMixin):
         ).where(
             MarketCandle.symbol.in_([row["symbol"] for row in rankings]),
             MarketCandle.interval.in_(["15m", "1h"]),
-            MarketCandle.close_time <= int(now.timestamp() * 1000),
+            MarketCandle.closed_at(now),
         ).subquery()
         histories: dict[tuple[str, str], list[Any]] = {}
         for candle in self.db.execute(
@@ -883,7 +883,8 @@ class MomentumEngineService(MomentumPortfolioMixin):
         # granular price than the latest available 15m close.
         stmt = (
             select(MarketCandle.close, MarketCandle.interval)
-            .where(MarketCandle.symbol == normalized, MarketCandle.close > 0)
+            .where(MarketCandle.symbol == normalized, MarketCandle.close > 0,
+                   MarketCandle.closed_at())
             .order_by(
                 case((MarketCandle.interval == "15m", 0), else_=1),
                 MarketCandle.close_time.desc(),

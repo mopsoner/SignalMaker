@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from app.core.candles import closed_bundle
 from app.services.hierarchical_gate_service import apply_hierarchical_stage_gates
 from app.services.planner_service import PlannerService
 from app.services.signal_context_service import apply_context_driven_progression
@@ -60,6 +61,7 @@ class WyckoffPipelineService:
 
     def analyze(self, *, symbol: str, candles: dict[str, list[dict]], market_context: dict[str, Any] | None = None,
                 execution_interval: str = "15m") -> tuple[dict, dict]:
+        candles = closed_bundle(candles)
         missing = [tf for tf in (execution_interval, "1h", "4h") if not candles.get(tf)]
         if missing:
             raise ValueError(f"missing_required_timeframes:{','.join(missing)}")

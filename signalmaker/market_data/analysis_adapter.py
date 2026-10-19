@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.core.candles import closed_candles
 from signalmaker.market_data.repository import MarketDataRepository
 from app.services.momentum_service import MomentumService
 from app.services.shared_market_analysis_service import SharedMarketAnalysisService
@@ -44,7 +45,7 @@ class MarketAnalysisAdapter:
         """
         if timeframe not in self.TIMEFRAME_MS:
             raise ValueError(f"unsupported_engine_timeframe:{timeframe}")
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now = datetime.now(timezone.utc)
         normalized = {}
         for candle in candles:
             timestamp = candle.get("timestamp") or candle.get("open_time")
@@ -65,8 +66,8 @@ class MarketAnalysisAdapter:
                     close_time *= 1000
             else:
                 close_time = timestamp + self.TIMEFRAME_MS[timeframe]
-            is_closed = bool(candle.get("is_closed", close_time <= now_ms))
-            if not is_closed or close_time > now_ms:
+            if not closed_candles([{"open_time": timestamp, "close_time": close_time,
+                                    "is_closed": candle.get("is_closed")}], as_of=now):
                 continue
             adjusted = candle.get("adjusted_close")
             normalized[timestamp] = {

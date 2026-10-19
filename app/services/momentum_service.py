@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.candles import closed_bundle, closed_candles
 from app.models.momentum_current import MomentumCurrent
 from app.models.momentum_structure_current import MomentumStructureCurrent
 from app.services.market_data_service import MarketDataService
@@ -213,6 +214,7 @@ class MomentumService:
         return calculator._calculate_bundle(symbol, bundle, previous=previous)
 
     def _calculate_bundle(self, symbol: str, bundle: dict[str, list[dict[str, Any]]], previous: MomentumCurrent | None = None, *, ema_history_15m: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        bundle = closed_bundle(bundle, as_of=datetime.now(timezone.utc))
         interval_payloads = {
             interval: (
                 self._interval_momentum(bundle.get(interval) or [], ema_candles=ema_history_15m)
@@ -473,20 +475,7 @@ class MomentumService:
         }
 
     def _closed_candles(self, candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        now = datetime.now(timezone.utc)
-        now_ms = int(now.timestamp() * 1000)
-        closed: list[dict[str, Any]] = []
-        for candle in candles:
-            close_time = candle.get("close_time")
-            if close_time is None:
-                continue
-            if isinstance(close_time, datetime):
-                if self._utc_datetime(close_time) <= now:
-                    closed.append(candle)
-                continue
-            if float(close_time) <= now_ms:
-                closed.append(candle)
-        return closed
+        return closed_candles(candles, as_of=datetime.now(timezone.utc))
 
     def _utc_datetime(self, value: datetime | None) -> datetime | None:
         """Return comparable UTC timestamps from either DB or engine values.

@@ -57,7 +57,7 @@ class MomentumReadTools:
                 raise ValueError('symbol is required for candles')
             model, timestamp = MarketCandle, MarketCandle.close_time
             statement = select(model).where(model.symbol == request.symbol.upper(), model.interval == request.interval,
-                model.provider == 'KRAKEN', model.close_time <= int(cutoff.timestamp() * 1000))
+                model.provider == 'KRAKEN', model.closed_at(cutoff))
             names = 'candle_id symbol interval close_time open high low close volume'
         elif kind == 'orders':
             model, timestamp = Order, Order.created_at

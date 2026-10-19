@@ -59,7 +59,7 @@ class MomentumAIService:
                 rows = list(self.db.scalars(select(MarketCandle).where(
                     MarketCandle.symbol == symbol, MarketCandle.interval == interval,
                     MarketCandle.provider == 'KRAKEN',
-                    MarketCandle.close_time <= int(now.timestamp() * 1000),
+                    MarketCandle.closed_at(now),
                 ).order_by(MarketCandle.close_time.desc()).limit(32)))
                 candles[symbol][interval] = [fields(r, 'close_time open high low close volume') for r in reversed(rows)]
         ids = [p.position_id for p in positions[:200]]

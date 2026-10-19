@@ -86,7 +86,7 @@ class MarketDataService:
         if latest and first:
             raise ValueError("latest and first cannot both be true")
 
-        stmt = select(MarketCandle)
+        stmt = select(MarketCandle).where(MarketCandle.closed_at())
 
         if symbol:
             stmt = stmt.where(MarketCandle.symbol == symbol.upper())
@@ -151,7 +151,7 @@ class MarketDataService:
 
         stmt = (
             select(MarketCandle.symbol, MarketCandle.interval, func.max(MarketCandle.close_time))
-            .where(MarketCandle.symbol.in_(normalized))
+            .where(MarketCandle.symbol.in_(normalized), MarketCandle.closed_at())
             .group_by(MarketCandle.symbol, MarketCandle.interval)
         )
 
@@ -165,11 +165,13 @@ class MarketDataService:
     def load_symbol_bundle(self, symbol: str, limits: dict[str, int]) -> dict[str, list[dict[str, Any]]]:
         payload: dict[str, list[dict[str, Any]]] = {}
         upper_symbol = symbol.upper()
+        as_of = datetime.now(timezone.utc)
 
         for interval, limit in limits.items():
             stmt = (
                 select(MarketCandle)
-                .where(MarketCandle.symbol == upper_symbol, MarketCandle.interval == interval)
+                .where(MarketCandle.symbol == upper_symbol, MarketCandle.interval == interval,
+                       MarketCandle.closed_at(as_of))
                 .order_by(MarketCandle.open_time.desc())
                 .limit(limit)
             )
