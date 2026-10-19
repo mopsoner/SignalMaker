@@ -44,7 +44,7 @@ def test_crypto_purchases_require_bull_class(classification, eligible, scenario)
 def test_crypto_uses_classification_instead_of_numeric_threshold(classification, score, minimum, eligible):
     with _make_session() as db:
         assert MomentumEngineService(db)._entry_eligible(
-            {"classification": classification, "momentum_score": score}, minimum) is eligible
+            {"classification": classification, "momentum_score": score, "momentum_15m": 16.0, "momentum_acceleration": 6.0}, minimum) is eligible
 
 
 def test_missing_class_is_blocked_and_stock_etf_threshold_is_preserved():

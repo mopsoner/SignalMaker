@@ -98,6 +98,8 @@ class MomentumEngineDecision(BaseModel):
 
 
 class MomentumEngineStatus(BaseModel):
+    selection_min_momentum_15m: float | None = None
+    selection_min_acceleration: float | None = None
     strategy: str
     mode: str = "paper"
     cadence_hours: int
