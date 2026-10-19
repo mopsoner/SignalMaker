@@ -88,6 +88,9 @@ class MomentumEngineDecision(BaseModel):
     cadence_due: bool = False
     event_due: bool = False
     due_reason: str | None = None
+    max_positions: int = 1
+    open_positions: list[MomentumEnginePositionRead] = Field(default_factory=list)
+    operations: list[dict] = Field(default_factory=list)
     open_position: MomentumEnginePositionRead | None = None
     best_asset: dict | None = None
     top_watch_asset: dict | None = None
@@ -98,6 +101,7 @@ class MomentumEngineDecision(BaseModel):
 
 
 class MomentumEngineStatus(BaseModel):
+    exit_max_momentum_1h: float | None = None
     selection_min_momentum_15m: float | None = None
     selection_min_acceleration: float | None = None
     strategy: str
@@ -108,6 +112,9 @@ class MomentumEngineStatus(BaseModel):
     equity: float
     total_pnl: float
     total_pnl_pct: float
+    max_positions: int = 1
+    open_positions: list[MomentumEnginePositionRead] = Field(default_factory=list)
+    operations: list[dict] = Field(default_factory=list)
     open_position: MomentumEnginePositionRead | None = None
     best_asset: dict | None = None
     top_watch_asset: dict | None = None

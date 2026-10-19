@@ -355,3 +355,49 @@ position. Stock/ETF selection remains unchanged. Thresholds are returned by the
 crypto engine status and included in AI snapshots. Restart the engine workers
 and API after changing these server environment variables. This change alone
 does not establish that returns improve; evaluate it with historical data.
+
+### Confirmation of negative-15m exits
+
+For crypto, a negative return between the last two closed 15m candles now triggers
+a variation-based exit only when stored `momentum_1h <= MOMENTUM_EXIT_MAX_1H`
+(default 0). Positive hourly momentum above the threshold suppresses this exit.
+Missing, invalid or nonfinite hourly momentum retains the prior negative-15m exit
+as a fallback. Support-break and below-EMA20 exits remain independent. Negative
+15m returns still block new entries regardless of hourly momentum, and Stock/ETF
+behavior is unchanged. The hourly value is the existing stored ranking indicator,
+not a newly fetched price or an RSI condition. Exit reasons distinguish confirmed
+exits and missing-data fallbacks. The threshold is exposed in status and AI
+snapshots. Restart the API and momentum workers after changing the environment.
+This testable rule can hold losses longer; churn, slippage and return improvements
+must be assessed by backtesting and have not been established by unit tests.
+
+### Three-position crypto momentum portfolio
+
+The default crypto momentum context now supports up to three distinct open symbols.
+Each holding uses the same existing entry and exit filters. Eligible vacancies
+are filled without selling healthy holdings. A portfolio starting with 900 cash
+allocates 300 per slot; if only one symbol qualifies, 600 remains in cash. Later
+entries divide available cash by the remaining vacant slots. Exits are evaluated
+independently for all holdings; sold symbols cannot be rebought in the same run.
+Existing full-size holdings are not forcibly sold or resized to create vacancies.
+Stock/ETF behavior remains unchanged. Explicit one-slot contexts remain supported.
+
+Status/decision responses include `open_positions`, `max_positions` and `operations`;
+`open_position` remains a compatibility view of the first holding. Portfolio equity
+includes all holdings. Live batch execution submits sells before buys and freezes
+equal quote-cash allocations after sells, respecting quote reserve, balance ratio
+and the existing per-trade maximum. Minimum order checks may reject allocations
+that are too small. Paper allocation amounts are not live account balances.
+Per-operation receipts prevent completed orders from being resubmitted on retries;
+a pending order blocks remaining operations and requires reconciliation before
+proceeding. Live margin sells retain the existing requirement for explicit quantity.
+No live exchange order was placed while implementing this change.
+
+
+Configure the crypto portfolio capacity with `MOMENTUM_MAX_POSITIONS=3` in `.env`
+(default 3, accepted range 1–20). Allocation automatically divides available cash
+by the number of vacant slots. Restart the API and both momentum workers after
+changes. Reducing the limit does not forcibly liquidate excess existing holdings:
+all holdings remain monitored for normal exits and no new entry is allowed until
+capacity becomes available. `LIVE_MAX_OPEN_POSITIONS` remains the separate shared
+live execution guard and must allow the intended account-wide position count.

@@ -1,3 +1,7 @@
+# Retain regression coverage of the explicitly supported one-slot engine.
+from app.services.momentum_market import MomentumMarketContext
+SINGLE_POSITION_CRYPTO = MomentumMarketContext(market_scope="crypto", reference_currency="USDC", max_positions=1)
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -194,7 +198,7 @@ def test_cash_balance_simulates_paper_cash_from_realized_pnl_and_open_position()
         )
         db.commit()
 
-        cash = MomentumEngineService(db)._cash_balance(starting_capital=1000.0)
+        cash = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._cash_balance(starting_capital=1000.0)
 
     assert cash == 250.0
 
@@ -237,7 +241,7 @@ def test_orphaned_buy_ledger_without_open_position_does_not_block_next_entry() -
         )
         db.commit()
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
         position = db.scalars(
             select(MomentumEnginePosition).where(
@@ -312,7 +316,7 @@ def test_hold_trade_records_mark_to_market_pnl_with_latest_market_price() -> Non
         )
         db.commit()
 
-        MomentumEngineService(db).run_once(force=True, starting_capital=100.0)
+        MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=100.0)
 
         hold_trade = db.scalars(
             select(MomentumEngineTrade).where(
@@ -365,7 +369,7 @@ def test_open_new_position_uses_latest_market_price_instead_of_stale_ranking_pri
         )
         db.commit()
 
-        position = MomentumEngineService(db)._open_new_position(
+        position = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._open_new_position(
             {
                 "symbol": "ETHUSDC",
                 "price": 100.0,
@@ -421,7 +425,7 @@ def test_decision_buy_does_not_write_trade() -> None:
         )
         db.commit()
 
-        decision = MomentumEngineService(db).decision(starting_capital=1000.0)
+        decision = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).decision(starting_capital=1000.0)
         trades = list(db.scalars(select(MomentumEngineTrade)).all())
         positions = list(db.scalars(select(MomentumEnginePosition)).all())
 
@@ -437,7 +441,7 @@ def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank()
     None
 ):
     with _make_session() as db:
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         rankings = [
             {
                 "symbol": "BTCUSDC",
@@ -480,7 +484,7 @@ def test_best_ranked_asset_with_valid_structure_skips_invalid_rows_and_exclusion
     None
 ):
     with _make_session() as db:
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         rankings = [
             {
                 "symbol": "BTCUSDC",
@@ -574,7 +578,7 @@ def test_decision_hold_open_position_when_no_next_entry_ready() -> None:
         )
         db.commit()
 
-        decision = MomentumEngineService(db).decision(starting_capital=100.0)
+        decision = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).decision(starting_capital=100.0)
         trades = list(db.scalars(select(MomentumEngineTrade)).all())
 
     assert decision["action"] == "hold"
@@ -640,8 +644,8 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
         )
         db.commit()
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
-        decision = MomentumEngineService(db).decision(starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
+        decision = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).decision(starting_capital=1000.0)
         actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
         open_position = db.scalars(
             select(MomentumEnginePosition).where(
@@ -733,7 +737,7 @@ def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
         db.commit()
         db.autoflush = False
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         trades = list(
             db.scalars(
                 select(MomentumEngineTrade).order_by(MomentumEngineTrade.created_at)
@@ -777,7 +781,7 @@ def test_buys_lowest_eligible_rank_when_15m_support_valid() -> None:
         )
         db.commit()
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         position = db.scalars(
             select(MomentumEnginePosition).where(
                 MomentumEnginePosition.status == "open"
@@ -821,7 +825,7 @@ def test_rotates_to_rank_2_when_rank_1_15m_breaks() -> None:
         db.commit()
         db.autoflush = False
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         trades = list(
             db.scalars(
                 select(MomentumEngineTrade).order_by(MomentumEngineTrade.created_at)
@@ -864,7 +868,7 @@ def test_holds_current_when_support_valid_even_if_lower_rank_has_signal() -> Non
         )
         db.commit()
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
         position = db.scalars(
             select(MomentumEnginePosition).where(
@@ -903,7 +907,7 @@ def test_rotates_to_better_rank_only_if_better_asset_support_valid() -> None:
         )
         db.commit()
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
         position = db.scalars(
             select(MomentumEnginePosition).where(
@@ -983,7 +987,7 @@ def test_current_decision_reads_persisted_current_snapshot_without_recomputing(
         )
         db.commit()
 
-        assert MomentumEngineService(db).current_decision() == persisted_payload
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).current_decision() == persisted_payload
 
 
 def test_current_decision_returns_fallback_when_no_current_snapshot(
@@ -999,7 +1003,7 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
     )
 
     with _make_session() as db:
-        fallback = MomentumEngineService(db).current_decision()
+        fallback = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).current_decision()
 
     assert fallback == {
         "strategy": MomentumEngineService.STRATEGY,
@@ -1035,7 +1039,7 @@ def test_current_decision_returns_fallback_when_no_current_snapshot(
 
 def test_only_executable_decisions_are_persisted_to_history() -> None:
     with _make_session() as db:
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         service._save_current_decision({
             "action": "wait",
             "should_trade": False,
@@ -1059,7 +1063,7 @@ def test_run_once_waits_before_cadence_for_normal_position() -> None:
     with _make_session() as db:
         db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
         db.commit()
-        status = MomentumEngineService(db).run_once()
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once()
         assert status["cadence_due"] is False
         assert status["event_due"] is False
         assert status["due_now"] is False
@@ -1074,9 +1078,9 @@ def test_run_once_executes_broken_support_before_cadence_and_is_idempotent() -> 
             _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1),
         ])
         db.commit()
-        first = MomentumEngineService(db).run_once()
+        first = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once()
         first_count = len(list(db.scalars(select(MomentumEngineTrade)).all()))
-        second = MomentumEngineService(db).run_once()
+        second = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once()
         second_count = len(list(db.scalars(select(MomentumEngineTrade)).all()))
         assert first["cadence_due"] is False
         assert first["event_due"] is True
@@ -1092,7 +1096,7 @@ def test_run_once_executes_when_hourly_cadence_elapsed() -> None:
         position.opened_at = datetime.now(timezone.utc) - timedelta(hours=2)
         db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), position])
         db.commit()
-        status = MomentumEngineService(db).run_once()
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once()
         assert status["cadence_due"] is True
         assert status["event_due"] is False
         assert status["due_reason"] == "cadence_elapsed"
@@ -1103,7 +1107,7 @@ def test_run_once_force_executes_when_no_due_predicate() -> None:
     with _make_session() as db:
         db.add_all([*_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1), _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
         db.commit()
-        status = MomentumEngineService(db).run_once(force=True)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True)
         assert status["cadence_due"] is False
         assert status["event_due"] is False
         assert status["due_reason"] == "forced"
@@ -1124,7 +1128,7 @@ def test_current_decision_returns_fallback_when_current_snapshot_payload_is_empt
         )
         db.commit()
 
-        fallback = MomentumEngineService(db).current_decision()
+        fallback = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).current_decision()
 
     assert fallback["status"] == "no_persisted_decision"
     assert fallback["action"] == "WAIT"
@@ -1188,7 +1192,7 @@ def test_rotation_flushes_closed_position_before_recomputing_cash_when_autoflush
         db.commit()
         db.autoflush = False
 
-        status = MomentumEngineService(db).run_once(force=True, starting_capital=1000.0)
+        status = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO).run_once(force=True, starting_capital=1000.0)
         actions = list(db.scalars(select(MomentumEngineTrade.action)).all())
         open_position = db.scalars(
             select(MomentumEnginePosition).where(
@@ -1222,7 +1226,7 @@ def test_crypto_buy_rejects_bearish_15m_with_valid_support(
             ))
             db.add(_open_engine_position("ETHUSDC", entry_price=50, entry_value=1000, quantity=20, stored_rank=2))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
         assert decision["best_asset"] is None
         assert decision["top_watch_asset"]["support_status"] == "blocked_bearish_15m"
@@ -1243,7 +1247,7 @@ def test_crypto_entry_filter_preserves_next_valid_candidate_selection() -> None:
         second[0].ema_trend_15m = "above_ema"
         db.add_all([*first, *second])
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         service.run_once(force=True)
         assert service._open_position().symbol == "ETHUSDC"
 
@@ -1255,7 +1259,7 @@ def test_non_bearish_or_missing_ema_does_not_sell_intact_current_position(trend)
         rows[0].ema_trend_15m = trend
         db.add_all([*rows, _open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=1)])
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         service.run_once(force=True)
         assert service._open_position().symbol == "BTCUSDC"
         assert not any(t.action.startswith("SELL") for t in db.scalars(select(MomentumEngineTrade)).all())
@@ -1272,7 +1276,7 @@ def test_ema_exit_is_urgent_rotates_or_stays_cash_and_is_idempotent(replacement)
             candidate[0].ema_trend_15m = "above_ema"
             db.add_all(candidate)
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
         assert decision["cadence_due"] is False
         assert decision["event_due"] is True
@@ -1316,7 +1320,7 @@ def test_crypto_buys_require_explicit_above_ema20_and_try_next_asset(trend, scen
                 structure_15m_status="broken_bearish" if scenario == "broken_support" else "valid"))
             db.add(_open_engine_position("SOLUSDC", entry_price=10, entry_value=1000, quantity=100, stored_rank=3))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         if scenario == "better_rank":
             assert service.decision()["best_asset"] is None
             service.run_once(force=True)
@@ -1334,7 +1338,7 @@ def test_crypto_stays_cash_without_explicit_above_ema20(trend):
         rows[0].ema_trend_15m = trend
         db.add_all(rows)
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
         assert decision["best_asset"] is None
         assert decision["top_watch_asset"]["support_status"] == "blocked_not_above_ema20_15m"

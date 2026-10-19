@@ -75,6 +75,10 @@ class Settings(BaseSettings):
             )
         return self
 
+    momentum_max_positions: int = Field(default=3, alias="MOMENTUM_MAX_POSITIONS", ge=1, le=20)
+
+    momentum_exit_max_1h: float = Field(default=0.0, alias="MOMENTUM_EXIT_MAX_1H", allow_inf_nan=False)
+
     momentum_entry_min_15m: float = Field(default=15.0, alias="MOMENTUM_ENTRY_MIN_15M", allow_inf_nan=False)
     momentum_entry_min_acceleration: float = Field(default=5.0, alias="MOMENTUM_ENTRY_MIN_ACCELERATION", ge=0, allow_inf_nan=False)
 

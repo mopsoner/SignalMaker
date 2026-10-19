@@ -1,3 +1,7 @@
+# Retain regression coverage of the explicitly supported one-slot engine.
+from app.services.momentum_market import MomentumMarketContext
+SINGLE_POSITION_CRYPTO = MomentumMarketContext(market_scope="crypto", reference_currency="USDC", max_positions=1)
+
 import pytest
 from sqlalchemy import select
 
@@ -19,7 +23,7 @@ def test_crypto_purchases_require_bull_class(classification, eligible, scenario)
                                     structure_15m_status="broken_bearish" if scenario == "risk_exit" else "valid"))
             db.add(_open_engine_position("BTCUSDC", entry_price=100, entry_value=1000, quantity=10, stored_rank=2))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         preview = service.decision(min_momentum_score=0)
         assert (preview["best_asset"] is not None) is (eligible and scenario != "rotation")
         status = service.run_once(force=True, min_momentum_score=0)
@@ -43,13 +47,13 @@ def test_crypto_purchases_require_bull_class(classification, eligible, scenario)
 ])
 def test_crypto_uses_classification_instead_of_numeric_threshold(classification, score, minimum, eligible):
     with _make_session() as db:
-        assert MomentumEngineService(db)._entry_eligible(
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible(
             {"classification": classification, "momentum_score": score, "momentum_15m": 16.0, "momentum_acceleration": 6.0}, minimum) is eligible
 
 
 def test_missing_class_is_blocked_and_stock_etf_threshold_is_preserved():
     with _make_session() as db:
-        assert not MomentumEngineService(db)._entry_eligible({}, 0)
+        assert not MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._entry_eligible({}, 0)
         stock = MomentumEngineService(db, context=STOCK_ETF_CONTEXT)
         assert stock._entry_eligible({"momentum_score": 10}, 0)
         assert not stock._entry_eligible({"momentum_score": 10}, 10)
@@ -69,7 +73,7 @@ def test_crypto_holds_until_exit_then_selects_next_eligible_rank():
             rows[0].classification = "neutral_bull" if symbol == "XRPUSDC" else "bull"
             db.add_all(rows)
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         for expected in ["BNBUSDC", "ETHUSDC", "BTCUSDC"]:
             preview = service.decision(min_momentum_score=10)
             assert preview["best_asset"]["symbol"] == expected
@@ -104,7 +108,7 @@ def test_cash_entry_bypasses_cadence_only_when_funded_and_eligible(starting_capi
         rows[0].classification = "neutral_bull"
         db.add_all(rows)
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         service.run_once(force=True, starting_capital=starting_capital)
         assert service.status(starting_capital=starting_capital)["due_now"] is False
         db.scalar(select(MomentumCurrent)).classification = "bull"

@@ -1,3 +1,7 @@
+# Retain regression coverage of the explicitly supported one-slot engine.
+from app.services.momentum_market import MomentumMarketContext
+SINGLE_POSITION_CRYPTO = MomentumMarketContext(market_scope="crypto", reference_currency="USDC", max_positions=1)
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -32,7 +36,7 @@ def test_rsi_threshold_blocks_entries_only(interval, rsi, blocked):
         setattr(rows[0], f"rsi_{interval}", rsi)
         db.add_all(rows)
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
         assert (decision["best_asset"] is None) is blocked
         if blocked:
@@ -49,11 +53,11 @@ def test_downward_cross_uses_actual_close_time_and_expires_after_one_hour(interv
         add_candles(db, interval, list(range(100, 115)) + [109],
                     last_close=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago))
         db.commit()
-        asset = MomentumEngineService(db)._rankings()[0]
+        asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["rsi_recent_cross_down"] is blocked
-        assert MomentumEngineService(db)._rsi_entry_block(asset) == ("blocked_rsi_cross_down_1h" if blocked else None)
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rsi_entry_block(asset) == ("blocked_rsi_cross_down_1h" if blocked else None)
         # A new service/session evaluation sees the same cross (no in-memory cooldown).
-        assert MomentumEngineService(db)._rankings()[0]["rsi_recent_cross_down"] is blocked
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]["rsi_recent_cross_down"] is blocked
 
 
 def test_cross_is_still_detected_after_more_15m_candles():
@@ -61,10 +65,10 @@ def test_cross_is_still_detected_after_more_15m_candles():
         db.add_all(_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1))
         add_candles(db, "15m", list(range(100, 115)) + [109, 109.1, 109.2, 109.3])
         db.commit()
-        asset = MomentumEngineService(db)._rankings()[0]
+        asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["rsi_recent_cross_down"] is True
         assert asset["closed_change_15m"] > 0
-        assert MomentumEngineService(db)._support_status(asset) == "blocked_rsi_cross_down_1h"
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._support_status(asset) == "blocked_rsi_cross_down_1h"
 
 
 @pytest.mark.parametrize("replacement", [False, True])
@@ -76,7 +80,7 @@ def test_negative_15m_close_exits_before_cadence_and_does_not_repeat(replacement
         if replacement:
             db.add_all(_momentum_row("ETHUSDC", price=50, momentum_score=20, stored_rank=2))
         db.commit()
-        service = MomentumEngineService(db)
+        service = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)
         decision = service.decision()
         assert decision["cadence_due"] is False
         assert decision["event_due"] is True
@@ -102,9 +106,9 @@ def test_nonnegative_closed_variation_and_live_candle_do_not_sell(last):
         db.add_all(_momentum_row("BTCUSDC", price=100, momentum_score=30, stored_rank=1))
         add_candles(db, "15m", [100, last, 1], last_close=datetime.now(timezone.utc) + timedelta(minutes=10))
         db.commit()
-        asset = MomentumEngineService(db)._rankings()[0]
+        asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["closed_change_15m"] >= 0
-        assert not MomentumEngineService(db)._exit_required(asset)
+        assert not MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._exit_required(asset)
 
 
 def test_new_filters_do_not_affect_stock_etf():
@@ -123,7 +127,7 @@ def test_unclosed_candle_cannot_create_rsi_cross_or_overbought_signal():
         add_candles(db, "15m", list(range(100, 115)) + [109, 200],
                     last_close=datetime.now(timezone.utc) + timedelta(minutes=10))
         db.commit()
-        asset = MomentumEngineService(db)._rankings()[0]
+        asset = MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]
         assert asset["rsi_15m"] == pytest.approx(72.222222)
         assert asset["rsi_recent_cross_down"] is True
 
@@ -143,4 +147,4 @@ def test_cooldown_expires_exactly_one_hour_after_close(monkeypatch):
         add_candles(db, "1h", list(range(100, 115)) + [109],
                     last_close=fixed_now - timedelta(hours=1))
         db.commit()
-        assert MomentumEngineService(db)._rankings()[0]["rsi_recent_cross_down"] is False
+        assert MomentumEngineService(db, context=SINGLE_POSITION_CRYPTO)._rankings()[0]["rsi_recent_cross_down"] is False
