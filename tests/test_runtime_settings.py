@@ -46,7 +46,7 @@ def test_signal_configuration_defaults_and_environment_overrides(monkeypatch) ->
     assert defaults.signal_entry_rsi_min == 50.0
     assert defaults.signal_entry_rsi_max == 65.0
     assert defaults.planner_min_rr == 1.75
-    assert defaults.planner_min_score == 25.0
+    assert defaults.planner_min_score == 20.0
     monkeypatch.setattr(
         "app.services.runtime_settings.load_runtime_settings",
         lambda db=None: {"strategy": defaults.model_dump()},

@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     signal_price_near_extreme_pct: float = Field(default=0.0025, alias="SIGNAL_PRICE_NEAR_EXTREME_PCT")
     signal_session_confirm_filter_enabled: bool = Field(default=False, alias="SIGNAL_SESSION_CONFIRM_FILTER_ENABLED")
 
-    planner_min_score: float = Field(default=25, alias="PLANNER_MIN_SCORE")
+    planner_min_score: float = Field(default=20, alias="PLANNER_MIN_SCORE")
     planner_min_rr: float = Field(default=1.75, alias="PLANNER_MIN_RR")
 
     bot_pipeline_enabled: bool = Field(default=True, alias="BOT_PIPELINE_ENABLED")
@@ -159,7 +159,7 @@ class Settings(BaseSettings):
 
     momentum_paper_enabled: bool = Field(default=True, alias="MOMENTUM_PAPER_ENABLED")
     momentum_paper_starting_capital: float = Field(default=1000.0, alias="MOMENTUM_PAPER_STARTING_CAPITAL")
-    momentum_paper_min_score: float = Field(default=0.0, alias="MOMENTUM_PAPER_MIN_SCORE")
+    momentum_paper_min_score: float = Field(default=10.0, alias="MOMENTUM_PAPER_MIN_SCORE")
 
     stock_etf_feeder_enabled: bool = Field(default=False, alias="STOCK_ETF_FEEDER_ENABLED")
     stock_etf_momentum_enabled: bool = Field(default=False, alias="STOCK_ETF_MOMENTUM_ENABLED")
