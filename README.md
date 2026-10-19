@@ -219,6 +219,17 @@ may be bought after the sale, otherwise the engine stays in cash. Assets with a
 negative closed 15m return cannot be bought while that exit signal is active.
 These filters do not affect stock/ETF momentum.
 
+### Closed-candle 15m momentum structure
+
+Momentum structure analysis filters out candles whose closing time has not yet
+been reached, and candles without a closing timestamp, before counting history,
+confirming swing highs/lows or detecting bullish/bearish BOS and bearish MSS.
+At least eight closed candles are required. A break visible only on the current
+15m candle cannot change the stored structure until that candle closes.
+This applies to the shared crypto and stock/ETF calculation. Restart the API and
+momentum workers after updating; stored structure refreshes on the next candle
+ingestion recalculation.
+
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.

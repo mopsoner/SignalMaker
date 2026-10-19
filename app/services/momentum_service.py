@@ -335,6 +335,9 @@ class MomentumService:
         return round(float(current_delta) - float(previous_delta), 4)
 
     def _structure_15m(self, candles: list[dict[str, Any]]) -> dict[str, Any]:
+        # Swing confirmation and break detection must use the same closed-bar
+        # history as price momentum; a live bar can still undo either signal.
+        candles = self._closed_candles(candles)
         if len(candles) < 8:
             return {
                 "structure_15m_status": "insufficient_data",
