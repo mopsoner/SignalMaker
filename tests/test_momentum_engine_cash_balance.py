@@ -425,7 +425,7 @@ def test_decision_buy_does_not_write_trade() -> None:
     assert positions == []
 
 
-def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_order() -> (
+def test_best_ranked_asset_with_valid_structure_starts_at_lowest_eligible_rank() -> (
     None
 ):
     with _make_session() as db:
@@ -457,7 +457,7 @@ def test_best_ranked_asset_with_valid_structure_ignores_rsi_and_preserves_rank_o
         )
 
     assert best_asset is not None
-    assert best_asset["symbol"] == "BTCUSDC"
+    assert best_asset["symbol"] == "ETHUSDC"
     assert best_asset["support_status"] == "support_valid"
     assert best_asset["selection_method"] == "momentum_rank_with_valid_15m_support"
 
@@ -625,7 +625,7 @@ def test_valid_position_holds_when_only_valid_candidate_is_lower_ranked() -> Non
     assert decision["target_symbol"] == "BTCUSDC"
 
 
-def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
+def test_15m_break_rotates_to_next_eligible_momentum_asset() -> None:
     with _make_session() as db:
         db.add_all(
             [
@@ -715,17 +715,17 @@ def test_15m_break_rotates_to_next_highest_valid_momentum_asset() -> None:
     assert trades[1].symbol == "SOLUSDC"
     assert (
         trades[0].reason
-        == "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+        == "15m support broken on current asset; rotating to next eligible momentum asset with valid 15m support"
     )
     assert (
         trades[1].reason
-        == "15m support broken on current asset; rotating to next highest momentum asset with valid 15m support"
+        == "15m support broken on current asset; rotating to next eligible momentum asset with valid 15m support"
     )
     assert open_position.symbol == "SOLUSDC"
     assert status["open_position"]["symbol"] == "SOLUSDC"
 
 
-def test_buys_rank_1_when_15m_support_valid() -> None:
+def test_buys_lowest_eligible_rank_when_15m_support_valid() -> None:
     with _make_session() as db:
         db.add_all(
             [
@@ -751,10 +751,10 @@ def test_buys_rank_1_when_15m_support_valid() -> None:
             ).all()
         )
 
-    assert position.symbol == "BTCUSDC"
-    assert status["open_position"]["symbol"] == "BTCUSDC"
+    assert position.symbol == "ETHUSDC"
+    assert status["open_position"]["symbol"] == "ETHUSDC"
     assert [trade.action for trade in trades] == ["BUY_TOP_VALID_MOMENTUM"]
-    assert trades[0].symbol == "BTCUSDC"
+    assert trades[0].symbol == "ETHUSDC"
 
 
 def test_rotates_to_rank_2_when_rank_1_15m_breaks() -> None:
