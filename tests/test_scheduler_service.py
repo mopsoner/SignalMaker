@@ -64,3 +64,24 @@ def test_interrupted_run_is_recovered_but_active_run_is_not_overlapped():
     claimed = asyncio.run(repo.claim_next_analysis_job("worker")); repo.db.commit()
     assert claimed["id"] == job
     assert asyncio.run(SchedulerService(repo).schedule_workflow("stock_etf_momentum", config())) is None
+
+
+def test_scheduler_tracks_only_closed_bars_and_wakes_when_live_bar_closes():
+    repo = repository()
+    asset = repo.db.execute(text("SELECT id FROM market_assets WHERE provider_symbol='AIR.PA'")).scalar()
+    for opened in ("2026-10-19 11:30:00", "2026-10-19 11:55:00"):
+        repo.db.execute(text("INSERT INTO stock_etf_candles(asset_id,provider,provider_symbol,timeframe,timestamp,open,high,low,close) VALUES (:a,'IBKR','AIR.PA','15m',:t,1,2,1,2)"), {"a": asset, "t": opened})
+    repo.db.commit()
+    clock = {"now": instant("2026-10-19T12:00:00")}
+    service = SchedulerService(repo, now=lambda: clock["now"])
+    workflow = {**config(), "timeframes": ["15m"]}
+    first = asyncio.run(service.schedule_workflow("stock_etf_momentum", workflow, cause="feeder"))
+    assert first is not None
+    payload = asyncio.run(repo.job_requests())[0]["payload"]
+    assert "11:30:00" in payload
+    assert "11:55:00" not in payload
+    repo.db.execute(text("UPDATE market_data_job_requests SET status='completed', finished_at='2026-10-19 12:00:00' WHERE id=:id"), {"id": first})
+    repo.db.commit()
+    assert asyncio.run(service.schedule_workflow("stock_etf_momentum", workflow, cause="feeder")) is None
+    clock["now"] = instant("2026-10-19T12:10:00")
+    assert asyncio.run(service.schedule_workflow("stock_etf_momentum", workflow, cause="feeder")) is not None

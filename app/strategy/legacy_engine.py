@@ -3,6 +3,7 @@ from __future__ import annotations
 from statistics import mean
 from typing import Any
 
+from app.core.candles import closed_bundle
 from app.strategy.legacy_signals import (
     closes,
     equal_highs_lows,
@@ -582,6 +583,15 @@ def _volume_confirmation_profile(candles_main: list[dict[str, Any]]) -> dict[str
 
 
 def build_signal(symbol: str, candles_fast: list[dict[str, Any]], candles_main: list[dict[str, Any]], candles_htf: list[dict[str, Any]], candles_macro: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
+    bundle = closed_bundle({"fast": candles_fast, "main": candles_main,
+                            "1h": candles_htf, "4h": candles_macro})
+    missing = [tf for tf, rows in bundle.items() if not rows]
+    if missing:
+        raise ValueError(f"missing_closed_candles:{','.join(missing)}")
+    candles_fast, candles_main = bundle["fast"], bundle["main"]
+    candles_htf, candles_macro = bundle["1h"], bundle["4h"]
+    if len(candles_main) < 2:
+        raise ValueError("insufficient_closed_execution_candles")
     price = candles_fast[-1]["close"]
     rsi_main = rsi(closes(candles_main), cfg["rsi_period"])
     rsi_htf = rsi(closes(candles_htf), cfg["rsi_period"])

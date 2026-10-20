@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.candles import closed_bundle
 from app.services.momentum_service import MomentumService
 from app.services.wyckoff_pipeline_service import WyckoffPipelineService
 
@@ -14,6 +15,7 @@ class SharedMarketAnalysisService:
             asset_type: str | None, timeframes: tuple[str, ...], workflow_version: str,
             candles: dict[str, list[dict[str, Any]]], symbol: str,
             market_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        candles = closed_bundle(candles)
         context = {
             "market_scope": market_scope, "asset_id": str(asset_id), "engine": engine,
             "universe": universe, "asset_type": asset_type,

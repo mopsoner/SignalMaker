@@ -8,6 +8,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.candles import closed_bundle
 from app.models.asset_state import AssetStateCurrent
 from app.services.asset_state_service import AssetStateService
 from app.services.collector_service import CollectorService
@@ -206,7 +207,7 @@ class PipelineService:
         analyzed_symbols = self._order_symbols_for_analysis(symbols)
         for symbol in analyzed_symbols:
             try:
-                candles = self.market_data.load_symbol_bundle(symbol, limits)
+                candles = closed_bundle(self.market_data.load_symbol_bundle(symbol, limits))
                 # All engine inputs are now detached dictionaries.  End the read
                 # transaction before validation and signal computation.
                 self.db.rollback()

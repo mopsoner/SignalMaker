@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import bindparam, text
 
+from signalmaker.market_data.repository import MarketDataRepository
+
 
 class SchedulerService:
     """Plan durable jobs without re-analysing an unchanged, closed market."""
@@ -36,7 +38,18 @@ class SchedulerService:
         universes = config.get("universes") or []
         asset_types = config.get("asset_types") or []
         timeframes = config.get("timeframes") or []
-        statement = text("""
+        now = self._now()
+        now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+        closed_filters, closed_params = [], {}
+        for index, (tf, duration) in enumerate(MarketDataRepository.TIMEFRAME_DURATIONS.items()):
+            if timeframes and tf not in timeframes:
+                continue
+            closed_filters.append(f"(c.timeframe=:closed_tf_{index} AND c.timestamp<=:closed_before_{index})")
+            closed_params[f"closed_tf_{index}"] = tf
+            closed_params[f"closed_before_{index}"] = (now - duration).replace(tzinfo=None)
+        if not closed_filters:
+            return None
+        statement = text(f"""
             SELECT MAX(c.timestamp) AS candle_at
             FROM stock_etf_candles c JOIN market_assets a ON a.id=c.asset_id
             LEFT JOIN market_universes u ON u.id=a.universe_id
@@ -44,12 +57,14 @@ class SchedulerService:
               AND (:all_universes OR u.name IN :universes)
               AND (:all_types OR a.asset_type IN :asset_types)
               AND (:all_timeframes OR c.timeframe IN :timeframes)
+              AND ({' OR '.join(closed_filters)})
         """).bindparams(bindparam("universes", expanding=True), bindparam("asset_types", expanding=True),
                          bindparam("timeframes", expanding=True))
         row = self.repo.db.execute(statement, {
             "all_universes": not universes, "universes": tuple(universes or [""]),
             "all_types": not asset_types, "asset_types": tuple(asset_types or [""]),
             "all_timeframes": not timeframes, "timeframes": tuple(timeframes or [""]),
+            **closed_params,
         }).first()
         return self._dt(row[0]) if row and row[0] else None
 

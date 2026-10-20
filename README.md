@@ -210,6 +210,23 @@ To The MOOn prealert entry rule documented below. Existing closed-candle exits
 can trigger a sale before the scheduled cadence; an eligible replacement is then
 bought if available, otherwise the engine keeps cash. Stock/ETF rules are unchanged.
 
+### Closed-candle analysis policy
+
+Indicator calculations and signal identification use verified closed candles.
+The shared policy excludes future, missing, invalid or inverted close timestamps
+and explicit open flags before history checks, swing confirmation, BOS/MSS,
+liquidity, RSI, EMA, volume and scoring. It protects direct engine calls as well
+as the crypto and stock/ETF workflows. SQL readers filter before applying limits;
+Momentum reference prices, feed cursors, AI candle reads and scheduled analysis
+also use closed bars. Stock/ETF source bars without a close timestamp are
+normalized using their known timeframe duration.
+
+See [the closed-candle audit](docs/closed-candle-audit.md) for coverage and test
+results. No schema migration is required. Restart API/workers and run analysis
+again after updating to refresh stored snapshots. Historical decisions and
+trades are not rewritten. Raw storage diagnostics may still count open bars;
+exchange tickers remain live for execution and account PnL.
+
 ## Notes
 - This is now a functional scaffold, not a finished production trading system.
 - It still needs hardening for real live trading: risk engine, exchange auth, order reconciliation, stop/TP sync, worker supervision, retries, and UI migration.

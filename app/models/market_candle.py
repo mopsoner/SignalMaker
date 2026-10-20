@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, JSON, String
+from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, JSON, String, and_
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -8,6 +8,18 @@ from app.models.base import Base
 
 class MarketCandle(Base):
     __tablename__ = "market_candles"
+
+    @classmethod
+    def closed_at(cls, as_of: datetime | None = None):
+        """SQL equivalent of the normalized closed-bar timestamp policy."""
+        cutoff = as_of if as_of is not None else datetime.now(timezone.utc)
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        return and_(
+            cls.open_time >= 0,
+            cls.close_time >= cls.open_time,
+            cls.close_time <= int(cutoff.timestamp() * 1000),
+        )
     __table_args__ = (
         Index("ix_market_candles_symbol_interval", "symbol", "interval"),
         Index("ix_market_candles_close_time", "close_time"),

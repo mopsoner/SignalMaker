@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+from datetime import datetime, timezone
 
 from app.services.market_data_service import INTERVAL_MS, MarketDataService
 from app.services.pipeline_service import PipelineService
@@ -33,6 +34,9 @@ def _pipeline_service(bundles: list[dict[str, list[dict]]]) -> PipelineService:
     service.market_data = Mock()
     service.market_data.get_latest_close_times.return_value = {}
     service.market_data.load_symbol_bundle.side_effect = bundles
+    service.market_data.latest_contiguous_candles.side_effect = (
+        lambda interval, candles: MarketDataService.latest_contiguous_candles(None, interval, candles)
+    )
     service.market_data.validate_candle_series.side_effect = (
         lambda interval, candles, min_count: MarketDataService.validate_candle_series(
             None, interval, candles, min_count=min_count
@@ -76,4 +80,31 @@ def test_run_once_blocks_truncated_series_then_analyzes_continuous_series() -> N
     assert resumed_result["symbols_scanned"] == 1
     assert resumed_result["asset_states_upserted"] == 1
     assert resumed_result["candidates_created"] == 1
+
+
+def test_open_bars_are_removed_before_gap_detection_and_validation() -> None:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    bundle = {tf: _continuous_candles(tf, 30) + [{
+        "open_time": now_ms-1000, "close_time": now_ms+14_400_000,
+        "open": 1, "high": 1e6, "low": 0, "close": 1e6, "volume": 1e9,
+    }] for tf in ("15m", "1h", "4h")}
+    service = _pipeline_service([bundle])
+    result = service.run_once()
+    assert result["symbols_scanned"] == 1
+    supplied = service.wyckoff_pipeline.analyze.call_args.kwargs["candles"]
+    assert all(len(rows) == 30 for rows in supplied.values())
+    assert all(rows[-1]["close"] == 101 for rows in supplied.values())
+
+
+def test_open_bar_cannot_satisfy_pipeline_minimum_history() -> None:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    bundle = {tf: _continuous_candles(tf, 29) + [{
+        "open_time": now_ms-1000, "close_time": now_ms+14_400_000,
+        "open": 1, "high": 2, "low": 0, "close": 1, "volume": 1,
+    }] for tf in ("15m", "1h", "4h")}
+    service = _pipeline_service([bundle])
+    result = service.run_once()
+    assert result["symbols_scanned"] == 0
+    service.wyckoff_pipeline.analyze.assert_not_called()
+    assert result["data_quality_counts"]["insufficient_count:29<30"] == 1
 

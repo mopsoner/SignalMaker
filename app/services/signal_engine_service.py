@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from app.core.candles import closed_bundle
 from app.core.config import settings as base_settings
 from app.services.runtime_settings import get_runtime_signal_config
 from app.strategy.legacy_engine import build_signal
@@ -632,11 +633,15 @@ class SignalEngineService:
         return signal
 
     def compute_signal(self, symbol: str, candles: dict[str, list[dict]]) -> dict:
+        candles = closed_bundle(candles)
         cfg = get_runtime_signal_config()
         execution_interval = cfg['execution_interval']
         candles_main = candles.get(execution_interval)
         if not candles_main:
             raise KeyError(f'missing_{execution_interval}_candles')
+        for timeframe in ('1h', '4h'):
+            if not candles.get(timeframe):
+                raise KeyError(f'missing_{timeframe}_candles')
         signal = build_signal(symbol, candles_main, candles_main, candles['1h'], candles['4h'], cfg)
         signal = self._apply_hierarchy(signal, candles['1h'], candles_main, cfg)
         return signal
