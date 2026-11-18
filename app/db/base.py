@@ -7,6 +7,7 @@ from app.models.live_run import LiveRun
 from app.models.trade_candidate import TradeCandidate
 from app.models.candidate_execution import CandidateExecution
 from app.models.position import Position
+from app.models.kraken_daily_profit import KrakenDailyProfit, KrakenProfitContribution
 from app.models.market_candle import MarketCandle
 from app.models.order import Order
 from app.models.fill import Fill
