@@ -14,6 +14,15 @@ def positions_goal(db: Session = Depends(get_db)) -> dict:
     return WyckoffGoalService(db).summary()
 
 
+@router.get("/profit-history")
+def positions_profit_history(
+    days: int = Query(default=30, ge=1, le=90),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.kraken_profit_history import daily_profit
+    return daily_profit(db, days=days)
+
+
 @router.get("/summary")
 def positions_summary(
     status: str | None = Query(default=None),

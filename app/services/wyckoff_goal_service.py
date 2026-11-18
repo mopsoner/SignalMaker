@@ -75,6 +75,10 @@ class WyckoffGoalService:
         if quantity == 0:
             row.status = "closed"
             row.closed_at = datetime.now(timezone.utc)
+            if (mode != "margin" and row.take_profit_order_id
+                    and tp.get("status") == "filled"
+                    and float(tp.get("executed_quantity", 0)) == float(entry.get("executed_quantity", 0))):
+                self._record_realized_profit(row, tp, tp["executed_quantity"])
             self.db.commit()
             return
         if mode != "margin":
@@ -87,6 +91,33 @@ class WyckoffGoalService:
         row.quantity, row.mark_price, row.unrealized_pnl = quantity, mark, pnl
         self._meta(row, goal_verified_at=datetime.now(timezone.utc).isoformat(), goal_error=None)
 
+    def _record_realized_profit(self, row, order, quantity):
+        # Do not turn a stale mark or an incomplete partial close into realized PnL.
+        if (row.meta or {}).get("goal_closed_quantity"):
+            return
+        if row.side.lower() not in {"long", "buy", "bull", "bull_watch", "short", "sell", "bear", "bear_watch"}:
+            return
+        try:
+            entry = float(row.entry_price)
+            exit_price = float(order["average_price"])
+            qty = float(quantity)
+            if "executed_quantity" in order and not math.isclose(float(order["executed_quantity"]), qty):
+                return
+            if not all(math.isfinite(n) and n > 0 for n in (entry, exit_price, qty)):
+                return
+        except (KeyError, TypeError, ValueError):
+            return
+        currency = "USDC" if row.symbol.endswith("USDC") else "USD" if row.symbol.endswith("USD") else None
+        if currency is None:
+            return
+        sign = -1 if row.side.lower() in {"short", "sell", "bear", "bear_watch"} else 1
+        row.meta = {**(row.meta or {}), "realized_profit": {
+            "value": sign * (exit_price - entry) * qty,
+            "currency": currency, "verified": True, "fees_included": False,
+        }}
+        from app.services.kraken_profit_history import record_profit
+        record_profit(self.db, row)
+
     def _close(self, row):
         ex = self.execution
         mode = (row.meta or {}).get("kraken_mode", settings.wyckoff_live_mode)
@@ -97,6 +128,7 @@ class WyckoffGoalService:
                 row.status = "closed"
                 row.closed_at = datetime.now(timezone.utc)
                 row.mark_price = float(order["average_price"])
+                self._record_realized_profit(row, order, row.quantity)
                 self._meta(row, goal_error=None)
             elif order["status"] in {"canceled", "expired"}:
                 # Refresh remaining exposure on next tick before submitting a replacement.

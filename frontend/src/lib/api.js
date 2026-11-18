@@ -69,6 +69,7 @@ export const api = {
   clearCandidates: (status = '') => request(`/api/v1/trade-candidates${status ? `?status=${encodeURIComponent(status)}` : ''}`, { method: 'DELETE' }),
   clearOpenCandidates: () => request('/api/v1/trade-candidates/open', { method: 'DELETE' }),
   positions: (params = '') => request(`/api/v1/positions${params}`),
+  positionsProfitHistory: (days = 30) => request(`/api/v1/positions/profit-history?days=${days}`),
   positionsGoal: () => request(`/api/v1/positions/goal`),
   positionsSummary: (params = '') => request(`/api/v1/positions/summary${params}`),
   clearPositions: (status = '') => request(`/api/v1/positions${status ? `?status=${encodeURIComponent(status)}` : ''}`, { method: 'DELETE' }),

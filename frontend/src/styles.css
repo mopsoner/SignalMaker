@@ -28,7 +28,7 @@ a { color: inherit; text-decoration: none; }
 .nav-links { display: grid; gap: 8px; }
 .nav-links a { padding: 12px 14px; border-radius: 12px; color: var(--muted); }
 .nav-links a.active { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
-.content { padding: 24px; }
+.content { padding: 24px; min-width: 0; }
 .page-stack { display: grid; gap: 20px; }
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .page-header h1 { margin: 0; font-size: 32px; }
@@ -116,3 +116,19 @@ a { color: inherit; text-decoration: none; }
   .panel { padding: 14px; }
   .panel h2 { font-size: 18px; }
 }
+
+.kraken-profit { min-width: 0; }
+.kraken-profit-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.kraken-profit-heading h2 { margin: 0 0 6px; }
+.kraken-profit-controls, .kraken-profit-legend { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.kraken-profit-legend { justify-content: center; }
+.kraken-profit-legend button { display: inline-flex; align-items: center; gap: 8px; }
+.kraken-profit-legend button[aria-pressed="false"] { opacity: .6; }
+.kraken-profit-legend span { width: 18px; height: 3px; border-radius: 2px; }
+.kraken-profit-detail { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
+.kraken-profit-detail > div { display: flex; gap: 12px; flex-wrap: wrap; }
+.kraken-profit select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-width: 100%; }
+.kraken-profit svg { display: block; margin-top: 16px; }
+.kraken-profit .stat-hint { margin-bottom: 0; }
+
+.positions-page, .positions-page > * { min-width: 0; }

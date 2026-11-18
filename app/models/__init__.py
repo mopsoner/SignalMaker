@@ -8,7 +8,11 @@ from app.models.market_candle import MarketCandle
 from app.models.order import Order
 from app.models.fill import Fill
 
+from app.models.kraken_daily_profit import KrakenDailyProfit, KrakenProfitContribution
+
 __all__ = [
+    "KrakenDailyProfit",
+    "KrakenProfitContribution",
     "AssetStateCurrent",
     "LiveRun",
     "TradeCandidate",

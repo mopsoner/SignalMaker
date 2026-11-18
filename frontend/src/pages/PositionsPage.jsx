@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import KrakenProfitChart from '../components/KrakenProfitChart'
 import FoldableTable from '../components/FoldableTable'
 import PageHeader from '../components/PageHeader'
 import { usePollingQuery } from '../hooks/usePollingQuery'
@@ -146,7 +147,7 @@ export default function PositionsPage() {
     { key: 'created_at', title: 'Created', render: (row) => fmtDate(row.created_at) },
   ]
 
-  return <div className="page-stack">
+  return <div className="page-stack positions-page">
     <PageHeader title="Positions" subtitle="Wyckoff / SMC positions, orders, PnL and global live profit goal" actions={<button className="button" disabled={busy} onClick={runExecutor}>{busy ? 'Executing…' : 'Run Wyckoff / SMC paper'}</button>} />
     {message ? <div className="panel info">{message}</div> : null}
     {loading ? <div className="panel">Loading positions…</div> : null}
@@ -161,6 +162,8 @@ export default function PositionsPage() {
       <div className="stat-hint">{goal.positionCount} open live positions · {goal.closing ? 'Closing positions…' : goal.monitoringEnabled ? 'Global profit target' : 'Profit worker disabled'} · {goal.lastCheckedAt ? `Checked ${fmtDate(goal.lastCheckedAt)}` : 'Awaiting Kraken scan'}</div>
       {goal.errors?.map((error, index) => <div className="panel error" key={index}>{error}</div>)}
     </div> : null}
+
+    <KrakenProfitChart />
 
     <div className="stats-grid">
       <PnlMetricCard label="Net PnL" value={pnlSummary.totalPnlValue} toneValue={pnlSummary.totalPnlValue} decimals={4} hint={`Total ${formatSignedNumber(pnlSummary.totalPnlPercent, 2)}% · ${pnlSummary.count} positions`} />
